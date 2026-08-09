@@ -28,7 +28,7 @@ process's working directory, because "where the caller stands" is not a
 property of the error, and a long-lived server renders errors about
 directories it does not stand in.
 
-**Serialized shape (stable; part of the public API of** :mod:`mcuhome.api`
+**Serialized shape (stable; part of the public API of** :mod:`mcuhome.workbench.api`
 **).** :meth:`ConfigError.to_dict` answers the same three questions as
 fields rather than as prose, for a caller that puts them in an editor's
 gutter instead of on a terminal::
@@ -227,7 +227,7 @@ class GenerationError(ConfigError):
     configuration is fine, but code generation has no way to express it"
     stay tellable apart in code and in tests.
 
-    Most of what it reports is caught earlier by :mod:`mcuhome.validate`.
+    Most of what it reports is caught earlier by :mod:`mcuhome.workbench.validate`.
     It still has to exist: a model can reach stage 4 without passing
     through the validator at all — that is exactly what a remote build
     server does when a canonical model arrives over the wire

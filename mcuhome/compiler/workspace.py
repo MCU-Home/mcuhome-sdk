@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pipeline stage 5, native path: compiling the generated application.
 
-Stage 4 (:mod:`mcuhome.generate`) writes a standalone Zephyr application.
+Stage 4 (:mod:`mcuhome.compiler.generate`) writes a standalone Zephyr application.
 This module turns it into an image, by driving ``west build`` in the west
 workspace the builder itself lives in.
 
 **The escape hatch, not the normal path (ADR 0007).** ``mcuhome build``
-compiles inside the versioned builder image (:mod:`mcuhome.container`);
+compiles inside the versioned builder image (:mod:`mcuhome.compiler.container`);
 ``--native`` selects what is below, for people who already have a west
 workspace with a toolchain in it — MCUHome's own contributors. The two
 paths meet at :func:`plan_build` and :class:`BuildPlan`: a command plus an
@@ -20,7 +20,7 @@ half — and reuses everything after that, :func:`run_build`,
 MCUboot, and vanilla Zephyr builds a bootloader only under sysbuild, so
 what this module drives is ``west build --sysbuild``: one build directory
 with one sub-directory per image, a signed application, and a bootloader
-that verifies it against the user's own key (:mod:`mcuhome.signing`).
+that verifies it against the user's own key (:mod:`mcuhome.workbench.signing`).
 
 **Nothing here knows the device model.** The inputs are a board name, a
 snippet list and two directories; whatever produced them is somebody
@@ -51,8 +51,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
-from mcuhome.errors import BuildError
-from mcuhome.generate import BOOTLOADER_IMAGE, DETACHED_SIGNING_VAR
+from mcuhome.compiler.generate import BOOTLOADER_IMAGE, DETACHED_SIGNING_VAR
+from mcuhome.model.errors import BuildError
 
 __all__ = [
     "BIN_ARTIFACT",
@@ -107,8 +107,12 @@ def installed_module_dir() -> Path:
 
     The Zephyr module that carries the generic application main and the
     framework ZAP the generated application refers to, derived from where
-    this package is installed: ``mcuhome/mcuhome/workspace.py`` ->
-    ``mcuhome/``.
+    this package is installed:
+    ``mcuhome/mcuhome/compiler/workspace.py`` -> ``mcuhome/``. Three
+    levels, not two, since the ADR 0020 split put this module inside
+    ``mcuhome.compiler``; ``test_workspace.py`` checks the answer against
+    two markers of the real module directory, which is what makes the
+    count something a test can be wrong about rather than a comment.
 
     **This answer is only correct for a local-dev install** — the git
     checkout that is also the west manifest repository of a workspace.
@@ -120,7 +124,7 @@ def installed_module_dir() -> Path:
     this function is called (by the command line, which *is* the
     local-dev case) rather than evaluated at import time.
     """
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 #: Sub-directory of the build directory that holds the CMake/ninja tree.
@@ -135,14 +139,14 @@ BUILD_SUBDIR = "build"
 #: gets a directory named after the image, and Zephyr leaves that image's
 #: artifacts in a ``zephyr/`` directory inside it —
 #: ``<build dir>/<image>/zephyr/zephyr.hex`` and so on. Three modules read
-#: that layout (this one, :mod:`mcuhome.report`, :mod:`mcuhome.abi`), and
+#: that layout (this one, :mod:`mcuhome.compiler.report`, :mod:`mcuhome.compiler.abi`), and
 #: a fourth spelling of it is how one of them would keep reading a layout
 #: Zephyr had moved.
 IMAGE_OUTPUT_DIR = "zephyr"
 
 #: The two raw forms of a linked image, under the names Zephyr gives
 #: them. Named rather than spelled out because the contract's ``build``
-#: delivers them under names of its own (:mod:`mcuhome.abi`) and the
+#: delivers them under names of its own (:mod:`mcuhome.compiler.abi`) and the
 #: mapping is only readable while one side of it is a constant.
 HEX_ARTIFACT = "zephyr.hex"
 BIN_ARTIFACT = "zephyr.bin"
@@ -182,7 +186,7 @@ CMAKE_JOBS_VAR = "CMAKE_BUILD_PARALLEL_LEVEL"
 
 #: Sysbuild Kconfig symbol naming the MCUboot signing key. Passed on the
 #: command line and never written into the generated tree: it is the path
-#: of a per-user secret (ADR 0015 decision 8, :mod:`mcuhome.signing`).
+#: of a per-user secret (ADR 0015 decision 8, :mod:`mcuhome.workbench.signing`).
 SIGNING_KEY_OPTION = "SB_CONFIG_BOOT_SIGNATURE_KEY_FILE"
 
 #: Sysbuild's combined image, at the top of the build directory: every
@@ -391,7 +395,7 @@ def resolve_jobs(*, env: dict[str, str], cli_jobs: int | None = None) -> Resolve
     than resolving it again: the outer ``-o=-jN`` (:func:`west_build_command`),
     :data:`CHIP_JOBS_VAR` for the inner CHIP GN sub-build
     (:func:`build_environment`), and the container path
-    (:mod:`mcuhome.container`), which receives it as a plain ``jobs``
+    (:mod:`mcuhome.compiler.container`), which receives it as a plain ``jobs``
     argument like the native path does.
 
     A :data:`JOBS_VAR` that is not a positive whole number is treated as
@@ -437,8 +441,8 @@ def build_environment(
 
     **This is the one definition of a Matter build environment**, and all
     three callers reach it: :func:`plan_build` for ``--native``,
-    :func:`mcuhome.container.container_environment` for the ``docker
-    run``, and :class:`mcuhome.abi` for the build-container contract's
+    :func:`mcuhome.compiler.container.container_environment` for the ``docker
+    run``, and :class:`mcuhome.compiler.abi` for the build-container contract's
     ``build`` action. Each adds what only it knows — a ccache location,
     the contract's ``TMPDIR`` — and none of them restates what is here. A
     second copy is how one of them silently lost ``HOME``.
@@ -457,7 +461,7 @@ def build_environment(
     process should be scribbling in (build-container-contract.md §4); and
     an inherited ``HOME`` inside a container belongs to whoever built the
     image, not to the UID the build runs as — see
-    :data:`mcuhome.container.CONTAINER_HOME` for what that costs when it
+    :data:`mcuhome.compiler.container.CONTAINER_HOME` for what that costs when it
     is missing.
     """
     prepared = dict(env)
@@ -567,7 +571,7 @@ def west_build_command(
 
     **The signing key is an argument, not a file in the tree.** Leaving
     it out is not an error to sysbuild: MCUboot's default is its own demo
-    key, whose private half is published. :mod:`mcuhome.signing` is what
+    key, whose private half is published. :mod:`mcuhome.workbench.signing` is what
     makes sure there is a real one to pass.
 
     **Detached signing passes the same argument with a different file.**
@@ -576,7 +580,7 @@ def west_build_command(
     and useless for signing, which is the point (ADR 0015 decision 8).
     The generated tree's ``sysbuild.cmake`` reads the variable set here
     and clears the application's copy of the setting, so no signing step
-    runs at all (:func:`~mcuhome.generate.render_detached_signing_cmake`).
+    runs at all (:func:`~mcuhome.compiler.generate.render_detached_signing_cmake`).
     """
     command = [
         "west",
@@ -665,7 +669,7 @@ def plan_build(
     ``PYTHONPATH``. It is required because only the caller knows: see
     :func:`installed_module_dir`. *cwd* is the second place to look, and
     is required for the same reason the configuration tree's is
-    (:func:`mcuhome.tree.open_tree`).
+    (:func:`mcuhome.workbench.tree.open_tree`).
     """
     topdir = require_topdir(module_dir, cwd)
     # ``west build`` does not export ZEPHYR_BASE (it resolves Zephyr through

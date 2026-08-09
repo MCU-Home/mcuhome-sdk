@@ -10,7 +10,7 @@ the part that makes detached signing possible at all — the exact
 not this build signed it.
 
 **This module is the format, not the measurement.** Producing a manifest
-from a build directory is :mod:`mcuhome.report`, which needs a build
+from a build directory is :mod:`mcuhome.compiler.report`, which needs a build
 directory, a west workspace and the registry's board layout to do it.
 Everything here needs none of those: the document's shape, its constants,
 its round trips, and the two edits a signer makes to a manifest it did
@@ -41,7 +41,7 @@ artifact set describes itself the same way wherever it is unpacked.
 ``imgtool sign`` arguments (``--version``, ``--header-size``,
 ``--align``, ``--slot-size``) with imgtool's own option names as keys, so
 a consumer does not have to know how Zephyr derives them.
-:mod:`mcuhome.imgtool` is what turns the block back into a command.
+:mod:`mcuhome.workbench.imgtool` is what turns the block back into a command.
 """
 
 from __future__ import annotations
@@ -51,10 +51,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mcuhome import ota, pairing, registry
-from mcuhome.contextdir import sha256_file
-from mcuhome.errors import BuildError
-from mcuhome.model import DeviceModel
+from mcuhome.model import ota, pairing, registry
+from mcuhome.model.errors import BuildError
+from mcuhome.model.hashes import sha256_file
+from mcuhome.model.model import DeviceModel
 
 __all__ = [
     "MANIFEST_FILE",

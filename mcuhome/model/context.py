@@ -53,13 +53,13 @@ its patch policy from the paths alone.
 
 **This module is the format and the rule; it never touches a
 filesystem.** Creating a context directory, hashing what is in one and
-:func:`~mcuhome.contextdir.verify_context` — the server-side integrity
+:func:`~mcuhome.workbench.contextdir.verify_context` — the server-side integrity
 primitive that recomputes every file hash and the ID from the bytes
-actually present — are :mod:`mcuhome.contextdir`. The cut is ADR 0020's:
+actually present — are :mod:`mcuhome.workbench.contextdir`. The cut is ADR 0020's:
 the build server recomputes a context ID from bytes it received off a
 socket and must carry no build logic to do it, so :func:`context_id`
 takes values and not a directory, and this module imports nothing but
-the standard library and :mod:`mcuhome.errors`.
+the standard library and :mod:`mcuhome.model.errors`.
 
 :data:`CONTEXT_ID_VECTORS` is the conformance suite that keeps a second
 implementation honest — the frozen rule stated as inputs and outputs
@@ -75,7 +75,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from mcuhome.errors import BuildError
+from mcuhome.model.errors import BuildError
 
 __all__ = [
     "BACKEND_DIR",
@@ -103,7 +103,7 @@ CONTEXT_VERSION = 1
 MANIFEST_FILE = "manifest.yaml"
 
 #: Where the canonical device model lives inside the context — the
-#: existing wire format (:mod:`mcuhome.model`), unchanged.
+#: existing wire format (:mod:`mcuhome.model.model`), unchanged.
 MODEL_FILE = "model/device-model.json"
 
 #: Where patches live: ``patches/<layer>/NNNN-name.patch``.
@@ -384,7 +384,7 @@ def validate_manifest(manifest: ContextManifest) -> None:
 
     Every hashed field, spelled the one way the format allows, plus the
     declared ID. Whether the declared values match bytes on a disk is
-    :func:`~mcuhome.contextdir.verify_context`'s question and needs a
+    :func:`~mcuhome.workbench.contextdir.verify_context`'s question and needs a
     disk to answer.
     """
     _require_digest(manifest.container.digest, what="The container digest")

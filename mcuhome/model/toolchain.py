@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from mcuhome.errors import ErrorCollector, Location
+from mcuhome.model.errors import ErrorCollector, Location
 
 __all__ = [
     "SUPPORTED_ZEPHYR_LINES",

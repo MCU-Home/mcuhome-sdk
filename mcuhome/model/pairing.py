@@ -22,7 +22,7 @@ cannot drift apart by construction.
 verifier, the same QR payload and the same manual code, forever — which is
 what lets the whole builder stay byte-deterministic even though the
 credentials themselves are random (they are random *once*, in
-:mod:`mcuhome.provision`, and then live in the user's configuration).
+:mod:`mcuhome.workbench.provision`, and then live in the user's configuration).
 
 **Algorithms**, all of them plain arithmetic over public constants:
 
@@ -39,8 +39,8 @@ credentials themselves are random (they are random *once*, in
   a Verhoeff check digit.
 
 The P-256 scalar multiplication this needs is ~30 lines of double-and-add
-rather than a dependency, and lives in :mod:`mcuhome.p256`, which
-:mod:`mcuhome.signing` shares.
+rather than a dependency, and lives in :mod:`mcuhome.model.p256`, which
+:mod:`mcuhome.workbench.signing` shares.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ import secrets
 import struct
 from dataclasses import dataclass
 
-from mcuhome import p256
+from mcuhome.model import p256
 
 __all__ = [
     "DEFAULT_ITERATIONS",
@@ -164,7 +164,7 @@ TEST_ITERATIONS = 1_000
 
 
 # --------------------------------------------------------------------------
-# The scalar field the verifier lives in (curve arithmetic: mcuhome.p256)
+# The scalar field the verifier lives in (curve arithmetic: mcuhome.model.p256)
 # --------------------------------------------------------------------------
 
 #: Length of one coordinate, and of w0/w1, in bytes.

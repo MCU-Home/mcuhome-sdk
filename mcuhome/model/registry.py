@@ -446,7 +446,7 @@ class UpdateSchemeDef:
     #: checks the group by name and says which member is missing.
     #:
     #: Only applied to a device whose configuration actually has Matter
-    #: (:func:`mcuhome.resolve._resolve_build`); a class-A board running a
+    #: (:func:`mcuhome.workbench.resolve._resolve_build`); a class-A board running a
     #: Matter-less device gets none of it.
     matter_ota_kconfig: tuple[str, ...] = ()
     #: Devicetree written *only* to the bootloader image's overlay, after
@@ -483,7 +483,7 @@ class UpdateSchemeDef:
         single-slot modes. The two are equal in size on a swap layout by
         construction, so this rarely changes a number — it changes which
         number the manifest is *stating*, and detached signing
-        (:mod:`mcuhome.imgtool`) has to state the one the inline build
+        (:mod:`mcuhome.workbench.imgtool`) has to state the one the inline build
         would have used, not one that happens to match today.
         """
         label = (
@@ -568,7 +568,7 @@ class BoardDef:
     overlay: str = ""
     #: Why :attr:`overlay` is there, rendered as its comment in the
     #: generated file. Generic knowledge about the board, per the
-    #: generated-comments rule in :mod:`mcuhome.generate`.
+    #: generated-comments rule in :mod:`mcuhome.compiler.generate`.
     overlay_note: str = ""
     #: How this board boots and takes updates (ADR 0015 decision 2).
     #: Every board MCUHome builds for has one; the field is optional only

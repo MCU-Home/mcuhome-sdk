@@ -8,13 +8,13 @@ image is newer than another, and the same string then has to reach three
 different consumers without any of them disagreeing. ADR 0015 decision 9
 fixes the mapping, and :func:`kconfig_lines` is the single place that
 applies it — the same "one indivisible group" shape as
-:func:`mcuhome.pairing.kconfig_lines`, for the same reason: a build in
+:func:`mcuhome.model.pairing.kconfig_lines`, for the same reason: a build in
 which MCUboot's image version and Matter's SoftwareVersion disagree
 produces a device that updates to an image the controller then reports as
 the wrong version, and nothing warns.
 
 **Nothing here writes a file.** The Matter OTA file this version ends up
-in the header of is :mod:`mcuhome.otafile`. The split is ADR 0020's, and
+in the header of is :mod:`mcuhome.workbench.otafile`. The split is ADR 0020's, and
 the version is on the model side of it because everything that names a
 version needs it and none of them may re-derive it: the resolver
 (``resolve.py`` emits the Kconfig group), the validator, the scaffold,
@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from mcuhome.errors import BuildError
+from mcuhome.model.errors import BuildError
 
 __all__ = [
     "DEFAULT_VERSION",
@@ -148,10 +148,10 @@ def kconfig_lines(version: str, *, matter: bool) -> list[str]:
 
 @dataclass(frozen=True)
 class OtaImage:
-    """What :func:`mcuhome.otafile.write_ota_image` produced.
+    """What :func:`mcuhome.workbench.otafile.write_ota_image` produced.
 
     Vocabulary rather than output: the writer fills it in and
-    :mod:`mcuhome.manifest` records it, which is why it lives with the
+    :mod:`mcuhome.model.manifest` records it, which is why it lives with the
     version and not with the writer — a manifest is written on machines
     that never wrap an image.
     """

@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mcuhome.errors import ConfigError
+from mcuhome.model.errors import ConfigError
 
 __all__ = [
     "HOME_VAR",
@@ -52,7 +52,7 @@ HOME_VAR = "HOME"
 def home(env: dict[str, str]) -> Path:
     """The home directory *env* describes.
 
-    Raises :class:`~mcuhome.errors.ConfigError` when *env* names none —
+    Raises :class:`~mcuhome.model.errors.ConfigError` when *env* names none —
     see the module docstring for why this does not fall back to the
     process. Callers that have a way to avoid the home directory
     entirely (an explicit path, ``XDG_CONFIG_HOME``, ``XDG_CACHE_HOME``)
