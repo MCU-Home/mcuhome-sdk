@@ -36,7 +36,7 @@ Zephyr hands it, never a path this generator wrote down.
 
 **One thing is deliberately missing from the tree: the signing key.** It
 is a per-user secret living outside every repository and build directory
-(ADR 0015 decision 8, :mod:`mcuhome.signing`), so its path is passed on
+(ADR 0015 decision 8, :mod:`mcuhome.workbench.signing`), so its path is passed on
 the command line and never written here. A build that forgets it does not
 fail — MCUboot's own default is its published demo key — which is why the
 generated ``sysbuild.conf`` says so where a reader will see it.
@@ -73,9 +73,9 @@ import textwrap
 from fractions import Fraction
 from pathlib import Path
 
-from mcuhome import pairing, registry
-from mcuhome.errors import GenerationError
-from mcuhome.model import (
+from mcuhome.model import pairing, registry
+from mcuhome.model.errors import GenerationError
+from mcuhome.model.model import (
     AttrModel,
     ChannelModel,
     ClusterModel,
@@ -135,7 +135,7 @@ CONFIG_BASENAME = "mcuhome_config"
 #: application directory. CHIP resolves ``CONFIG_CHIP_PROJECT_CONFIG``
 #: against the application source directory, so this path is both the
 #: file's location and the value of that Kconfig symbol
-#: (:mod:`mcuhome.resolve` emits it).
+#: (:mod:`mcuhome.workbench.resolve` emits it).
 CHIP_PROJECT_CONFIG_PATH = "include/CHIPProjectConfig.h"
 
 #: Hardware-watchdog timeout, in seconds, for the WHOLE boot chain.
@@ -233,7 +233,7 @@ def _check_comment_safe(text: str) -> str:
 
     GCC warns on ``/*`` inside a comment (-Wcomment) and ``*/`` would end
     the comment early — either way the generated file stops being clean.
-    Comment text comes from this module and from :mod:`mcuhome.registry`,
+    Comment text comes from this module and from :mod:`mcuhome.model.registry`,
     so hitting this is a builder bug, and a loud one beats a warning
     nobody reads in a 900-target build log.
     """
@@ -873,7 +873,7 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
         out += [
             "",
             "# This device's commissioning identity, emitted as one indivisible group",
-            "# by mcuhome.pairing.kconfig_lines(). CHIP takes the passcode and the",
+            "# by mcuhome.model.pairing.kconfig_lines(). CHIP takes the passcode and the",
             "# SPAKE2+ verifier derived from it as two unrelated symbols and checks",
             "# neither against the other on Zephyr, so a build that changed one and",
             "# not the other would flash, boot, advertise itself and then refuse",
@@ -1095,7 +1095,7 @@ def render_bootloader_conf(model: DeviceModel, *, config_name: str) -> str:
         "# CONFIG_MCUHOME_BOOT_WATCHDOG_PAUSE_ON_DEBUG for why that default",
         "# is the way round it is. The timeout is one number for the whole",
         "# boot chain — the nRF watchdog cannot be reconfigured once",
-        "# started, so the application inherits it, and mcuhome.generate",
+        "# started, so the application inherits it, and mcuhome.compiler.generate",
         "# emits both ends of it from WATCHDOG_TIMEOUT_S.",
         "CONFIG_WATCHDOG=y",
         f"CONFIG_BOOT_WATCHDOG_TIMEOUT_MS={WATCHDOG_TIMEOUT_S * 1000}",

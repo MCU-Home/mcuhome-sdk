@@ -5,17 +5,17 @@
 ADR 0007 makes the builder image *the* build environment: the host needs
 git and docker, everything else — Zephyr SDK, west, gn, zap, ccache —
 lives in an image versioned in lockstep with the Zephyr pin
-(``containers/builder/``). :mod:`mcuhome.workspace` keeps the ``--native``
+(``containers/builder/``). :mod:`mcuhome.compiler.workspace` keeps the ``--native``
 escape hatch for people who already have a west workspace with a
 toolchain in it, which is MCUHome's own contributors and nobody else.
 
 The seam block C left behind is exactly the one used here:
-:func:`plan_build` returns the same :class:`~mcuhome.workspace.BuildPlan`
+:func:`plan_build` returns the same :class:`~mcuhome.compiler.workspace.BuildPlan`
 the native path returns — a command plus an environment — so everything
 after it (running the build, reading the memory report, listing the
 images) is shared code. The command happens to start with ``docker run``
 and the west invocation inside it is assembled by the very same
-:func:`~mcuhome.workspace.west_build_command`.
+:func:`~mcuhome.compiler.workspace.west_build_command`.
 
 **Same paths inside and outside.** The workspace is bind-mounted at the
 absolute path it has on the host, not at some ``/workspace``. A CMake
@@ -36,9 +36,9 @@ import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from mcuhome import workspace
-from mcuhome.errors import BuildError
-from mcuhome.userpaths import expand, home
+from mcuhome.compiler import workspace
+from mcuhome.model.errors import BuildError
+from mcuhome.model.userpaths import expand, home
 
 __all__ = [
     "CCACHE_DIR_VAR",
@@ -98,7 +98,7 @@ ZEPHYR_LINE = "4.4.0"
 #: does.
 #:
 #: r4 installs the program of the build-container contract at
-#: ``/mcuhome/run`` (§2.2) — a thin launcher over :mod:`mcuhome.abi`,
+#: ``/mcuhome/run`` (§2.2) — a thin launcher over :mod:`mcuhome.compiler.abi`,
 #: which is where the invocation ABI and the actions of §7 live. That
 #: module is **not** image content: it arrives with the SDK mount, so
 #: adding an action to it does not change this image and does not bump
@@ -110,7 +110,13 @@ ZEPHYR_LINE = "4.4.0"
 #: point — but a label is image metadata, and image metadata is an image
 #: change (the tag is the content identity, so a label under an old tag
 #: would make two different images answer to one name).
-IMAGE_REVISION = 5
+#:
+#: r6 = the launcher follows the package split, nothing else. ADR 0020's
+#: migration moved the invocation ABI to :mod:`mcuhome.compiler.abi`, and
+#: ``/mcuhome/run`` is the one file that names it by its import path —
+#: image content, unlike the module it launches, which still arrives with
+#: the SDK mount.
+IMAGE_REVISION = 6
 
 #: GitHub Container Registry under the MCUHome organization. The package
 #: is private while the repositories are; ``docker pull`` then needs a
@@ -326,7 +332,7 @@ def container_environment(
     The variables a Matter build needs wherever it runs — the codegen
     shim on ``PYTHONPATH``, ``ZEPHYR_BASE``, ``HOME``, and the two job
     caps that nothing inherits — come from
-    :func:`~mcuhome.workspace.build_environment`, which is their one
+    :func:`~mcuhome.compiler.workspace.build_environment`, which is their one
     definition. What this function adds is the two values that are true
     of a ``docker run`` and of nothing else: the cache is at the fixed
     mount point, not wherever the host keeps it.
@@ -390,7 +396,7 @@ def docker_run_command(
     exactly one today: the key file the build is given. On a normal build
     that is the firmware signing key, mounted because imgtool runs inside
     the container and read-only because nothing in there has any business
-    writing a key — the file itself stays where :mod:`mcuhome.signing`
+    writing a key — the file itself stays where :mod:`mcuhome.workbench.signing`
     put it, outside every repository and every build directory. On a
     ``--no-sign`` build it is the *public* half instead, which the
     bootloader compiles in and which nothing can sign with; that is the
@@ -448,7 +454,7 @@ def plan_build(
     root-owned anything behind.
 
     *module_dir* and *cwd* mean what they mean in
-    :func:`mcuhome.workspace.plan_build`, and are required for the same
+    :func:`mcuhome.compiler.workspace.plan_build`, and are required for the same
     reason: on this path the module directory is additionally a mount,
     because the builder may be installed next to the workspace rather
     than in it.

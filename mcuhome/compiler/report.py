@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Describing a finished build: ``build-manifest.json``, measured.
 
-The other half of :mod:`mcuhome.manifest`. That module is the format —
+The other half of :mod:`mcuhome.model.manifest`. That module is the format —
 what the document looks like, how it round-trips, what a signer may edit
 in one. This one *produces* one, and everything it needs to do so is a
 property of the machine that compiled: a build directory to walk, the
-artifact lists stage 5 collected (:mod:`mcuhome.workspace`), and the
+artifact lists stage 5 collected (:mod:`mcuhome.compiler.workspace`), and the
 board layout the builder itself rendered into the overlay.
 
 That is the whole reason for the cut (ADR 0020): a dashboard reads
@@ -26,9 +26,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mcuhome import __version__, ota, registry, workspace
-from mcuhome.errors import BuildError
-from mcuhome.manifest import (
+from mcuhome.compiler import workspace
+from mcuhome.model import __version__, ota, registry
+from mcuhome.model.errors import BuildError
+from mcuhome.model.manifest import (
     MANIFEST_FILE,
     BuildManifest,
     FileEntry,
@@ -38,7 +39,7 @@ from mcuhome.manifest import (
     ota_entry,
     ota_parameters,
 )
-from mcuhome.model import DeviceModel
+from mcuhome.model.model import DeviceModel
 
 __all__ = [
     "HEADER_SIZE_SYMBOL",
@@ -68,7 +69,7 @@ SIGN_VERSION_DEFAULT = "0.0.0+0"
 HEADER_SIZE_SYMBOL = "CONFIG_ROM_START_OFFSET"
 
 #: The built application's Kconfig, next to its artifacts. Sysbuild's
-#: output layout itself is :data:`mcuhome.workspace.IMAGE_OUTPUT_DIR`, so
+#: output layout itself is :data:`mcuhome.compiler.workspace.IMAGE_OUTPUT_DIR`, so
 #: this module states the one file it reads there and nothing else.
 KCONFIG_FILE = ".config"
 
@@ -131,7 +132,7 @@ def signing_parameters(
             f"offset, but this board's layout says {scheme.header_size}.",
             hint=(
                 f"{HEADER_SIZE_SYMBOL} and the board's header_size in "
-                "mcuhome/registry.py have to agree — an image signed against the "
+                "mcuhome/model/registry.py have to agree — an image signed against the "
                 "wrong offset boots nowhere. This is a builder bug worth reporting."
             ),
         )

@@ -3,8 +3,8 @@
 """NIST P-256, only as much of it as the builder needs.
 
 Two unrelated parts of the builder multiply the fixed generator by a
-scalar: :mod:`mcuhome.pairing` derives the SPAKE2+ verifier's ``L = w1·G``,
-and :mod:`mcuhome.signing` derives the public half of the firmware signing
+scalar: :mod:`mcuhome.model.pairing` derives the SPAKE2+ verifier's ``L = w1·G``,
+and :mod:`mcuhome.workbench.signing` derives the public half of the firmware signing
 key. They share this module rather than each carrying thirty lines of
 curve arithmetic.
 

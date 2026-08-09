@@ -22,7 +22,7 @@ an unimplemented action refuses: ``status: "unsupported"``, ``reason:
 on rather than a crash.
 
 ``verify`` computes nothing itself. Every hash and the effective context
-ID come from :func:`~mcuhome.contextdir.verify_context`, the one
+ID come from :func:`~mcuhome.workbench.contextdir.verify_context`, the one
 implementation of §3.3's normative rule in this project: "Implementations
 on both sides of the contract MUST compute the ID independently from the
 bytes they actually hold", which is only worth anything while each side
@@ -162,7 +162,7 @@ A tree in ``tmp`` is gone every invocation, so ``mode`` could not mean
 anything at all; ``work`` is the only place in the request document where
 it can. ``clean`` deletes both trees and passes ``--pristine always``;
 ``incremental`` keeps them and lets
-:func:`~mcuhome.workspace.pristine_mode` decide. The contract defines
+:func:`~mcuhome.compiler.workspace.pristine_mode` decide. The contract defines
 ``clean`` as "fresh workspace" and nothing more.
 
 *This program writes a session marker, so that ``incremental`` has a
@@ -239,7 +239,7 @@ This module reads no process state: ``argv`` arrives as an argument, and
 every path it touches comes out of the request document. The environment
 its **children** get is built here and passed to them, which is a
 different thing from reading one — and it is built from nothing, exactly
-as :func:`~mcuhome.container.container_environment` does for the other
+as :func:`~mcuhome.compiler.container.container_environment` does for the other
 direction. That is what keeps this module off the exemption list of
 ``tests_py/test_userpaths.py``.
 """
@@ -257,17 +257,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from mcuhome import __version__, registry, report, workspace
-from mcuhome.api import read_model
-from mcuhome.context import MANIFEST_FILE, MODEL_FILE, PATCHES_DIR
-from mcuhome.contextdir import (
+from mcuhome.compiler import report, workspace
+from mcuhome.compiler.generate import APP_DIR
+from mcuhome.model import __version__, registry
+from mcuhome.model.context import MANIFEST_FILE, MODEL_FILE, PATCHES_DIR
+from mcuhome.model.errors import BuildError
+from mcuhome.model.hashes import sha256_file
+from mcuhome.workbench.api import read_model
+from mcuhome.workbench.contextdir import (
     ContextFormatVersionError,
     ContextVerification,
-    sha256_file,
     verify_context,
 )
-from mcuhome.errors import BuildError
-from mcuhome.generate import APP_DIR
 
 __all__ = [
     "BOOTLOADER_ARTIFACT",
@@ -434,7 +435,7 @@ _REASON_BUILD = "error.build.failed"
 class _Unusable(Exception):
     """No result can be addressed: exit 66, nothing written (§5.3).
 
-    Not an error type from :mod:`mcuhome.errors`, on purpose. Those render
+    Not an error type from :mod:`mcuhome.model.errors`, on purpose. Those render
     themselves for a person reading a terminal; this one is never rendered
     anywhere, because the whole point of exit 66 is that there is no
     channel to say anything on.
@@ -1103,7 +1104,7 @@ def _open_context(echo: dict[str, Any], root: Path) -> ContextVerification:
     Shared by ``verify`` and ``build``, which is the point: both compute
     the effective context ID, and §3.3 is only worth anything while each
     side of the contract has *one* implementation of it. Every hash and
-    the ID come from :func:`~mcuhome.contextdir.verify_context`.
+    the ID come from :func:`~mcuhome.workbench.contextdir.verify_context`.
 
     The refusals are §3.1's and §3.2's, and neither is action-specific:
     a context with no ``manifest.yaml`` "is missing a file the action
@@ -1182,10 +1183,10 @@ def _verify(echo: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
     offending paths in ``error.details``."
 
     Every hash and the ID itself come from
-    :func:`~mcuhome.contextdir.verify_context`, never from this module —
+    :func:`~mcuhome.workbench.contextdir.verify_context`, never from this module —
     see the module docstring for why a second implementation of §3.3 here
     would be the defect that rule exists against. Its
-    :attr:`~mcuhome.contextdir.ContextVerification.ok` covers one case
+    :attr:`~mcuhome.workbench.contextdir.ContextVerification.ok` covers one case
     §7.3 does not enumerate and §3.3 demands anyway: a manifest whose
     declared ``id`` is not the ID its own contents yield. "Implementations
     … MUST NOT trust a declared ``id`` value" — and a declared value
@@ -1292,7 +1293,7 @@ def patchset(layer_dir: Path) -> str:
     64 lowercase hex digits, and each ``<64 hex chars>`` inside the input
     is lowercase (§3.3.1)." The sort is over the filename's **bytes**, not
     over its code points — the two agree for the ``NNNN-name.patch``
-    grammar :mod:`mcuhome.contextdir` enforces, and stating the byte order
+    grammar :mod:`mcuhome.workbench.contextdir` enforces, and stating the byte order
     is what makes a second implementation agree for a name outside it.
     """
     files = sorted(
@@ -1308,7 +1309,7 @@ def _absorb_tree(source: Path, target: Path) -> int:
 
     The other half of handing the child an empty ``out`` (§4): what it
     produced still has to end up in the session's persistent tree, and it
-    must land there the way :func:`mcuhome.generate.write_tree` would
+    must land there the way :func:`mcuhome.compiler.generate.write_tree` would
     have written it — a file whose bytes are already in *target* is left
     alone, mtime and all, because CMake watches the tree and a rewritten
     unchanged ``CMakeLists.txt`` re-runs the Matter sub-build. That is
@@ -1347,7 +1348,7 @@ def _run_child(command: list[str], *, env: dict[str, str], directory: Path) -> t
     message.
 
     The west build does not come through here: it goes through
-    :func:`~mcuhome.workspace.run_build`, which is the same shape with the
+    :func:`~mcuhome.compiler.workspace.run_build`, which is the same shape with the
     live echoing a quarter of an hour of compiling needs.
     """
     try:
@@ -1396,7 +1397,7 @@ def sdk_entry_point(sdk_path: Path) -> tuple[Path, str]:
     nothing more", fixing three names and no values — ``sdk``,
     ``generate.program``, ``generate.runtime``. Returns the absolute path
     of the program and the runtime string, and raises
-    :class:`~mcuhome.errors.BuildError` for everything §6.1 calls "code
+    :class:`~mcuhome.model.errors.BuildError` for everything §6.1 calls "code
     generation cannot be reached".
 
     "A missing file, a missing field and a ``sdk`` version the program
@@ -1698,9 +1699,9 @@ class _Build:
 
         Assembled from what this program was *told* it runs in — never
         read out of the process (the module docstring) — by
-        :func:`~mcuhome.workspace.build_environment`, which is the one
+        :func:`~mcuhome.compiler.workspace.build_environment`, which is the one
         definition of a Matter build environment in this package and is
-        also what :func:`~mcuhome.container.container_environment` reaches
+        also what :func:`~mcuhome.compiler.container.container_environment` reaches
         for the other direction. It contributes the codegen shim on
         ``PYTHONPATH``, the two job caps that nothing inherits,
         ``ZEPHYR_BASE`` so the generated CMakeLists finds Zephyr and the
@@ -1711,7 +1712,7 @@ class _Build:
         "runs the program as the calling user where it can" (§2.2), which
         in a container is a UID with no ``/etc/passwd`` entry; tools that
         cache in ``$HOME`` fail obscurely without a writable one
-        (:data:`mcuhome.container.CONTAINER_HOME` records what that cost).
+        (:data:`mcuhome.compiler.container.CONTAINER_HOME` records what that cost).
         ``work`` rather than ``tmp`` because those caches are worth
         keeping for the next invocation of the session, and §9.2 point 1
         makes ``work`` a place this program may write.
@@ -1721,7 +1722,7 @@ class _Build:
         naming things this program did not put anywhere: the image's
         toolchain, west, ``git``, the runtime ``generate.runtime`` names.
         A program that composed one would be describing a filesystem the
-        contract does not own (§4). :func:`~mcuhome.workspace.require_tools`
+        contract does not own (§4). :func:`~mcuhome.compiler.workspace.require_tools`
         is called on the finished environment before anything is compiled,
         so an environment that cannot start ``west`` is a typed refusal
         naming the tool rather than a child process that fails to exec ten
@@ -1731,7 +1732,7 @@ class _Build:
         mandatory for working actions … An optional field would be
         worthless here: a foreign program would fall back to ``nproc``,
         which is exactly the case the field exists against" — so
-        :func:`~mcuhome.workspace.resolve_jobs` and its auto-detection stay
+        :func:`~mcuhome.compiler.workspace.resolve_jobs` and its auto-detection stay
         on the host side of the contract and are never called here.
 
         The cache follows §10 exactly. A ``writable: true`` shared cache
@@ -1973,7 +1974,7 @@ class _Build:
         """``west build --sysbuild``, assembled by stage 5 and run by it.
 
         Nothing about the command is decided here:
-        :func:`~mcuhome.workspace.west_build_command` already knows the
+        :func:`~mcuhome.compiler.workspace.west_build_command` already knows the
         per-image snippet rule, and its ``detached_signing`` path is
         exactly what §7.2 requires — "It MUST use ``keys/signing.pub``
         from the context as the bootloader's verification key" and "The
@@ -1983,14 +1984,14 @@ class _Build:
 
         The device model comes out of the context (§3.1 puts it at
         ``model/device-model.json``) through
-        :func:`~mcuhome.api.read_model`, which is documented as exactly
+        :func:`~mcuhome.workbench.api.read_model`, which is documented as exactly
         this receiving end. A board this builder has no update scheme for
         is ``error.build.failed``: §7.2.1 makes the ``signing`` block
         mandatory, and there is nothing to put in it.
 
         ``clean`` is ``--pristine always`` regardless of what the build
         directory looks like; ``incremental`` lets
-        :func:`~mcuhome.workspace.pristine_mode` answer, which is the
+        :func:`~mcuhome.compiler.workspace.pristine_mode` answer, which is the
         function that already knows the one case ``auto`` cannot cover.
         """
         try:
@@ -2136,7 +2137,7 @@ class _Build:
         ``firmware`` artifact, and where the signed output goes is the
         signer's business".
 
-        The four arguments are :func:`~mcuhome.report.signing_parameters`
+        The four arguments are :func:`~mcuhome.compiler.report.signing_parameters`
         unchanged — three of them board data the build already had to know
         and the fourth, imgtool's ``--version``, read out of the built
         application's own ``.config``, which is the behaviour §7.2.1 cites.
@@ -2310,7 +2311,7 @@ def run_invocation(
     """§5.1's outer sequence around *invoke*; the return value is the exit code.
 
     Shared between the program itself (:func:`main`) and the SDK
-    package's entry point (:mod:`mcuhome.sdkentry`), because §6.1 reuses
+    package's entry point (:mod:`mcuhome.compiler.sdkentry`), because §6.1 reuses
     the invocation ABI on purpose: "A second calling convention would be
     a second frozen thing … this way the entry point is reached with the
     parser, the two documents and the four exit values every conforming

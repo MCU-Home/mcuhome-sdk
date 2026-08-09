@@ -3,7 +3,7 @@
 """The registry, as data (dashboard ADR 0011).
 
 Everything MCUHome knows about hardware and about Matter lives in
-:mod:`mcuhome.registry` as Python, which nothing that is not Python can
+:mod:`mcuhome.model.registry` as Python, which nothing that is not Python can
 read. This module is the export: the registry as a JSON document a board
 picker can populate itself from.
 
@@ -19,8 +19,8 @@ The output is golden-tested, so an accidental change to the shape is a
 failing test rather than a surprised consumer.
 
 **The JSON Schema for ``main.yaml`` is next door**
-(:mod:`mcuhome.configschema`), and the reason is a dependency rather
-than a topic. That export reads :mod:`mcuhome.schema` — the hand-written
+(:mod:`mcuhome.workbench.configschema`), and the reason is a dependency rather
+than a topic. That export reads :mod:`mcuhome.workbench.schema` — the hand-written
 parser — for the two rules it must not restate, and the parser is the
 front of the build pipeline. The registry export reads the registry and
 nothing else, so it can live where the registry lives (ADR 0020); the
@@ -33,8 +33,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from mcuhome import __version__, registry
-from mcuhome.model import MODEL_VERSION
+from mcuhome.model import __version__, registry
+from mcuhome.model.model import MODEL_VERSION
 
 __all__ = [
     "REGISTRY_VERSION",
@@ -50,7 +50,7 @@ REGISTRY_VERSION = 1
 def to_json(data: dict[str, Any]) -> str:
     """One rendering for both exports, so neither can drift.
 
-    :mod:`mcuhome.configschema` renders with this one; the two documents
+    :mod:`mcuhome.workbench.configschema` renders with this one; the two documents
     are read by the same editors and served by the same endpoint, and a
     difference in indentation between them would be nobody's decision.
     """

@@ -31,10 +31,10 @@ does not need for the requested action").
 
 The outer sequence — argv, parsing, the atomic result document, the
 catch-all that turns a crash into a legible failure — is
-:func:`mcuhome.abi.run_invocation`, shared rather than transcribed,
+:func:`mcuhome.compiler.abi.run_invocation`, shared rather than transcribed,
 because reusing the invocation ABI is §6.1's whole argument for it.
 
-The tree is written with :func:`mcuhome.generate.write_tree` under the
+The tree is written with :func:`mcuhome.compiler.generate.write_tree` under the
 same ``config_name`` convention the command line uses
 (``model.device.source``): the generator is deterministic (§1.4), so the
 entry point and ``mcuhome build --generate-only`` produce byte-identical
@@ -51,10 +51,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from mcuhome.abi import run_invocation
-from mcuhome.api import read_model
-from mcuhome.errors import MCUHomeError
-from mcuhome.generate import write_tree
+from mcuhome.compiler.abi import run_invocation
+from mcuhome.compiler.generate import write_tree
+from mcuhome.model.errors import MCUHomeError
+from mcuhome.workbench.api import read_model
 
 __all__ = [
     "GENERATE_ACTION",

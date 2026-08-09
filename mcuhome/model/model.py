@@ -37,7 +37,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from mcuhome import ota
+from mcuhome.model import ota
 
 __all__ = [
     "DEFAULT_SOURCE",
@@ -61,13 +61,13 @@ __all__ = [
 ]
 
 #: Version of the canonical model format — a published contract, see the
-#: module docstring. Exported through :mod:`mcuhome.api` and stated in
+#: module docstring. Exported through :mod:`mcuhome.workbench.api` and stated in
 #: every build manifest.
 MODEL_VERSION = 1
 
 #: Configuration file name assumed for a model that does not state one —
 #: which is what a model written before this field existed looks like. It
-#: is the entry name of every device folder (:data:`mcuhome.tree.DEVICE_ENTRY`),
+#: is the entry name of every device folder (:data:`mcuhome.workbench.tree.DEVICE_ENTRY`),
 #: so the assumption is the common case rather than a placeholder.
 DEFAULT_SOURCE = "main.yaml"
 
@@ -80,7 +80,7 @@ class DeviceMeta:
     power_source: str
     #: SemVer string (ADR 0005). It becomes MCUboot's image version, the
     #: Matter SoftwareVersion a controller compares, and the version in the
-    #: .ota file's header — all through mcuhome.ota, which is the only
+    #: .ota file's header — all through mcuhome.model.ota, which is the only
     #: module that maps it.
     version: str = ota.DEFAULT_VERSION
     #: File name of the configuration this model was resolved from, with
@@ -134,7 +134,7 @@ class ThreadModel:
 
 @dataclass(frozen=True)
 class PairingModel:
-    """This device's commissioning credentials (:mod:`mcuhome.pairing`).
+    """This device's commissioning credentials (:mod:`mcuhome.model.pairing`).
 
     The SPAKE2+ verifier is deliberately **not** a field: it is a pure
     function of the three values below, and storing it would create a
