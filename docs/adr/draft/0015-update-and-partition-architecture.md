@@ -408,15 +408,19 @@ Two invariants keep that door open:
 
 **One real signing key per project** (PO 2026-08-14; originally per
 user in `$XDG_CONFIG_HOME/mcuhome/signing.key`): the builder generates
-an ECDSA P-256 key pair on first need into the project's
-`secrets/firmware/mcuboot.yaml`, under the key `firmware_signing_key`
-(ADR 0022's secrets rules — 700/600, checked, refusal on insecure key
-material). One consequence of the YAML home: `imgtool` signs with
-`--key <file>`, so the workbench materializes the key as a short-lived
-owner-only file inside `secrets/firmware/` for exactly the duration of
-the imgtool run — never in a build directory, never outside
-`secrets/`. All devices of a project share it; a user who wants one
-vendor key across projects copies the file. `MCUHOME_SIGNING_KEY` (and
+an ECDSA P-256 key pair on first need as the project's
+`secrets/firmware/mcuboot.pem`, and `secrets/firmware/mcuboot.yaml`
+references it under `firmware_signing_key` with the workbench loader's
+generic `!file` tag (second PO round 2026-08-14; the earlier inline PEM
+block is retired and refused with the migration in the hint — pre-1.0,
+no alias). Both files fall under ADR 0022's secrets rules — 700/600,
+checked, refusal on insecure key material. The two-file shape exists
+for the tool boundary: `imgtool` signs with `--key <file>`, and the
+resolved key now *is* a durable file, so nothing is ever materialized,
+copied, or written into a build directory to sign with. All devices of
+a project share it; a user who wants one vendor key across projects
+copies the pair (or just the `.pem` — an unreferenced key at the
+canonical spot is adopted, never overwritten). `MCUHOME_SIGNING_KEY` (and
 the CLI's `--signing-key`, cli ADR 0003) still points elsewhere. The key
 lives **where the user's controlling instance runs, never on a build
 server**: the dashboard generates it on first need and keeps it in its
