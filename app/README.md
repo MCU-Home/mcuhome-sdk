@@ -10,15 +10,15 @@ device the builder produces.
 
 ## This is not an application
 
-`mcuhome build` generates the device *configuration*
+`mcuhome device build` generates the device *configuration*
 (`src/mcuhome_config.c/.h`: Matter tables and channel bindings) and a
 `CMakeLists.txt` that compiles it together with the `src/main.c` above,
 reached as `${ZEPHYR_MCUHOME_MODULE_DIR}/app/src/main.c`. So the thing
 you build is the generated tree, never this directory:
 
 ```sh
-mcuhome build <device> --build-dir <dir>     # generates and builds
-mcuhome build <device> --build-dir <dir> --generate-only
+mcuhome device build <device> --build-dir <dir>     # generates and builds
+mcuhome device build <device> --build-dir <dir> --generate-only
 west build -b <board> -S matter <dir>/app    # the manual equivalent
 ```
 

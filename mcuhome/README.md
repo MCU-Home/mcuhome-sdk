@@ -11,11 +11,11 @@ produces Zephyr firmware. Design records:
 pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0'
 pip install -e ../mcuhome        # the workbench (own repo, github.com/mcu-home/mcuhome)
 pip install -e ../cli            # the `mcuhome` command (own repo, github.com/mcu-home/cli)
-mcuhome init-pairing <device>    # draw this device's commissioning credentials
-mcuhome validate <device>        # stages 1-3, prints the resolved device
-mcuhome build <device> --generate-only   # + stage 4, writes the application
-mcuhome build <device>           # + stage 5, compiles it in the builder image
-mcuhome build <device> --method local-dev   # … or on this machine's own toolchain
+mcuhome device init-pairing <device>    # draw this device's commissioning credentials
+mcuhome device validate <device>        # stages 1-3, prints the resolved device
+mcuhome device build <device> --generate-only   # + stage 4, writes the application
+mcuhome device build <device>           # + stage 5, compiles it in the builder image
+mcuhome device build <device> --build-mode local-dev   # … or on this machine's own toolchain
 pytest                           # the suite in ../tests_py/
 ```
 
@@ -90,7 +90,7 @@ is a per-user secret and is passed on the command line
 Stage 5 runs in the **build-container image** (ADR 0007,
 [../containers/build-container/](../containers/build-container/README.md)): the host
 needs git and docker, the workspace is bind-mounted at its own absolute
-path, and the build runs as the calling user. `--method local-dev` compiles in the
+path, and the build runs as the calling user. `--build-mode local-dev` compiles in the
 west workspace `mcuhome.compiler` is installed in instead — the escape
 hatch for MCUHome's own contributors.
 

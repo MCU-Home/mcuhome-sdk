@@ -29,9 +29,9 @@ channel layer, netcore entropy service, and a BMP180 two-endpoint sample
 — is implemented and hardware-verified: commissioned into a production
 Home Assistant instance over Thread (design record: see
 [docs/adr/](docs/adr/)). The Python YAML builder (phase 2) is under
-construction, and now goes end to end: `mcuhome validate <device>`
+construction, and now goes end to end: `mcuhome device validate <device>`
 checks a configuration and prints what it resolves to, and `mcuhome
-build <device>` generates the Zephyr application for it and compiles it
+device build <device>` generates the Zephyr application for it and compiles it
 into a flashable image, reporting where the image is and what it costs
 in flash and RAM. Compiling happens in the versioned builder image
 ([ADR 0007](docs/adr/0007-containerized-toolchain.md)), so the host needs
@@ -98,7 +98,7 @@ git clone https://github.com/mcu-home/mcuhome
 pip install -e mcuhome                    # the workbench (build methods, signing)
 git clone https://github.com/mcu-home/cli
 pip install -e cli                # the `mcuhome` command
-mcuhome build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
+mcuhome device build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node
 ```
 
@@ -109,7 +109,7 @@ footprints and the flash layout they were built against. The first build
 also draws your own ECDSA P-256 signing key into
 `~/.config/mcuhome/signing.key` and says so: every device you flash
 verifies its firmware against it, so it is worth keeping (ADR 0015). `--generate-only` stops after the
-generating half, which needs nothing but Python; `--method local-dev`
+generating half, which needs nothing but Python; `--build-mode local-dev`
 compiles on a host toolchain instead, for people working on MCUHome itself. Details,
 including how to build the image yourself, are in
 [containers/build-container/README.md](containers/build-container/README.md).
@@ -120,15 +120,18 @@ per job and never exceeds the core count) — `MCUHOME_JOBS=N` overrides
 the auto-detection, `--jobs N` overrides both, and it applies inside the
 builder container too, resolved on the host before `docker run`.
 
+The default builder is configured through the project or user configuration (ADR 0023);
+the fully manual form is `--build-mode local-dev|local|remote` with mode-specific flags.
+
 ### Starting a device from nothing
 
 ```sh
-mcuhome new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
-mcuhome init-pairing bedroom-climate      # this device's commissioning codes
-mcuhome validate bedroom-climate
+mcuhome device new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
+mcuhome device init-pairing bedroom-climate      # this device's commissioning codes
+mcuhome device validate bedroom-climate
 ```
 
-`mcuhome new` writes `devices/bedroom-climate/main.yaml` — a complete
+`mcuhome device new` writes `devices/bedroom-climate/main.yaml` — a complete
 configuration with a commented, working hardware example to uncomment.
 It never draws commissioning credentials itself: those are drawn once,
 by their own command, so that every build of a device is byte-identical
@@ -143,15 +146,15 @@ is not the machine that owns the key — a build server, or the future
 dashboard's build App — the two are separated:
 
 ```sh
-mcuhome public-key -o signing.pub          # the half that may travel
-mcuhome build <device> --no-sign --public-key signing.pub
-mcuhome sign build/<device>                # where the private key is
+mcuhome public-key > signing.pub          # the half that may travel
+mcuhome device build <device> --no-sign --public-key signing.pub
+mcuhome device sign-firmware build/<device>                # where the private key is
 ```
 
 The unsigned build compiles the bootloader with the public key in it and
 leaves the application unsigned, and writes `build-manifest.json` stating
 the exact `imgtool` parameters (`--version`, `--header-size`,
-`--slot-size`, `--align`). `mcuhome sign` reads them back and runs the
+`--slot-size`, `--align`). `mcuhome device sign-firmware` reads them back and runs the
 same tool with the same arguments — the result is the same image, and
 `--no-sign` deliberately leaves no file behind that looks flashable and
 is not.
@@ -159,13 +162,13 @@ is not.
 ### Machine-readable output
 
 ```sh
-mcuhome validate <device> --json    # the resolved model, or the errors
-mcuhome build    <device> --json    # the build manifest (log on stderr)
+mcuhome device validate <device> -o json    # the resolved model, or the errors
+mcuhome device build    <device> -o json    # the build manifest (log on stderr)
 
 # A machine that only compiles takes the resolved model and nothing else:
 # no configuration tree, no secrets (dashboard ADR 0007 decision 1). The
 # generated tree is byte-identical to the one the direct route produces.
-mcuhome build --model device-model.json --build-dir build/<device>
+mcuhome device build --model device-model.json --build-dir build/<device>
 mcuhome schema                      # JSON Schema for main.yaml
 mcuhome schema registry             # boards, drivers, clusters, device types
 ```

@@ -14,13 +14,13 @@ separate repository ([mcu-home/dashboard](https://github.com/mcu-home/dashboard)
 **Current phase.** Phase 1 (firmware runtime: tables-contract framework,
 channel layer, netcore entropy, BMP180 two-endpoint sample) is complete
 and hardware-verified against a production Home Assistant over Thread.
-Phase 2 (the Python YAML builder) is in progress: `mcuhome validate`
+Phase 2 (the Python YAML builder) is in progress: `mcuhome device validate`
 runs the front half of the pipeline (load → validate → resolve into the
-canonical device model), and `mcuhome build` goes all the way to a
+canonical device model), and `mcuhome device build` goes all the way to a
 flashable image — stage 4 generates the per-device Zephyr application
 (tables, overlay, Kconfig fragment, CMakeLists) and stage 5 compiles it
 with `west build` inside the builder image (ADR 0007;
-`containers/build-container/`), or on the host with `--method local-dev`. Note the
+`containers/build-container/`), or on the host with `--build-mode local-dev`. Note the
 consequence of ADR 0014:
 `samples/matter-node/src/mcuhome_config.{c,h}` **is generator output**
 and the pytest suite compares it byte for byte — never hand-edit it,
@@ -171,26 +171,26 @@ pip install -e ../mcuhome -e ../cli
 pytest
 
 # Check one device configuration with the builder
-mcuhome validate docs/design/examples/00-bmp180-two-endpoints.yaml
+mcuhome device validate docs/design/examples/00-bmp180-two-endpoints.yaml
 
-# The machine-readable surface (cli ADR 0003/0004; --json retires for -o there): --json on
-# validate/build, the registry and the main.yaml JSON Schema as data, and
+# The machine-readable surface (cli ADR 0003/0004; -o json for output format):
+# -o json on validate/build, the registry and the main.yaml JSON Schema as data, and
 # a scaffold for a new device. `mcuhome.workbench.api` (mcu-home/mcuhome)
 # is the same thing in process.
-mcuhome validate <device> --json
+mcuhome device validate <device> -o json
 mcuhome schema registry
-mcuhome new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
+mcuhome device new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
 
 # Detached signing (ADR 0015 decision 8): compile without the private key,
 # sign where the key is. build-report.json carries the imgtool parameters
-# (the default `local` method's §7.2.1 delivery; `--method local-dev`
+# (the default `local` method's §7.2.1 delivery; `--build-mode local-dev`
 # writes build-manifest.json instead, and the signer reads either).
-mcuhome public-key -o signing.pub
-mcuhome build <device> --no-sign --public-key signing.pub
-mcuhome sign build/<device>
+mcuhome public-key > signing.pub
+mcuhome device build <device> --no-sign --public-key signing.pub
+mcuhome device sign-firmware build/<device>
 
 # Generate the Zephyr application for it and stop (stage 4)
-mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
+mcuhome device build docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir /tmp/bmp180-node --generate-only
 
 # Generate AND compile it (stages 4-5), from the workspace top directory.
@@ -202,11 +202,11 @@ mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
 # footprints. The first build generates the per-user signing key in
 # ~/.config/mcuhome/; --signing-key points somewhere else.
 # -S adds a snippet on top of the ones the configuration needs.
-mcuhome build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
+mcuhome device build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node -S debug-rtt
 
 # The same, on the host toolchain instead of in the container
-mcuhome build … --method local-dev
+mcuhome device build … --build-mode local-dev
 
 # Build the builder image from source (containers/build-container/README.md).
 # The context is the repository root, not containers/build-container/: since r3
@@ -223,11 +223,11 @@ pre-commit run --all-files
 
 ### What a compiling build needs on the host
 
-**git and docker. That is the whole list** (ADR 0007). `mcuhome build`
+**git and docker. That is the whole list** (ADR 0007). `mcuhome device build`
 compiles inside the builder image, which carries the Zephyr SDK, west,
 `gn`, `zap` and ccache; the workspace is bind-mounted into it at its own
 absolute path, as the calling user, so nothing is left behind owned by
-root. `mcuhome validate` and `--generate-only` need even less — Python,
+root. `mcuhome device validate` and `--generate-only` need even less — Python,
 and nothing else. See `containers/build-container/README.md`.
 
 Since image revision r3 the image also **carries** a west workspace of
@@ -236,7 +236,7 @@ Matter SDK at the revisions `west.yml` pins, patched, with the manifest
 repository's directory left empty for the SDK mount (ADR 0007:
 `git describe` in the workspace decides `BUILD_VERSION` and therefore
 the firmware bytes, so baking it makes that state a property of the image
-digest). Nothing reads it yet: `mcuhome build` still mounts and builds
+digest). Nothing reads it yet: `mcuhome device build` still mounts and builds
 out of the *host's* workspace, so the host requirement above is unchanged
 until the run-time side is switched over.
 
@@ -244,7 +244,7 @@ A missing docker, a stopped daemon and a missing image are three
 different refusals with three different fixes, all raised before the
 build starts.
 
-`--method local-dev` compiles on the host instead, which is what MCUHome's
+`--build-mode local-dev` compiles on the host instead, which is what MCUHome's
 own contributors do in this workspace. That path needs a west workspace plus
 three things a Zephyr installation does not bring:
 
@@ -268,9 +268,9 @@ A third job, `matter`, covers what that exclusion leaves uncovered: it
 materialises a west workspace **with** the `matter` group, applies both
 files in `patches/` with `git apply` (a patch that has drifted from its
 pinned upstream fails the job — there is no `--3way`, no fallback), and
-runs `mcuhome build` on
+runs `mcuhome device build` on
 `docs/design/examples/00-bmp180-two-endpoints.yaml` in the builder image,
-i.e. the container path rather than `--method local-dev`.
+i.e. the container path rather than `--build-mode local-dev`.
 `scripts/check_build_artifacts.py` then asserts the artifact set —
 MCUboot image, signed application, merged
 hex, `build-manifest.json`, every file checked against the size and

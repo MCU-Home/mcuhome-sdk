@@ -155,18 +155,18 @@ Three things about that command are worth reading rather than copying:
   per-image form, and the main image is named after its directory.
 - **The signing key is yours** (ADR 0015 decision 8). Without that last
   argument the build succeeds and signs with MCUboot's demo key, whose
-  private half is published in the MCUboot repository. `mcuhome build`
+  private half is published in the MCUboot repository. `mcuhome device build`
   generates a real one on first use; `imgtool keygen -t ecdsa-p256`
   does the same by hand.
 - **The partition table is missing from this sample.** The command above
   builds against the board's upstream two-slot layout, which gives the
   application 464 KiB and therefore does not fit — the layout of ADR 0015
-  is registry data that `mcuhome build` emits, not something this
+  is registry data that `mcuhome device build` emits, not something this
   hand-written sample carries. To build this sample *with* a bootloader,
   generate the equivalent device instead:
 
   ```sh
-  mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
+  mcuhome device build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
       --build-dir build/bmp180-node
   ```
 
