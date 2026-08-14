@@ -248,7 +248,7 @@ def _refuse_no_docker(docker: str) -> BuildError:
             "same command again. That is the whole host setup: the Zephyr SDK, gn, "
             "zap and ccache live in the MCUHome builder image, not on your machine.\n"
             "If you already have a west workspace with a Zephyr toolchain in it, "
-            "--method local-dev compiles there instead."
+            "--build-mode local-dev compiles there instead."
         ),
     )
 
@@ -261,7 +261,7 @@ def _refuse_no_daemon(docker: str) -> BuildError:
             "    sudo systemctl start docker      # Linux, system service\n"
             "    open -a Docker                   # macOS, Docker Desktop\n"
             f"If {docker} only works under sudo, add yourself to the `docker` group "
-            "and log in again. --method local-dev compiles on the host instead."
+            "and log in again. --build-mode local-dev compiles on the host instead."
         ),
     )
 
@@ -276,7 +276,7 @@ def _refuse_missing_image(docker: str, reference: str) -> BuildError:
             "repository, because west.yml and patches/ are image inputs):\n"
             f"    {docker} build -t {reference} -f {DOCKERFILE_DIR}/Dockerfile .\n"
             f"{IMAGE_VAR} selects a different image, --image does it per build, and "
-            "--method local-dev skips the container altogether."
+            "--build-mode local-dev skips the container altogether."
         ),
     )
 

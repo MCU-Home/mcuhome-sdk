@@ -219,7 +219,7 @@ def test_the_run_command_mounts_paths_onto_themselves(tmp_path) -> None:
 
     Mounting the workspace at /workspace would make every path in the
     CMake cache a lie the moment anyone looked at the build directory
-    from the host — or ran the same build with --method local-dev.
+    from the host — or ran the same build with --build-mode local-dev.
     """
     command = container.docker_run_command(
         docker="docker",
@@ -281,7 +281,7 @@ def test_no_docker_at_all_says_what_to_install() -> None:
     assert "cannot find docker on your PATH" in caught.value.message
     hint = caught.value.hint or ""
     assert "docs.docker.com" in hint
-    assert "--method local-dev" in hint
+    assert "--build-mode local-dev" in hint
     # Asking an absent program a second question tells nobody anything.
     assert len(runner.commands) == 1
 
@@ -311,7 +311,7 @@ def test_a_missing_image_says_how_to_get_one_both_ways() -> None:
         f"-f {container.DOCKERFILE_DIR}/Dockerfile ." in hint
     )
     assert container.IMAGE_VAR in hint
-    assert "--method local-dev" in hint
+    assert "--build-mode local-dev" in hint
 
 
 def test_a_working_docker_with_the_image_says_nothing() -> None:

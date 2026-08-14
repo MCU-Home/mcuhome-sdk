@@ -25,7 +25,7 @@ different architecture. A SHA-256 per file is what turns "the build
 returned some bytes" into "the build returned *these* bytes". Measuring
 one file into a :class:`FileEntry` therefore lives here as
 :meth:`FileEntry.measure`, with the format rather than with either
-producer: the compiler hashes a fresh artifact and ``mcuhome sign``
+producer: the compiler hashes a fresh artifact and ``mcuhome device sign-firmware``
 re-hashes the one it just signed, on a machine that has no compiler at
 all (ADR 0015 decision 8), and the two must not be two computations.
 
@@ -143,7 +143,7 @@ class OtaEntry:
     Two things in one block on purpose. The identity — version, the
     SoftwareVersion derived from it, the vendor and product IDs the header
     carries — is known the moment the build is planned, and stating it even
-    when no file exists yet is what lets ``mcuhome sign`` write the .ota on
+    when no file exists yet is what lets ``mcuhome device sign-firmware`` write the .ota on
     a machine that has the manifest, the signed image and nothing else
     (ADR 0015 decision 8 puts signing where the key is, which is not where
     the compiler is).
@@ -186,7 +186,7 @@ class OtaEntry:
             raise BuildError(
                 f"The build manifest's Matter OTA parameters are incomplete: {error}.",
                 hint=(
-                    "the manifest is written by mcuhome build; an edited or "
+                    "the manifest is written by mcuhome device build; an edited or "
                     "truncated one cannot be wrapped into an .ota file. Build again."
                 ),
             ) from error
@@ -402,7 +402,7 @@ def record_ota(data: dict[str, Any], image: ota.OtaImage, *, out_dir: Path) -> d
     """Fold a freshly written .ota file into a manifest mapping.
 
     The detached path's half of the story: a build that left the image
-    unsigned could not wrap it, so `mcuhome sign` writes the .ota after
+    unsigned could not wrap it, so `mcuhome device sign-firmware` writes the .ota after
     signing and says so here. *data* is modified in place and returned.
     """
     data["ota"] = ota_entry(image, out_dir=out_dir).to_dict()

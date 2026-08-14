@@ -6,9 +6,9 @@ Stage 4 (:mod:`mcuhome.compiler.generate`) writes a standalone Zephyr applicatio
 This module turns it into an image, by driving ``west build`` in the west
 workspace the builder itself lives in.
 
-**The escape hatch, not the normal path (ADR 0007).** ``mcuhome build``
+**The escape hatch, not the normal path (ADR 0007).** ``mcuhome device build``
 compiles inside the versioned builder image (:mod:`mcuhome.compiler.container`);
-``--method local-dev`` selects what is below, for people who already have
+``--build-mode local-dev`` selects what is below, for people who already have
 a west workspace with a toolchain in it — MCUHome's own contributors. The two
 paths meet at :func:`plan_build` and :class:`BuildPlan`: a command plus an
 environment. The container path assembles a different command in a
@@ -299,7 +299,7 @@ def require_topdir(*starts: Path) -> Path:
             "    git clone https://github.com/mcu-home/mcuhome-sdk\n"
             "    west init -l mcuhome-sdk && west update\n"
             "or stop after code generation and build the application yourself:\n"
-            "    mcuhome build <device> --generate-only"
+            "    mcuhome device build <device> --generate-only"
         ),
     )
 
@@ -507,8 +507,9 @@ def _refuse_missing(tools: list[ToolNeed]) -> BuildError:
         lines.append(f"      from: {tool.source}")
     lines.append(
         "None of this is needed with --generate-only, and none of it is needed "
-        "in the MCUHome builder container — which is what --method local "
-        "compiles in, and what mcuhome build does when no method is named."
+        "in the MCUHome builder container — which is what the default builder "
+        "compiles in, and what mcuhome device build does when no builder or "
+        "--build-mode is named."
     )
     return BuildError(
         f"MCUHome cannot compile without {names}, which is not on your PATH."

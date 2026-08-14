@@ -28,7 +28,7 @@ The layout the pipeline design fixes::
 
 "Standalone" is meant literally: ``west build -b <board> --sysbuild
 <build dir>/app`` from a west workspace produces the same images
-``mcuhome build`` does — the file names above are the ones sysbuild
+``mcuhome device build`` does — the file names above are the ones sysbuild
 discovers by itself. That is why the CMakeLists carries the whole Matter
 build glue rather than a call into something the builder owns — and why
 the *only* thing it needs from the MCUHome module is the module directory
@@ -947,7 +947,7 @@ def render_sysbuild_conf(model: DeviceModel, *, config_name: str) -> str:
         f"and in {SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.overlay, and the bootloader's own "
         f"settings are in {SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.conf.",
         "THE SIGNING KEY IS NOT IN THIS FILE, AND NOT IN THIS TREE. It is a "
-        "per-user secret (ADR 0015 decision 8), so mcuhome build passes it on the "
+        "per-user secret (ADR 0015 decision 8), so mcuhome device build passes it on the "
         "command line:\n"
         '  -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE="<path to your signing.key>"\n'
         "Building this tree by hand without that argument does not fail — it "
@@ -987,7 +987,7 @@ def render_sysbuild_cmake(model: DeviceModel, *, config_name: str) -> str:
         "from the application directory before it configures any image, which is "
         "the only place an application can influence how its own image is "
         "configured.",
-        f"Everything it does is behind {DETACHED_SIGNING_VAR}, which mcuhome build "
+        f"Everything it does is behind {DETACHED_SIGNING_VAR}, which mcuhome device build "
         "--no-sign passes and nothing else sets: a normal build reads this file, "
         "appends one script, and that script does nothing. That is deliberate — "
         "the generated tree is the same tree whether the image is signed during "
@@ -1029,8 +1029,8 @@ def render_detached_signing_cmake(model: DeviceModel, *, config_name: str) -> st
     del model
     intro = [
         "Detached signing (ADR 0015 decision 8): leave the application unsigned so "
-        "that the private key never has to be where the build runs. mcuhome sign "
-        "applies the signature afterwards, wherever the key is, using the "
+        "that the private key never has to be where the build runs. mcuhome device "
+        "sign-firmware applies the signature afterwards, wherever the key is, using the "
         "parameters the build manifest states.",
         "The bootloader is unaffected. It is given the public half of the same key "
         "pair and compiles it in exactly as it would the public half of the private "
