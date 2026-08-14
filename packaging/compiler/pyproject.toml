@@ -6,14 +6,13 @@
 # See `packaging/model/pyproject.toml` for why the project directory and
 # the code it ships are in different places.
 #
-# The dependency on `mcuhome-workbench` is a base dependency and not an
-# extra. ADR 0020 decision 3's optionality runs the OTHER way — workbench
-# may pull the compiler in for the `local-dev` build method — and it stays
-# an extra there because no static import expresses it. This direction is
-# a static import and cannot be optional: `mcuhome.compiler.abi` imports
-# `mcuhome.workbench.contextdir` and `mcuhome.workbench.api` at module
-# level, because the invocation-ABI adapter verifies a context and reads a
-# device model before it compiles anything.
+# The base dependency is `mcuhome-model` and nothing above it
+# (ADR 0024): the compiler ships inside the SDK package and runs in the
+# build container, where the workbench neither exists nor belongs. The
+# optionality of ADR 0020 decision 3 runs the other way — the
+# workbench's `local` extra pulls this distribution in for the local
+# build methods; nothing here imports the workbench (the compiler's own
+# context reading is `mcuhome.compiler.contextread`).
 
 [build-system]
 requires = ["setuptools>=77"]
@@ -21,9 +20,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcuhome-compiler"
-# Dynamic for the same reason as in `packaging/workbench/`: the pin on
-# the sibling distribution is exact and must not be a second copy of the
-# release version. See the `setup.py` next to this file.
+# Dynamic because the pin on the sibling distribution is exact and
+# must not be a second copy of the release version. See the `setup.py`
+# next to this file.
 dynamic = ["version", "dependencies"]
 description = "MCUHome's compiler: code generation, west orchestration, build report, invocation-ABI adapter."
 readme = { text = """

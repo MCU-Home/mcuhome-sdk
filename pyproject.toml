@@ -6,19 +6,20 @@
 # It used to build one, named `mcuhome`. ADR 0020 ended that twice over:
 # decision 2 reserves the plain name for the command line, because `pip
 # install mcuhome` should yield the command a user expects; and decision
-# 1 splits what this repository publishes into three distributions, whose
-# project files are `packaging/{model,workbench,compiler}/pyproject.toml`.
+# 1 split what one repository published into three distributions. Since
+# the ADR 0024 repo split this repository publishes two of them —
+# `packaging/{model,compiler}/pyproject.toml`; `mcuhome-workbench` is
+# published from its own repository, github.com/mcu-home/mcuhome.
 #
 # What is deliberately NOT here is a fourth, aggregate distribution. It
 # could not do the job it would exist for: a `[project]` table can depend
 # on `mcuhome-model` from an index, never on the copy in this working
 # tree, so `pip install -e '.[dev]'` would install three *published*
-# distributions over the three editable ones and quietly undo the setup
-# it was asked for. The three paths are named explicitly instead — one
-# pip invocation, and every word of it true (AGENTS.md, "Commands"):
+# distributions over the editable ones and quietly undo the setup it
+# was asked for. The two paths are named explicitly instead — one pip
+# invocation, and every word of it true (AGENTS.md, "Commands"):
 #
-#     pip install -e ./packaging/model -e ./packaging/workbench \
-#                 -e ./packaging/compiler 'pytest>=8.0'
+#     pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0'
 #
 # The tool sections below stay in one file because that is what they are:
 # settings for the repository, not for any one distribution. Splitting

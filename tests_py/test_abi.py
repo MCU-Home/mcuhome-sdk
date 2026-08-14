@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import VALID_CONFIG, resolve_file
+from conftest import EXAMPLES_DIR, resolve_file, write_context_manifest
 
 from mcuhome.compiler import abi
 from mcuhome.model import __version__
@@ -50,11 +50,14 @@ from mcuhome.model.context import (
     context_id,
 )
 from mcuhome.model.errors import BuildError
-from mcuhome.workbench.contextdir import write_context_manifest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "containers" / "build-container" / "Dockerfile"
 LAUNCHER = REPO_ROOT / "containers" / "build-container" / "run"
+
+#: The reference device, whose resolved model every ``build`` here
+#: carries (see the ``device_model_json`` fixture).
+EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
 #: The fixed absolute path §2.2 gives the program. Restated here so that
 #: moving it has to be a deliberate edit in two places.
@@ -162,10 +165,10 @@ CONTEXT_FILES = {
 def locked_context(root: Path, files: dict[str, str] | None = None) -> ContextManifest:
     """A context directory as ``lock-context`` leaves one (§3.2).
 
-    Written file by file rather than through
-    :func:`~mcuhome.workbench.contextdir.create_context`, because half of these
-    tests need a context no builder would ever produce: one file short,
-    one file too many, a manifest that lies about its own ID. What is
+    Written file by file rather than through the workbench's
+    ``create_context``, because half of these tests need a context no
+    builder would ever produce: one file short, one file too many, a
+    manifest that lies about its own ID. What is
     *not* rebuilt here is the ID rule — it comes from
     :func:`~mcuhome.model.context.context_id`, the same function the program
     under test reaches through, because §3.3 is locked and a second
@@ -1161,17 +1164,19 @@ PATCHSET_OF_TWO = "sha256:e3078d6fac12ec834a2359fff0ebcfbcfecb38524e6d2f765c1a75
 
 
 @pytest.fixture(scope="session")
-def device_model_json(tmp_path_factory) -> str:
+def device_model_json() -> str:
     """The canonical model a locked context carries, as JSON.
 
-    Resolved from a real configuration rather than hand-written: §3.1 puts
-    ``model/device-model.json`` in the context and ``mcuhome.workbench.api.read_model``
-    refuses anything that is not one, so a fixture that faked it would test
-    the fake.
+    A real model rather than a hand-written one: §3.1 puts
+    ``model/device-model.json`` in the context and
+    ``mcuhome.model.modelfile.read_model`` refuses anything that is not
+    one, so a fixture that faked it would test the fake. It comes from
+    the reference device's golden wire document — the same document a
+    remote build sends — because resolving a configuration into one is
+    the workbench's half of the pipeline and lives in the tools
+    repository (ADR 0024).
     """
-    root = tmp_path_factory.mktemp("device")
-    (root / "main.yaml").write_text(VALID_CONFIG, encoding="utf-8")
-    return resolve_file(root / "main.yaml").to_json()
+    return resolve_file(EXAMPLE).to_json()
 
 
 class BuildSetup:
@@ -2146,10 +2151,12 @@ def test_the_reported_context_is_the_one_the_program_measured(build: BuildSetup)
     back: the backend compares ``result.context`` against its own
     measurement (§9.3), and an echoed value would agree with everything.
     """
-    (build.context / "model" / "device-model.json").write_text(
-        build.files["model/device-model.json"].replace("bench-node", "bench-nodf", 1),
-        encoding="utf-8",
-    )
+    original = build.files["model/device-model.json"]
+    tampered = original.replace("bmp180-node", "bmp180-nodf", 1)
+    # Checked, because a rename in the model would otherwise turn the
+    # tampering into a no-op and the assertion below into a tautology.
+    assert tampered != original, "the edit changed nothing — pick a string the model carries"
+    (build.context / "model" / "device-model.json").write_text(tampered, encoding="utf-8")
     assert build.run() == abi.EXIT_SUCCESS
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", build.document()["context"])
     assert build.document()["context"] != build.manifest.id
@@ -2426,7 +2433,7 @@ def test_the_entry_point_generates_the_real_tree(tmp_path, device_model_json: st
     """
     from mcuhome.compiler import sdkentry
     from mcuhome.compiler.generate import generate
-    from mcuhome.workbench.api import read_model
+    from mcuhome.model.modelfile import read_model
 
     context = tmp_path / "ctx"
     (context / "model").mkdir(parents=True)

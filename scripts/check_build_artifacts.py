@@ -16,7 +16,8 @@ Usage::
 where ``<build-dir>`` is what ``mcuhome build --build-dir`` was given.
 
 **Two build shapes, chosen by which description file is present** — the
-same fork ``mcuhome sign`` makes (``mcuhome/workbench/imgtool.py``):
+same fork ``mcuhome sign`` makes (the workbench's ``imgtool.py``,
+in mcu-home/mcuhome since ADR 0024):
 
 * the **default** ``mcuhome build`` drives the ``local`` backend through
   the build container and delivers ``build-report.json`` (the §7.2.1

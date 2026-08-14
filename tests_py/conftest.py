@@ -2,23 +2,35 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared fixtures and helpers for the builder tests.
 
-Arranged in two halves, and the order is the point. Everything above the
-marked block near the bottom needs nothing but :mod:`mcuhome.model` and
-:mod:`mcuhome.compiler`; everything below it needs
-:mod:`mcuhome.workbench`. ADR 0024 moves the first two into a repository
-of their own, so the marker is where this file gets cut — not a tidiness
-convention but the seam, kept visible while both halves still live here.
+Everything here needs nothing but :mod:`mcuhome.model` and
+:mod:`mcuhome.compiler` — the two packages ADR 0024 moves into this
+repository. Nothing imports :mod:`mcuhome.workbench`, which lives in the
+tools repository and is not installed next to these tests; where a test
+used to reach for it, this file carries the small piece of it the test
+actually needed (the example model below, the context writer at the end).
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
+from ruamel.yaml import YAML
 
 from mcuhome.compiler import container
-from mcuhome.model.errors import ConfigError, ConfigErrorGroup
+from mcuhome.model.context import (
+    BACKEND_DIR,
+    CONTEXT_FILE,
+    MANIFEST_FILE,
+    ContainerResolution,
+    ContextFile,
+    ContextManifest,
+    ContextRequest,
+    context_id,
+)
+from mcuhome.model.hashes import sha256_file
 from mcuhome.model.model import DeviceModel
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -27,7 +39,7 @@ EXAMPLES_DIR = REPO_ROOT / "docs" / "design" / "examples"
 DATA_DIR = TESTS_DIR / "data"
 GOLDEN_DIR = DATA_DIR / "golden"
 
-#: The import package the three distributions of ADR 0020 share, and the
+#: The import package the distributions of ADR 0020 share, and the
 #: directory it is assembled from in this checkout. It is a PEP 420
 #: namespace package, which is why the directory is named here at all:
 #: the import system cannot enumerate one. ``find_spec("mcuhome")``
@@ -38,10 +50,12 @@ NAMESPACE = "mcuhome"
 NAMESPACE_DIR = REPO_ROOT / NAMESPACE
 
 #: The packages the whole-package invariant searches must cover — the
-#: three distributions of ADR 0020 decision 1, by import name.
+#: distributions of ADR 0020 decision 1 this repository ships, by import
+#: name. ``mcuhome.workbench`` is the third and lives in the tools
+#: repository since ADR 0024, where the same list names it alone.
 #: :func:`package_modules` checks this list against what is actually in
-#: :data:`NAMESPACE_DIR`, so a fourth subpackage cannot arrive unsearched.
-PACKAGES = ("mcuhome.compiler", "mcuhome.model", "mcuhome.workbench")
+#: :data:`NAMESPACE_DIR`, so a third subpackage cannot arrive unsearched.
+PACKAGES = ("mcuhome.compiler", "mcuhome.model")
 
 
 def package_modules() -> list[Path]:
@@ -59,11 +73,11 @@ def package_modules() -> list[Path]:
     because none of them has a module a caller could name:
 
     * ``mcuhome`` is still a namespace package. An ``__init__.py`` there
-      would have to belong to one of three distributions that all deliver
+      would have to belong to one of the distributions that all deliver
       into that directory, and PEP 420 forbids it for exactly that reason.
     * No module sits directly under the namespace directory. Such a file
-      is in no distribution, ships with none of the three, and is
-      invisible to every search below.
+      is in no distribution, ships with none of them, and is invisible to
+      every search below.
     * :data:`PACKAGES` lists every subpackage there is, and each one is
       imported *from this checkout*. The second half matters as much as
       the first: against a non-editable install the searches would read
@@ -73,7 +87,7 @@ def package_modules() -> list[Path]:
     assert spec is not None, f"{NAMESPACE} is not importable"
     assert spec.origin is None, (
         f"{NAMESPACE} has become a regular package (origin={spec.origin}). "
-        "PEP 420 forbids an __init__.py there — three distributions deliver "
+        "PEP 420 forbids an __init__.py there — several distributions deliver "
         "into that directory and only one of them could own the file."
     )
 
@@ -155,107 +169,115 @@ def _no_docker(monkeypatch):
     monkeypatch.setattr(container, "_run_quiet", refuse)
 
 
-# --- workbench-side fixtures (leave in the tools repo at the split) ---
+# --- the example model, without the workbench -------------------------
 #
-# Everything below this line resolves a configuration, and resolving is
-# stages 1-3, which is `mcuhome.workbench`. ADR 0024 leaves the workbench
-# where it is and moves model+compiler out, so the cut is exactly here:
-# the half above travels, this half stays, and the two imports that make
-# the difference are the first thing in the block rather than mixed into
-# the header (E402 is the price of saying so in one place).
-#
-# `ConfigError`, `ConfigErrorGroup` and `DeviceModel` are imported at the
-# top because they are `mcuhome.model`, which both repositories depend
-# on; after the cut they are used only here, so the departing half drops
-# them.
+# Resolving a configuration is stages 1-3, which is mcuhome.workbench —
+# and since ADR 0024 the workbench lives in the tools repository. This
+# repository reads the same model from the pregenerated wire document
+# instead (the device-model.json golden, exactly what `mcuhome build
+# --model` consumes): the tools repo's test_model_golden pins that
+# golden against the real resolver, so both repositories test the same
+# model without sharing code.
 
-from mcuhome.workbench.api import load_model  # noqa: E402
-from mcuhome.workbench.tree import ConfigTree, find_config_root  # noqa: E402
-
+#: The fixture configuration tree. Nothing here resolves it — that is
+#: the workbench's — but its ``secrets.yaml`` is where the one device
+#: with commissioning credentials of its own states them, and
+#: ``test_pairing`` builds that device's model from those values.
 FIXTURE_TREE = DATA_DIR / "tree"
-
-#: A configuration that passes every check, used as the baseline the
-#: gate tests break one thing at a time.
-VALID_CONFIG = """\
-device:
-  name: bench-node
-  board: nrf7002dk/nrf5340/cpuapp
-
-network:
-  thread:
-    device_role: ftd
-  matter:
-    enabled: true
-    use_test_pairing: true
-
-hardware:
-  buses:
-    i2c0:
-      controller: arduino_i2c
-  peripherals:
-    baro:
-      driver: bosch,bmp180
-      bus: i2c0
-
-node:
-  endpoints:
-    - id: 1
-      device_type: temperature_sensor
-      clusters:
-        temperature_measurement:
-          source: baro.temperature
-          sampling: 10s
-"""
-
-
-def line_of(text: str, needle: str) -> int:
-    """1-based line number of the first line containing *needle*."""
-    for number, line in enumerate(text.splitlines(), start=1):
-        if needle in line:
-            return number
-    raise AssertionError(f"{needle!r} is not in the configuration")
-
-
-@pytest.fixture
-def write_config(tmp_path: Path):
-    """Write a configuration into a throwaway tree and return its path."""
-
-    def write(text: str, *, name: str = "main.yaml", secrets: str | None = None) -> Path:
-        path = tmp_path / name
-        path.write_text(text, encoding="utf-8")
-        if secrets is not None:
-            (tmp_path / "secrets.yaml").write_text(secrets, encoding="utf-8")
-        return path
-
-    return write
 
 
 def resolve_file(path: Path) -> DeviceModel:
-    """Run stages 1-3 on a configuration file, tree discovery included."""
-    root = find_config_root(path.parent)
-    tree = ConfigTree(root=root or path.parent, discovered=root is not None)
-    return load_model(path, tree=tree)
+    """The example at *path*, resolved — from its golden wire document."""
+    golden = GOLDEN_DIR / f"{path.stem}.device-model.json"
+    return DeviceModel.from_dict(json.loads(golden.read_text(encoding="utf-8")))
 
 
-def errors_of(exc: ConfigError | ConfigErrorGroup) -> list[ConfigError]:
-    """Flatten a single error or an error group into a list."""
-    if isinstance(exc, ConfigErrorGroup):
-        return exc.errors
-    return [exc]
+# --- workbench-free context writer ------------------------------------
+#
+# The tests' own third implementation of the §3.3 rule, like the build
+# server's. Creating a context directory is workbench machinery and since
+# ADR 0024 that machinery is in the tools repository; the context
+# *format* is vocabulary and lives in `mcuhome.model.context`, where
+# `mcuhome.compiler.contextread` — the code under test — reads it from.
+# So the tests write one the way every other party computes one: hash the
+# content files, state them in a ContextManifest, and take the ID from
+# `context_id` rather than restating the rule. A test that carried its
+# own ID arithmetic would be the first place the two sides of the
+# contract could agree with each other by accident.
 
 
-def expect_failure(path: Path) -> list[ConfigError]:
-    """Resolve *path*, expecting it to be rejected, and return the errors."""
-    with pytest.raises((ConfigError, ConfigErrorGroup)) as caught:
-        resolve_file(path)
-    return errors_of(caught.value)
+def context_files(root: Path) -> tuple[ContextFile, ...]:
+    """Every regular file under *root* that is context content, hashed.
+
+    Neither context document — ``manifest.yaml`` (the list itself) nor
+    ``context.yaml`` (the request, whose never-hashed fields would leak
+    into the identity through the back door) — is content, and neither is
+    the backend-written ``.mcuhome/`` runtime directory
+    (build-container-contract.md §3.2).
+    """
+    entries = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative in (MANIFEST_FILE, CONTEXT_FILE) or relative.split("/", 1)[0] == BACKEND_DIR:
+            continue
+        entries.append(ContextFile(path=relative, sha256=sha256_file(path)))
+    entries.sort(key=lambda entry: entry.path)
+    return tuple(entries)
 
 
-def find_error(errors: list[ConfigError], fragment: str) -> ConfigError:
-    """The one error whose message contains *fragment*."""
-    matches = [error for error in errors if fragment in error.message]
-    assert matches, f"no error mentioning {fragment!r}; got: " + "; ".join(
-        error.message for error in errors
+def _dump_document(document: dict, path: Path) -> Path:
+    """*document* as the YAML a context carries, at *path*.
+
+    Line wrapping off, as on the writing side under test: a ``sha256:``
+    digest is 71 characters and ruamel's default width folds it onto a
+    second line, which §3.3.1 has a stricter reader refuse rather than
+    reassemble.
+    """
+    yaml = YAML()
+    yaml.default_flow_style = False
+    yaml.width = 4096
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.dump(document, handle)
+    return path
+
+
+def write_context_request(request: ContextRequest, *, out_dir: Path) -> Path:
+    """Write ``context.yaml`` into *out_dir* and return its path."""
+    return _dump_document(request.to_dict(), out_dir / CONTEXT_FILE)
+
+
+def write_context_manifest(manifest: ContextManifest, *, out_dir: Path) -> Path:
+    """Write ``manifest.yaml`` into *out_dir* and return its path."""
+    return _dump_document(manifest.to_dict(), out_dir / MANIFEST_FILE)
+
+
+def lock_context(
+    out_dir: Path, *, request: ContextRequest, container: ContainerResolution
+) -> ContextManifest:
+    """Freeze a created context: hash its files and write ``manifest.yaml``.
+
+    *request* is passed rather than read back out of ``context.yaml``,
+    which is the one place this helper is shorter than the workbench's
+    ``lock_context``: the caller wrote the request a line earlier and a
+    reader of the request is not what these tests are proving. Everything
+    that reaches the manifest is the same — the request's pins restated,
+    the backend's *container* answer to the request's Zephyr requirement
+    (E61, outside the ID), and the ID over the files actually present.
+    """
+    files = context_files(out_dir)
+    manifest = ContextManifest(
+        sdk=request.sdk,
+        zephyr=request.zephyr,
+        container=container,
+        board=request.board,
+        files=files,
+        id=context_id(
+            sdk_sha256=request.sdk.sha256,
+            board=request.board,
+            files=files,
+        ),
     )
-    assert len(matches) == 1, f"{fragment!r} matched {len(matches)} errors"
-    return matches[0]
+    write_context_manifest(manifest, out_dir=out_dir)
+    return manifest

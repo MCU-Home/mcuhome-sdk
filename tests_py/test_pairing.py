@@ -22,12 +22,15 @@ that was commissioned into a production Home Assistant on 2026-08-04.
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, package_modules, resolve_file
+from ruamel.yaml import YAML
 
 from mcuhome.compiler.generate import APP_DIR, generate
 from mcuhome.model import pairing
+from mcuhome.model.model import DeviceModel, PairingModel
 
 # --------------------------------------------------------------------------
 # SPAKE2+ verifier
@@ -274,6 +277,35 @@ def test_the_verifier_is_derived_and_never_carried_in_the_model() -> None:
 # --------------------------------------------------------------------------
 
 
+def bench_node_model() -> DeviceModel:
+    """The fixture tree's device as a resolved model, credentials and all.
+
+    Assembled rather than resolved: turning ``data/tree`` into a model is
+    stages 1-3 and lives in the tools repository since ADR 0024. What
+    makes that device worth testing here is the one thing this file can
+    still hold — commissioning credentials of its own instead of the
+    published test tuple — so the reference model is taken as the base
+    and its pairing block replaced with the fixture's own values, read
+    out of the very ``secrets.yaml`` the resolver over there reads. Two
+    repositories, one set of numbers, no golden to keep in step.
+    """
+    secrets = YAML(typ="safe").load((FIXTURE_TREE / "secrets.yaml").read_text(encoding="utf-8"))
+    model = resolve_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
+    return replace(
+        model,
+        network=replace(
+            model.network,
+            pairing=PairingModel(
+                discriminator=secrets["bench_node_discriminator"],
+                passcode=secrets["bench_node_passcode"],
+                salt=secrets["bench_node_salt"],
+                iterations=pairing.DEFAULT_ITERATIONS,
+                test_credentials=False,
+            ),
+        ),
+    )
+
+
 def test_generation_is_deterministic_for_a_configuration_with_credentials() -> None:
     """Random credentials, deterministic build: the point of the design.
 
@@ -282,9 +314,9 @@ def test_generation_is_deterministic_for_a_configuration_with_credentials() -> N
     verifier, which costs a PBKDF2 — has to come out identical every time,
     or the builder's byte-for-byte reproducibility is gone.
     """
-    entry = FIXTURE_TREE / "devices" / "bench-node" / "main.yaml"
-    first = generate(resolve_file(entry), config_name="main.yaml")
-    second = generate(resolve_file(entry), config_name="main.yaml")
+    model = bench_node_model()
+    first = generate(model, config_name="main.yaml")
+    second = generate(model, config_name="main.yaml")
     assert first == second
     fragment = first[f"{APP_DIR}/prj.conf"]
     assert "CONFIG_CHIP_DEVICE_SPAKE2_PASSCODE=84920174" in fragment

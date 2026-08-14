@@ -177,15 +177,17 @@ def _process_reads(source: str) -> list[str]:
 def test_no_module_reads_process_state() -> None:
     """One process, several sessions, one environment each (ADR 0020).
 
-    ``signing.py`` and ``container.py`` are asserted to be among the
-    modules examined because both used to hold exactly this read — a
-    search that stopped reaching them would pass while checking less than
-    it did yesterday.
+    ``container.py`` is asserted to be among the modules examined because
+    it used to hold exactly this read — a search that stopped reaching it
+    would pass while checking less than it did yesterday. The other
+    module that held one, ``signing.py``, is the workbench's, so it is
+    the second test's canary rather than this one's (see the module
+    docstring).
     """
     modules = package_modules()
     names = {path.name for path in modules}
-    assert {"signing.py", "container.py"} <= names, (
-        "the search no longer reaches the modules that used to read the "
+    assert "container.py" in names, (
+        "the search no longer reaches the module that used to read the "
         "process — extend conftest.PACKAGES"
     )
     for module in modules:

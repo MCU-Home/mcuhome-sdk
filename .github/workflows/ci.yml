@@ -85,14 +85,11 @@ jobs:
   # golden generator output and every refusal message, none of them
   # gated by anything but a developer remembering to run pytest.
   #
-  # The `remote` extra is installed with the workbench, so the session
-  # protocol client's optional dependencies are resolved here too. Its
-  # test file needs one more thing this runner cannot have: a checkout of
-  # the private sibling repository mcu-home/build-server, which those
-  # tests drive the client against as a real peer. There is no deploy key
-  # for it (CLI_DEPLOY_KEY, used by the `matter` job, covers mcu-home/cli
-  # only), so that file skips itself with one loud reason — `-rs` below is
-  # what puts that reason in the log rather than in a dot.
+  # Since the ADR 0024 split this repository carries the SDK half of
+  # the suite: model, compiler, the golden generator output, the
+  # container conformance tests. The workbench half runs in
+  # mcu-home/mcuhome. `-rs` keeps any skip loud in the log rather than
+  # a dot.
   pytest:
     name: pytest (tests_py)
     runs-on: ubuntu-latest
@@ -105,14 +102,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      # The three editable installs AGENTS.md prescribes, and no
+      # The two editable installs this repository publishes since the
+      # ADR 0024 split (the workbench lives in mcu-home/mcuhome), and no
       # aggregate distribution over them (ADR 0020 decision 2 and the
       # head comment of the root pyproject.toml).
-      - name: Install the three distributions
+      - name: Install the two distributions
         run: |
           python -m pip install --disable-pip-version-check \
             -e ./packaging/model \
-            -e './packaging/workbench[remote]' \
             -e ./packaging/compiler \
             'pytest>=8.0'
 
@@ -134,7 +131,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: mcuhome
+          path: mcuhome-sdk
 
       # One source of truth for the image name, and it is the builder's:
       # mcuhome/compiler/container.py carries the Zephyr release and the
@@ -165,7 +162,7 @@ jobs:
       # an image input changed and its revision was bumped — and a bump
       # that somebody forgot fails loudly here instead of quietly testing
       # against a stale environment. Since r3 the image inputs are
-      # containers/builder/ AND west.yml AND patches/, because the image
+      # containers/build-container/ AND west.yml AND patches/, because the image
       # bakes a west workspace with the patch set applied.
       - name: Pull the builder image, or build it
         id: builder
@@ -175,11 +172,11 @@ jobs:
             echo "Using the published image."
           else
             echo "::notice::$reference is not published yet — building it."
-            # The context is the repository, not containers/builder/:
+            # The context is the repository, not containers/build-container/:
             # since r3 the image bakes a west workspace, so west.yml
             # and patches/ are image inputs too.
             docker build --tag "$reference" \
-              --file mcuhome/containers/builder/Dockerfile mcuhome
+              --file mcuhome-sdk/containers/build-container/Dockerfile mcuhome-sdk
             echo "built=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -218,7 +215,7 @@ jobs:
             zephyr
             modules
             bootloader
-          key: west-2-${{ runner.os }}-${{ hashFiles('mcuhome/west.yml') }}
+          key: west-2-${{ runner.os }}-${{ hashFiles('mcuhome-sdk/west.yml') }}
 
       # Without the Matter SDK: every suite in tests/ is CHIP-free by
       # design (ADR 0014, and the reason tests/matter_tables/ tests the
@@ -231,7 +228,7 @@ jobs:
             --volume "$PWD:$PWD" --workdir "$PWD" \
             '${{ steps.image.outputs.reference }}' \
             sh -euc '
-              west init -l mcuhome
+              west init -l mcuhome-sdk
               west config manifest.group-filter -- -matter
               west update --narrow -o=--depth=1
             '
@@ -241,7 +238,7 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)" \
             --volume "$PWD:$PWD" --workdir "$PWD" \
             '${{ steps.image.outputs.reference }}' \
-            west twister -T mcuhome/tests --integration --inline-logs -v -j 2
+            west twister -T mcuhome-sdk/tests --integration --inline-logs -v -j 2
 
   # ------------------------------------------------------------------
   # The trigger for the `matter` job below.
@@ -261,7 +258,7 @@ jobs:
   #   patches/                  the patch set itself
   #   compat/                   headers on CHIP's include path that are
   #                             not in any patch (compat/README.md)
-  #   containers/builder/       the build environment, contents included
+  #   containers/build-container/       the build environment, contents included
   #   components/, app/, lib/, include/, drivers/, dts/, boards/,
   #   snippets/, CMakeLists.txt, Kconfig, zephyr/
   #                             everything that gets compiled into the
@@ -308,7 +305,7 @@ jobs:
             boards
             compat
             components
-            containers/builder
+            containers/build-container
             docs/design/examples/00-bmp180-two-endpoints.yaml
             drivers
             dts
@@ -385,30 +382,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: mcuhome
+          path: mcuhome-sdk
 
       # The `mcuhome` command is a thin shell in its own repository
       # (ADR 0017) and this job needs the command, not just the library.
       # While both repositories are private that means a read-only deploy
       # key, mirroring what mcu-home/cli already does in the other
       # direction. To rotate it (repository settings, no tooling):
-      #
-      #   1. ssh-keygen -t ed25519 -N '' -C ci-mcuhome-read -f cli-deploy-key
-      #   2. mcu-home/cli → Settings → Deploy keys → add
-      #      cli-deploy-key.pub, read-only
-      #   3. mcu-home/mcuhome → Settings → Secrets and variables →
-      #      Actions → secret CLI_DEPLOY_KEY with the private key's content
-      #   4. delete both local key files
-      #
-      # If the secret is missing this step fails, which is correct: a
-      # gate that cannot run is not a gate that passes. Once the packages
-      # are published this becomes a plain pip install and the key goes.
+      # Public sibling — plain checkout, no deploy key (the key retired
+      # with the going-public flip). Once the packages are published this
+      # becomes a plain pip install.
       - name: Checkout the mcuhome command line
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mcu-home/cli
-          ssh-key: ${{ secrets.CLI_DEPLOY_KEY }}
           path: .deps/cli
+
+      # The workbench's home since the ADR 0024 split — this job drives
+      # `mcuhome build` end to end, and stages 1-3 live there.
+      - name: Checkout the workbench
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome
+          path: .deps/mcuhome
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -422,19 +418,16 @@ jobs:
       # build and leave the Zephyr module
       # — components/, compat/, scripts/pyshim/ — behind.
       #
-      # Three project directories since ADR 0020: this repository
-      # publishes mcuhome-model, mcuhome-workbench and mcuhome-compiler
-      # out of one source tree (packaging/), and there is deliberately no
-      # aggregate to install instead — see the head comment of the root
-      # pyproject.toml. One pip invocation installs all three; the order
-      # is the dependency order, which pip does not need but a reader
-      # does. This job builds firmware, so it needs the compiler too.
+      # Since the ADR 0024 split the model and the compiler come from
+      # this repository, the workbench from its own (checked out above).
+      # The order is the dependency order, which pip does not need but a
+      # reader does. This job builds firmware, so it needs the compiler.
       - name: Install the builder and its command line
         run: |
           python -m pip install --disable-pip-version-check \
-            -e ./mcuhome/packaging/model \
-            -e ./mcuhome/packaging/workbench \
-            -e ./mcuhome/packaging/compiler
+            -e ./mcuhome-sdk/packaging/model \
+            -e ./.deps/mcuhome \
+            -e ./mcuhome-sdk/packaging/compiler
           python -m pip install --disable-pip-version-check -e ./.deps/cli
           # The build container delivers an UNSIGNED image and the host
           # signs it afterwards (ADR 0015 decision 8) — so signing is a
@@ -493,11 +486,11 @@ jobs:
             echo "Using the published image."
           else
             echo "::notice::$reference is not published yet — building it."
-            # The context is the repository, not containers/builder/:
+            # The context is the repository, not containers/build-container/:
             # since r3 the image bakes a west workspace, so west.yml
             # and patches/ are image inputs too.
             docker build --tag "$reference" \
-              --file mcuhome/containers/builder/Dockerfile mcuhome
+              --file mcuhome-sdk/containers/build-container/Dockerfile mcuhome-sdk
           fi
 
       # No west workspace is initialised and no patch is applied on the
@@ -524,7 +517,7 @@ jobs:
       # REMOTE-BUILD.md). It works across runners only because the image
       # is configured for it: compiler_check = content survives a docker
       # pull where the default mtime check does not, and CCACHE_BASEDIR
-      # normalizes the workspace path (containers/builder/Dockerfile,
+      # normalizes the workspace path (containers/build-container/Dockerfile,
       # mcuhome/compiler/container.py). Nothing had to be invented here.
       #
       # Restore always, save only from main: an entry may approach the
