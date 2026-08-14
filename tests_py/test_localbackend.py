@@ -26,16 +26,13 @@ from typing import Any
 
 import pytest
 import zstandard
+from conftest import lock_context, write_context_request
 
 from mcuhome.compiler import localbackend as lb
+from mcuhome.compiler.contextread import read_context_manifest
 from mcuhome.model.context import ContainerResolution, ContextRequest, SdkPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
-from mcuhome.workbench.contextdir import (
-    lock_context,
-    read_context_manifest,
-    write_context_request,
-)
 
 DIGEST = "sha256:" + "1" * 64
 SDK_VERSION = "0.1.0"
@@ -106,8 +103,14 @@ def make_sdk_source(directory: Path, *, index_sha: str | None = None) -> str:
 
 
 # --------------------------------------------------------------------------
-# A locked context, via the real slice-1 code path
+# A locked context, written the way §3.2 says one is written
 # --------------------------------------------------------------------------
+#
+# Through ``conftest``'s workbench-free writer since ADR 0024: the party
+# that creates a context is the workbench, which is not installed next to
+# these tests, and what the backend under test needs is the *document*.
+# The ID still comes from ``mcuhome.model.context``, so what is compared
+# below is the value the contract fixes rather than one this file made up.
 
 
 def make_context(
@@ -137,7 +140,11 @@ def make_context(
     # The backend half's own answer, as the local build method supplies
     # it: a context states a line and the party that locks records what
     # it resolved that to (E61).
-    lock_context(root, container=ContainerResolution(image=IMAGE, tag=TAG, digest=digest))
+    lock_context(
+        root,
+        request=request,
+        container=ContainerResolution(image=IMAGE, tag=TAG, digest=digest),
+    )
     return root
 
 

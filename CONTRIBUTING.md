@@ -12,20 +12,22 @@ top directory must **not** be a git repository:
 
 ```sh
 mkdir mcuhome-workspace && cd mcuhome-workspace
-git clone https://github.com/mcu-home/mcuhome
-west init -l mcuhome
+git clone https://github.com/mcu-home/mcuhome-sdk
+west init -l mcuhome-sdk
 west update
 ```
 
 Install the [Zephyr SDK](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)
 matching the Zephyr release pinned in [west.yml](west.yml).
 
-For the Python builder package:
+For the Python builder package — this repo's two SDK-side packages; the
+workbench (build methods, signing) is developed in its own repository,
+[mcu-home/mcuhome](https://github.com/mcu-home/mcuhome):
 
 ```sh
-cd mcuhome
+cd mcuhome-sdk
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e .
+pip install -e ./packaging/model -e ./packaging/compiler
 pre-commit install --install-hooks
 pre-commit install --hook-type commit-msg
 ```
@@ -33,7 +35,7 @@ pre-commit install --hook-type commit-msg
 ## Building and testing
 
 ```sh
-west twister -T mcuhome/tests --integration      # C test suites (native_sim)
+west twister -T mcuhome-sdk/tests --integration  # C test suites (native_sim)
 pytest                                           # builder test suite (tests_py/)
 ```
 
@@ -41,13 +43,13 @@ For a full firmware build, build a device from its YAML description — or
 a sample, if you want the framework without the builder in the picture:
 
 ```sh
-mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
+mcuhome build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node
 west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt \
-  mcuhome/samples/matter-node
+  mcuhome-sdk/samples/matter-node
 ```
 
-`mcuhome/app` is not a buildable application: it holds the generic
+`mcuhome-sdk/app` is not a buildable application: it holds the generic
 application main the builder compiles into every generated device, and
 building it directly is refused with a message saying so.
 
@@ -72,10 +74,12 @@ building it directly is refused with a message saying so.
   certifying the [Developer Certificate of Origin](https://developercertificate.org/).
   We use DCO instead of a CLA.
 - Keep PRs focused; one logical change per PR.
-- Non-trivial design decisions need an ADR draft in
+- Non-trivial design decisions about this repo need an ADR draft in
   [docs/adr/draft/](docs/adr/draft/) — propose it in the PR. Drafts are
   living documents; the final ADR is written from the real result once
   the component is done ([docs/adr/README.md](docs/adr/README.md)).
+  Project-wide decisions (spanning this repo and the tools repo) live in
+  [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome) instead.
 
 ## Reporting issues
 

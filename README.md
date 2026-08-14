@@ -48,15 +48,15 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 |---|---|
 | `west.yml` | West manifest pinning Zephyr and modules |
 | `zephyr/module.yml` | Zephyr module definition (boards, DTS, snippets roots) |
-| `mcuhome/` | Python source tree: a PEP 420 namespace with one subpackage per published distribution (ADR 0020) — `model/` (shared vocabulary), `workbench/` (config pipeline, build methods, signing), `compiler/` (codegen, west orchestration). `mcuhome.workbench.api` is the supported surface (the `mcuhome` command is its own repo, [mcu-home/cli](https://github.com/mcu-home/cli)) |
-| `packaging/` | The project file of each distribution: `mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler` — one version, one tag, one release |
+| `mcuhome/` | Python source tree: a PEP 420 namespace with one subpackage per distribution published from this repo (ADR 0020) — `model/` (shared vocabulary), `compiler/` (codegen, west orchestration). The namespace's third subpackage, `workbench/` (config pipeline, build methods, signing — `mcuhome.workbench.api` is its supported surface), lives in its own repository, [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome) (the `mcuhome` command itself is [mcu-home/cli](https://github.com/mcu-home/cli)) |
+| `packaging/` | The project file of each distribution built from this repo: `mcuhome-model`, `mcuhome-compiler` — one version, one tag, one release (`mcuhome-workbench` is published from [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome)) |
 | `components/` | MCUHome components (Python schema + C sources side by side) |
 | `app/` | The generic application main every generated device shares |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree Zephyr hardware support |
 | `snippets/` | Connectivity/device-class variants (wifi, thread-sed, …) |
 | `include/mcuhome/`, `lib/` | Public runtime API and portable libraries |
 | `samples/`, `tests/` | Twister-driven samples and test suites |
-| `tests_py/` | pytest suite of the three Python packages |
+| `tests_py/` | pytest suite of this repo's two Python packages |
 | `containers/build-container/` | The build-container image — the contract's reference implementation (ADR 0007) |
 | `scripts/` | Development tooling and future custom west extension commands |
 | `docs/adr/` | Architecture decision records |
@@ -68,8 +68,8 @@ The workspace top directory must **not** be a git repository:
 
 ```sh
 mkdir mcuhome-workspace && cd mcuhome-workspace
-git clone https://github.com/mcu-home/mcuhome
-west init -l mcuhome
+git clone https://github.com/mcu-home/mcuhome-sdk
+west init -l mcuhome-sdk
 west update
 ```
 
@@ -85,16 +85,20 @@ docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8
 
 Then build a device from its YAML description. The `mcuhome` command is
 a thin shell in its own repository
-([mcu-home/cli](https://github.com/mcu-home/cli)); until the packages
-are published it is installed from a checkout next to this one:
+([mcu-home/cli](https://github.com/mcu-home/cli)), and the build methods
+and signing live in the workbench, in its own repository too
+([mcu-home/mcuhome](https://github.com/mcu-home/mcuhome)); until the
+packages are published they are installed from checkouts next to this
+one:
 
 ```sh
-pip install -e mcuhome/packaging/model \
-            -e mcuhome/packaging/workbench \
-            -e mcuhome/packaging/compiler   # the three Python packages
+pip install -e mcuhome-sdk/packaging/model \
+            -e mcuhome-sdk/packaging/compiler   # the two SDK-side Python packages
+git clone https://github.com/mcu-home/mcuhome
+pip install -e mcuhome                    # the workbench (build methods, signing)
 git clone https://github.com/mcu-home/cli
 pip install -e cli                # the `mcuhome` command
-mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
+mcuhome build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node
 ```
 
@@ -168,40 +172,24 @@ mcuhome schema registry             # boards, drivers, clusters, device types
 
 ### Using the builder from Python
 
-`mcuhome.workbench.api` is the supported programmatic surface, and the
-only part of these packages covered by the SemVer promise of
-[ADR 0005](docs/adr/draft/0005-semver-and-conventional-commits.md):
-
-```python
-from mcuhome.workbench import api
-
-tree, entry = api.find_device("bedroom-climate", config_root=root)
-result = api.validate_device(entry, tree=tree)
-if result.ok:
-    model = result.model  # the canonical device model
-else:
-    # message, file, line, column, key, hint, kind
-    for problem in result.error_dicts():
-        print(problem["message"])
-```
-
-`validate_device` reports **every** problem rather than raising on the
-first, which is what lets an editor show a whole configuration's markers
-in one pass. `api.registry_data()` and `api.config_json_schema()` are the
-same documents `mcuhome schema` prints; `api.read_manifest()` loads a
-build manifest. Everything else in the three packages is an
+`mcuhome.workbench.api` is the supported programmatic surface for
+driving a build from Python — it lives in the workbench, which is
+published from its own repository: see
+[mcu-home/mcuhome](https://github.com/mcu-home/mcuhome). The two
+packages this repo publishes, `mcuhome.model` and `mcuhome.compiler`,
+are building blocks the workbench consumes; using them directly is an
 implementation detail and may change between releases.
 
 To see the framework run without the builder in the picture, build the
 reference sample by hand:
 
 ```sh
-west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt mcuhome/samples/matter-node
+west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt mcuhome-sdk/samples/matter-node
 ```
 
 The `matter` and `debug-rtt` snippets are mandatory, not optional. See
 [samples/matter-node/README.md](samples/matter-node/README.md) for
-hardware prerequisites and wiring. Note that `mcuhome/app` is *not* a
+hardware prerequisites and wiring. Note that `mcuhome-sdk/app` is *not* a
 buildable application — it holds the generic main the builder compiles
 into every generated device ([app/README.md](app/README.md)).
 

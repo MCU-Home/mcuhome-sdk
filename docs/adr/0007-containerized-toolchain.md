@@ -15,7 +15,7 @@ official CI/build container images (`ghcr.io/zephyrproject-rtos/ci`) that
 bundle the SDK — proof that the toolchain containerizes cleanly. MCUHome's
 own image is nevertheless built from a plain Debian base with exactly the
 tools a build needs and nothing else;
-[`containers/builder/README.md`](../../containers/builder/README.md)
+[`containers/build-container/README.md`](../../containers/build-container/README.md)
 lists what is in it and, deliberately, what is not.
 
 ## Decision
@@ -49,7 +49,8 @@ part.** Any container satisfying the published contract
 is a usable build container, third-party ones with their own toolchains
 included, and it is driven through a frozen invocation ABI rather than
 by knowing what is inside it (ADR 0019 decision 4). MCUHome's own image
-(`containers/builder/`, published as `ghcr.io/mcu-home/builder`) is the
+(`containers/build-container/`, published as
+`ghcr.io/mcu-home/build-container`) is the
 reference implementation of that contract and one conforming build
 environment among possibly several. The contract also bounds what "your
 own" may mean: a conforming build container must execute MCUHome's code
@@ -127,5 +128,5 @@ the line match of E61 is that same mechanism, applied by the backend.
   ([draft ADR 0016](draft/0016-device-onboarding-and-flash-transport.md)).
 - The exact image layout (base image, layering, registry) is an
   implementation matter documented where the image is built
-  (`containers/builder/`); this ADR fixes the principle, and the
+  (`containers/build-container/`); this ADR fixes the principle, and the
   build-container contract fixes the interface any image must satisfy.

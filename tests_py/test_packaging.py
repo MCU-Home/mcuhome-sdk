@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Three distributions out of one source tree (ADR 0020 decisions 1, 8).
+"""One distribution per subpackage, out of one source tree (ADR 0020 decisions 1, 8).
 
 The tree under ``mcuhome/`` is a PEP 420 namespace with one subpackage
 per distribution, and the project files that ship them live under
 ``packaging/``. Two properties hold that arrangement together, and
 neither is visible from the code:
 
-* **every subpackage is shipped by exactly one distribution.** Three
-  project files claiming file subsets of one directory is a relationship
+* **every subpackage is shipped by exactly one distribution.** Project
+  files claiming file subsets of one directory is a relationship
   pip cannot express (ADR 0020's consequence on the migration), so the
-  claims have to partition — and a fourth subpackage that no project file
+  claims have to partition — and a subpackage that no project file
   names would simply never be installed by anyone.
-* **all three carry the same version, from the same place.** ADR 0017 §3
+* **they carry the same version, from the same place.** ADR 0017 §3
   and ADR 0020 decision 8: one version, one tag, one release, and
   therefore no "which package works with which SDK" to answer. A second
   literal of the version number anywhere is the beginning of that
@@ -43,10 +43,12 @@ PACKAGING_DIR = REPO_ROOT / "packaging"
 
 #: ``<import package> -> <distribution>``. Both halves are asserted
 #: against reality below; the mapping itself is what a reader needs.
+#: ``mcuhome-workbench`` is the third of ADR 0020's distributions and is
+#: not here — ADR 0024 ships it out of the tools repository, whose own
+#: ``test_packaging`` makes the claims about it.
 DISTRIBUTIONS = {
     "mcuhome.compiler": "mcuhome-compiler",
     "mcuhome.model": "mcuhome-model",
-    "mcuhome.workbench": "mcuhome-workbench",
 }
 
 #: Where the one version lives (``mcuhome/model/__init__.py``), spelled
@@ -197,28 +199,38 @@ def test_only_the_model_distribution_is_dependency_free() -> None:
         name: metadata.requires(distribution) or [] for name, distribution in DISTRIBUTIONS.items()
     }
     assert requires["mcuhome.model"] == []
-    assert f"mcuhome-model=={mcuhome.model.__version__}" in requires["mcuhome.workbench"]
-    assert f"mcuhome-workbench=={mcuhome.model.__version__}" in requires["mcuhome.compiler"]
+    assert f"mcuhome-model=={mcuhome.model.__version__}" in requires["mcuhome.compiler"]
+    # And nothing here depends on the workbench, which is the packaging
+    # half of ADR 0024: the compiler ships inside the SDK package and
+    # runs in a build container the workbench never enters.
+    assert not [
+        requirement
+        for requirements in requires.values()
+        for requirement in requirements
+        if "mcuhome-workbench" in requirement
+    ]
 
 
 def test_the_import_edges_follow_the_dependency_arrows() -> None:
-    """model imports model; workbench never imports compiler. As syntax.
+    """model imports model; the compiler never imports the workbench. As syntax.
 
-    The fresh-venv proof of the migration demonstrated both once, at
+    The fresh-venv proof of the migration demonstrated this once, at
     install level; this is the same fact as a permanent invariant, read
     from the syntax tree so it holds on every run rather than on the day
     somebody installs a distribution alone. The dependency arrows are
-    ADR 0020's: model depends on nothing, workbench on model, compiler
-    on both — and an import against the arrow is a wheel that breaks
-    only in the environment of whoever installed the smaller set, which
-    is the quietest possible way to break.
+    ADR 0020's, as ADR 0024 leaves them for this repository: model
+    depends on nothing, the compiler on the model — and an import
+    against the arrow is a wheel that breaks only in the environment of
+    whoever installed the smaller set, which is the quietest possible
+    way to break. Here it is smaller than an environment: an import of
+    the workbench is a build container that cannot start, because the
+    workbench is not in the image at all.
     """
     import ast
 
     allowed = {
         "model": {"model"},
-        "workbench": {"model", "workbench"},
-        "compiler": {"model", "workbench", "compiler"},
+        "compiler": {"model", "compiler"},
     }
     for package, may_use in allowed.items():
         for module in (NAMESPACE_DIR / package).glob("*.py"):

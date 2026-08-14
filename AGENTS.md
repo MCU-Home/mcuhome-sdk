@@ -36,8 +36,8 @@ decision.
 | `mcuhome-sdk.json`, `bin/generate` | The SDK package's §6.1 interface: the metadata file names `bin/generate` as the code-generation entry point a build container invokes as a child process (body: `mcuhome/compiler/sdkentry.py`) |
 | `zephyr/module.yml` | Makes this repo consumable as a Zephyr module |
 | `CMakeLists.txt`, `Kconfig` | Zephyr module build entry points |
-| `mcuhome/` | Python source tree — a PEP 420 **namespace** with one subpackage per distribution (ADR 0020): `model/` the shared vocabulary, `workbench/` stages 1-3 plus the build methods and signing, `compiler/` stages 4-5 plus the invocation-ABI adapter. No `__init__.py` at this level and no module directly under it. `mcuhome.workbench.api` is the supported surface. The `mcuhome` command line is a thin shell in its own repo ([mcu-home/cli](https://github.com/mcu-home/cli)) |
-| `packaging/` | One project file per published distribution — `mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler` — each shipping exactly its subpackage out of the shared tree above. The version is read from `mcuhome/model/__init__.py`, so all three carry one number (ADR 0020 decision 8) |
+| `mcuhome/` | Python source tree — a PEP 420 **namespace** with one subpackage per distribution built from this repo (ADR 0020): `model/` the shared vocabulary, `compiler/` stages 4-5 plus the invocation-ABI adapter. No `__init__.py` at this level and no module directly under it. The namespace's third subpackage, `workbench/` (stages 1-3 plus the build methods and signing — `mcuhome.workbench.api` is its supported surface), lives in its own repo, [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome). The `mcuhome` command line is a thin shell in its own repo too ([mcu-home/cli](https://github.com/mcu-home/cli)) |
+| `packaging/` | One project file per distribution built from this repo — `mcuhome-model`, `mcuhome-compiler` — each shipping exactly its subpackage out of the shared tree above. The version is read from `mcuhome/model/__init__.py`, so both carry one number (ADR 0020 decision 8); `mcuhome-workbench` is a third distribution of the same namespace, published from [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome) |
 | `components/` | Components: Python schema + C sources side by side |
 | `app/` | The generic application main every generated device shares — **not** a buildable app |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree hardware support |
@@ -46,7 +46,7 @@ decision.
 | `lib/` | Portable, `native_sim`-testable libraries |
 | `compat/` | Headers that bridge a version mismatch between two pinned upstreams (today: mbedTLS 4's moved legacy headers, for connectedhomeip). Each entry names its own deletion condition — see `compat/README.md` |
 | `tests/`, `samples/` | Twister suites and samples |
-| `tests_py/` | pytest suite of the three Python packages (kept apart from twister's `tests/`) |
+| `tests_py/` | pytest suite of this repo's two Python packages — the SDK half; the workbench's tests live with it in [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome) (kept apart from twister's `tests/`) |
 | `containers/build-container/` | The build-container image (ADR 0007) — the contract's reference implementation |
 | `scripts/` | Dev tooling, future custom west extension commands |
 | `docs/adr/` | Architecture decision records (MADR-style) — immutable finals at the top level, living drafts in `draft/`; lifecycle in `docs/adr/README.md` (ADR 0021) |
@@ -57,7 +57,7 @@ decision.
   workspace AND a reusable Zephyr module. Changes to `west.yml` and
   `zephyr/module.yml` affect both consumption modes.
 - **West topdir rule:** the workspace top directory must not be a git repo.
-  This repo is cloned one level below it (`workspace/mcuhome/`). Never run
+  This repo is cloned one level below it (`workspace/mcuhome-sdk/`). Never run
   `git init` in the workspace top directory; never commit workspace siblings
   (`zephyr/`, `modules/`, `.west/`).
 - **Pinning policy:** Zephyr and all modules are pinned to tags/SHAs in
@@ -71,7 +71,7 @@ decision.
   parallel source trees.
 - **`app/` is not an application.** It holds the single generic
   application main that `mcuhome build` compiles together with the device
-  configuration it generates; `west build mcuhome/app` refuses at CMake
+  configuration it generates; `west build mcuhome-sdk/app` refuses at CMake
   configure time and says so. Anything device-, board- or
   peripheral-specific is a contract violation there — see `app/README.md`.
 - **A device's commissioning identity is emitted by one function.**
@@ -140,46 +140,43 @@ Concretely:
 
 ```sh
 # One-time workspace setup (full sequence; the workspace dir must not be
-# a git repo and must contain this clone as mcuhome/)
+# a git repo and must contain this clone as mcuhome-sdk/)
 mkdir mcuhome-workspace && cd mcuhome-workspace
-git clone https://github.com/mcu-home/mcuhome
-west init -l mcuhome && west update
+git clone https://github.com/mcu-home/mcuhome-sdk
+west init -l mcuhome-sdk && west update
 
 # Build the reference sample (from the workspace top directory).
-# `mcuhome/app` is NOT buildable — it is the generic main, see below.
+# `mcuhome-sdk/app` is NOT buildable — it is the generic main, see below.
 west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt \
-  mcuhome/samples/matter-node
+  mcuhome-sdk/samples/matter-node
 
 # Run the Zephyr test suites (tests/)
-west twister -T mcuhome/tests --integration --inline-logs -v
+west twister -T mcuhome-sdk/tests --integration --inline-logs -v
 
 # Builder (Python): install once, then run its tests (tests_py/) — no
 # Zephyr and no west workspace needed, ~1 s. The `mcuhome` *command*
 # comes from the sibling cli repo (github.com/mcu-home/cli, cloned next
-# to this one); the three distributions below are what it calls into.
+# to this one); the workbench (build methods, signing) comes the same way
+# from the sibling mcu-home/mcuhome repo. The two distributions below are
+# this repo's own — what the workbench and the compiler's container path
+# call into.
 #
-# Three paths and no `.[dev]`: the repository root ships no distribution
+# Two paths and no `.[dev]`: the repository root ships no distribution
 # any more (ADR 0020 decision 2 reserves the plain name `mcuhome` for the
-# command), and an aggregate that pulled the three from an index would
+# command), and an aggregate that pulled the two from an index would
 # undo the editable installs it was asked for. The root pyproject.toml
 # says so at the top and keeps the tool configuration.
-pip install -e ./packaging/model -e ./packaging/workbench \
-            -e ./packaging/compiler 'pytest>=8.0'
-pip install -e ../cli
+pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0'
+pip install -e ../mcuhome -e ../cli
 pytest
-
-# The `remote` build method's tests need two more things: the optional
-# extra (aiohttp + zstandard) and the build server they drive the client
-# against as a real peer. Without them tests_py/test_sessionclient.py
-# skips itself with one reason naming what is missing (`pytest -rs`).
-pip install -e './packaging/workbench[remote]' -e ../build-server
 
 # Check one device configuration with the builder
 mcuhome validate docs/design/examples/00-bmp180-two-endpoints.yaml
 
 # The machine-readable surface (cli ADR 0003/0004; --json retires for -o there): --json on
 # validate/build, the registry and the main.yaml JSON Schema as data, and
-# a scaffold for a new device. `mcuhome.workbench.api` is the same thing in process.
+# a scaffold for a new device. `mcuhome.workbench.api` (mcu-home/mcuhome)
+# is the same thing in process.
 mcuhome validate <device> --json
 mcuhome schema registry
 mcuhome new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
@@ -205,7 +202,7 @@ mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
 # footprints. The first build generates the per-user signing key in
 # ~/.config/mcuhome/; --signing-key points somewhere else.
 # -S adds a snippet on top of the ones the configuration needs.
-mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
+mcuhome build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node -S debug-rtt
 
 # The same, on the host toolchain instead of in the container

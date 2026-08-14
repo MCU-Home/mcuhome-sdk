@@ -7,9 +7,9 @@ produces Zephyr firmware. Design records:
 [component-model.md](../docs/design/component-model.md).
 
 ```sh
-# from the repository root: the three packages, editable, plus pytest
-pip install -e ./packaging/model -e ./packaging/workbench \
-            -e ./packaging/compiler 'pytest>=8.0'
+# from the repository root: this repo's two packages, editable, plus pytest
+pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0'
+pip install -e ../mcuhome        # the workbench (own repo, github.com/mcu-home/mcuhome)
 pip install -e ../cli            # the `mcuhome` command (own repo, github.com/mcu-home/cli)
 mcuhome init-pairing <device>    # draw this device's commissioning credentials
 mcuhome validate <device>        # stages 1-3, prints the resolved device
@@ -19,18 +19,19 @@ mcuhome build <device> --method local-dev   # … or on this machine's own toolc
 pytest                           # the suite in ../tests_py/
 ```
 
-## Three packages, one directory
+## One namespace, two of its three packages
 
 This directory is a **PEP 420 namespace package**: it has no
-`__init__.py` and no module of its own, and everything in it belongs to
-one of three subpackages, which are three published distributions
-(ADR 0020). The line between them is *where the code has to run*, not
-what it is about:
+`__init__.py` and no module of its own. The namespace spans three
+subpackages — three published distributions (ADR 0020) — of which this
+repository carries the two that belong to the SDK; `mcuhome.workbench`
+lives in its own repository since the ADR 0024 split. The line between
+them is *where the code has to run*, not what it is about:
 
 | Import package | Distribution | What it is | Where it runs |
 |---|---|---|---|
 | `mcuhome.model` | `mcuhome-model` | the shared vocabulary — device model, registry, the context and manifest formats, the frozen context-ID rule, error types. No build machinery, no third-party dependency | everywhere, including a build server that carries no build logic at all |
-| `mcuhome.workbench` | `mcuhome-workbench` | stages 1-3, context creation, the three build methods, the session client, signing | wherever a build is *driven*: the command line, the dashboard, third-party embedders |
+| `mcuhome.workbench` | `mcuhome-workbench` | stages 1-3, context creation, the three build methods, the session client, signing — **in [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome)**, not here | wherever a build is *driven*: the command line, the dashboard, third-party embedders |
 | `mcuhome.compiler` | `mcuhome-compiler` | stages 4-5 and the invocation-ABI adapter | inside the build container, out of the mounted SDK |
 
 `mcuhome.workbench.api` is the supported programmatic surface. The
@@ -42,25 +43,23 @@ The project files are in [`../packaging/`](../packaging/), not here: the
 tree has to sit at the repository root because that root is also the SDK
 package a build container mounts and puts on `PYTHONPATH`, so each
 distribution reaches up into it rather than holding sources of its own.
-All three read one version, from `model/__init__.py`.
+Both read one version, from `model/__init__.py`; the workbench versions
+independently in its own repository (ADR 0024).
 
 ## Modules
 
+Stages 1-3 (tree discovery, loading, validation, resolution) are the
+workbench's modules — see
+[mcu-home/mcuhome](https://github.com/mcu-home/mcuhome).
+
 | Module | Stage | Role |
 |---|---|---|
-| `workbench/tree.py` | — | config-tree discovery and `<device>` resolution |
-| `workbench/loader.py` | 1 | YAML parsing (ruamel, with line/column) and `!secret` |
-| `workbench/schema.py` | 2a | typed model of the raw configuration; shape errors |
-| `workbench/validate.py` | 2b | cross-references, v0.1 scope gates, Matter conformance |
-| `workbench/resolve.py` | 3 | defaults, device-type completion, endpoint numbering, unit conversion |
 | `compiler/generate.py` | 4 | the per-device build tree: Matter/channel tables, overlay, Kconfig fragment, CMakeLists, the sysbuild half |
 | `compiler/container.py` | 5 | the builder image: which one, which mounts, the `docker run` around the build |
 | `compiler/workspace.py` | 5 | west-workspace discovery, prerequisites, the `west build --sysbuild` invocation, per-image artifacts and memory reports |
 | `compiler/abi.py` | — | the build container's invocation ABI, and the SDK-side adapter behind it |
 | `model/pairing.py` | — | commissioning credentials: SPAKE2+ verifier, QR and manual code, the atomic Kconfig group |
-| `workbench/signing.py` | — | the per-user firmware signing key: where it lives, generating one, refusing anything else |
-| `model/p256.py` | — | the curve arithmetic `pairing.py` and `signing.py` share, and nothing more |
-| `workbench/provision.py` | — | `init-pairing`: draws credentials once and edits them into the device's YAML |
+| `model/p256.py` | — | the curve arithmetic `pairing.py` and the workbench's `signing.py` share, and nothing more |
 | `model/model.py` | — | the canonical device model and its JSON form |
 | `model/registry.py` | — | static tables: clusters, device types, drivers, boards, per-board update scheme and flash layout |
 | `model/hashes.py` | — | the one file hash both sides of the build-container contract compute |
@@ -88,8 +87,8 @@ The one argument that cannot travel in the tree is the signing key, which
 is a per-user secret and is passed on the command line
 (`-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=…`, ADR 0015 decision 8).
 
-Stage 5 runs in the **builder image** (ADR 0007,
-[../containers/builder/](../containers/builder/README.md)): the host
+Stage 5 runs in the **build-container image** (ADR 0007,
+[../containers/build-container/](../containers/build-container/README.md)): the host
 needs git and docker, the workspace is bind-mounted at its own absolute
 path, and the build runs as the calling user. `--method local-dev` compiles in the
 west workspace `mcuhome.compiler` is installed in instead — the escape
@@ -120,13 +119,13 @@ and, generated from it, at the top of every emitted table set.
 **A board is a table row, not a branch.** ADR 0015 decision 2 puts the
 update scheme, the recovery entrance and the whole partition table into
 `BoardDef`, and `test_registry.py` reads the source of every other module
-of all three packages to prove none of them names a board. The moment one
+of the namespace to prove none of them names a board. The moment one
 does, "supporting a new board is a table row plus a bring-up" stops being
 true, and nobody finds out until the second board.
 
 **The commissioning identity is one call, never seven lines.**
-`model/pairing.py`'s `kconfig_lines()` is the only place in the three
-packages that names `CONFIG_CHIP_DEVICE_SPAKE2_*` and friends, and
+`model/pairing.py`'s `kconfig_lines()` is the only place in the
+namespace that names `CONFIG_CHIP_DEVICE_SPAKE2_*` and friends, and
 `test_pairing.py` asserts that no other module does. CHIP takes the passcode and the SPAKE2+
 verifier derived from it as unrelated symbols and checks neither against
 the other on Zephyr, so a second code path that wrote one of them would

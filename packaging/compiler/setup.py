@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """This distribution's dependencies, which cannot be written down.
 
-The same one field, for the same reason as in
-``packaging/workbench/setup.py``: ADR 0020 decision 8 makes the pin on
-the sibling distribution exact, and an exact pin spelled out here would
-be a second place the release version lives.
+One dynamic field, one reason: ADR 0020 decision 8 makes the pin on the
+sibling distribution exact, and an exact pin spelled out here would be a
+second place the release version lives.
 
-``mcuhome-workbench`` and not ``mcuhome-model``, because
-:mod:`mcuhome.compiler.abi` imports the workbench at module level and
-gets the model through it.
+``mcuhome-model`` and nothing above it (ADR 0024): the compiler ships
+inside the SDK package and runs in the build container, where the
+workbench neither exists nor belongs — its own context reading lives in
+:mod:`mcuhome.compiler.contextread`.
 """
 
 import sys
