@@ -26,7 +26,7 @@ is the one shared host-side step afterwards, identical for all three
 methods.
 
 **What comes out.** A ``build-manifest.json`` describing the images, the
-same report shape ``mcuhome sign`` has always read on this path — not
+same report shape ``mcuhome device sign-firmware`` has always read on this path — not
 the build container's §7.2.1 ``build-report.json``, because no container
 ran. Both shapes carry the imgtool parameters the host signer needs
 (E55), which is why one signing step can serve either.

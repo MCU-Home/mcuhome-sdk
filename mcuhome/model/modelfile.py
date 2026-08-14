@@ -59,9 +59,9 @@ def read_model(path: Path) -> DeviceModel:
         raise BuildError(
             f"MCUHome cannot read the device model {path}: {error.strerror}.",
             hint=(
-                "a device model is the JSON mcuhome build writes next to the "
+                "a device model is the JSON mcuhome device build writes next to the "
                 "application it generates (device-model.json), and what "
-                "mcuhome validate --json carries in its `model` field."
+                "mcuhome device validate -o json carries in its `model` field."
             ),
         ) from error
     try:

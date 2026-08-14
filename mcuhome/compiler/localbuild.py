@@ -97,7 +97,7 @@ def _image_not_found(reference: str) -> BuildError:
         hint=(
             "the local build compiles in the MCUHome builder image and pulls "
             "nothing — pull or build the image (docker pull "
-            f"{container.IMAGE}), or point --image at one. --method local-dev "
+            f"{container.IMAGE}), or point --image at one. --build-mode local-dev "
             "needs no image."
         ),
     )

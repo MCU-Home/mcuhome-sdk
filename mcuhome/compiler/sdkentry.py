@@ -37,7 +37,7 @@ because reusing the invocation ABI is §6.1's whole argument for it.
 The tree is written with :func:`mcuhome.compiler.generate.write_tree` under the
 same ``config_name`` convention the command line uses
 (``model.device.source``): the generator is deterministic (§1.4), so the
-entry point and ``mcuhome build --generate-only`` produce byte-identical
+entry point and ``mcuhome device build --generate-only`` produce byte-identical
 trees for the same model, and nothing about a remote build is a second
 code path.
 
