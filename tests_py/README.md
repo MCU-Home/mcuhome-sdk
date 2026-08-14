@@ -68,7 +68,7 @@ the build server: that repository is private and the workflow has no
 deploy key for it, so those tests are green locally and skipped there —
 a stated gap, not a silent one.
 
-The command-surface tests (exit codes, summary output, `--json`
+The command-surface tests (exit codes, summary output, `-o json`
 documents) live with the command: `tests/test_cli.py` in the
 [mcu-home/cli](https://github.com/mcu-home/cli) repository, which is
 where the `mcuhome` command itself moved.
@@ -118,7 +118,7 @@ print(load_model(p, tree=ConfigTree(root=p.parent, discovered=False)).to_json(),
   > tests_py/data/golden/00-bmp180-two-endpoints.device-model.json
 
 # the stage-4 artifacts, including the sample's C files
-mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
+mcuhome device build docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir /tmp/bmp180-node --generate-only
 cp /tmp/bmp180-node/app/src/mcuhome_config.[ch] samples/matter-node/src/
 cp /tmp/bmp180-node/app/prj.conf \
@@ -137,8 +137,8 @@ cp /tmp/bmp180-node/app/sysbuild/mcuboot.overlay \
    tests_py/data/golden/00-bmp180-two-endpoints.mcuboot.overlay
 
 # the two exported contract documents
-mcuhome schema config   -o tests_py/data/golden/main.schema.json
-mcuhome schema registry -o tests_py/data/golden/registry.json
+mcuhome schema config > tests_py/data/golden/main.schema.json
+mcuhome schema registry > tests_py/data/golden/registry.json
 ```
 
 Regenerating the sample's C files is not optional bookkeeping: it is how

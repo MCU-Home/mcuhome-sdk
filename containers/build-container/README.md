@@ -7,7 +7,7 @@ makes "works on my machine" and "passes in CI" the same statement.
 
 ```sh
 docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8   # or build it, below
-mcuhome build <device>                                 # uses it by default
+mcuhome device build <device>                                 # uses it by default
 ```
 
 ## What is in it, and what is not
@@ -228,8 +228,9 @@ justifies still stands.
   half is unchanged at ≈ 10 min cold.
 
 To use a locally built image, tag it however you like and select it per
-build with `--image`, or for a whole shell with
-`MCUHOME_BUILDER_IMAGE=…`.
+build with `--build-mode local --image …`, for a whole shell with
+`MCUHOME_BUILDER_IMAGE=…`, or durably as a local builder's `image:`
+(ADR 0023).
 
 Inspecting what a given image actually carries needs no build:
 
@@ -240,8 +241,8 @@ docker run --rm ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8 \
 
 ## How the builder runs it
 
-`mcuhome build` assembles the invocation in
-[`mcuhome/compiler/container.py`](../../mcuhome/compiler/container.py); `mcuhome build …`
+`mcuhome device build` assembles the invocation in
+[`mcuhome/compiler/container.py`](../../mcuhome/compiler/container.py); `mcuhome device build …`
 prints it before it runs. In short:
 
 - `--user <your uid>:<your gid>` — nothing is left behind owned by root.

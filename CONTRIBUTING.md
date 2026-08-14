@@ -43,7 +43,7 @@ For a full firmware build, build a device from its YAML description — or
 a sample, if you want the framework without the builder in the picture:
 
 ```sh
-mcuhome build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
+mcuhome device build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node
 west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt \
   mcuhome-sdk/samples/matter-node
