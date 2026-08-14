@@ -12,12 +12,12 @@
 #              paying.
 #   twister  — the Zephyr test suites in tests/, compiled and run inside
 #              the MCUHome builder image (ADR 0007). The image is the same
-#              one `mcuhome build` uses, which is the point of having one:
+#              one `mcuhome device build` uses, which is the point of having one:
 #              "passes in CI" and "builds on my machine" mean the same
 #              thing or the container strategy is not worth its weight.
 #   matter   — one real Matter firmware, built end to end the way a user
 #              builds one: patched west projects, the builder image, the
-#              generator, `mcuhome build`. The expensive gate, and the
+#              generator, `mcuhome device build`. The expensive gate, and the
 #              only one that touches the Matter SDK at all; it runs only
 #              when something that can break it changed. `matter-gate`
 #              below decides that, and the head comment of `matter` says
@@ -136,7 +136,7 @@ jobs:
       # One source of truth for the image name, and it is the builder's:
       # mcuhome/compiler/container.py carries the Zephyr release and the
       # image revision, and the builder resolves the very same string when
-      # a developer runs `mcuhome build`. Importing it needs no third-party
+      # a developer runs `mcuhome device build`. Importing it needs no third-party
       # package — that module is standard library only, on purpose.
       - name: Resolve the builder image reference
         id: image
@@ -356,7 +356,7 @@ jobs:
   # locally used the host method, where the host interpreter quietly supplied
   # what the image lacked. Nothing had ever walked the container path for
   # a Matter build. This job is that walk — patch set, compat headers,
-  # image contents, west pins, generator and `mcuhome build`, exercised
+  # image contents, west pins, generator and `mcuhome device build`, exercised
   # together on the example the node on the bench was commissioned from.
   # Delete it and those three classes of failure become invisible again.
   matter:
@@ -374,7 +374,7 @@ jobs:
       # cache action has a path it can name. Without it
       # mcuhome.compiler.container falls back to $XDG_CACHE_HOME/$HOME, which is
       # the runner's business and not stable across runner images.
-      # `mcuhome build` creates the directory and mounts it at /ccache.
+      # `mcuhome device build` creates the directory and mounts it at /ccache.
       MCUHOME_CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
       # Same topdir rule as the twister job: the workspace top directory
@@ -399,7 +399,7 @@ jobs:
           path: .deps/cli
 
       # The workbench's home since the ADR 0024 split — this job drives
-      # `mcuhome build` end to end, and stages 1-3 live there.
+      # `mcuhome device build` end to end, and stages 1-3 live there.
       - name: Checkout the workbench
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -532,8 +532,8 @@ jobs:
           restore-keys: |
             ccache-matter-1-${{ runner.os }}-
 
-      # The default `mcuhome build` resolves the device's SDK pin against
-      # the source directories `--sdk-source` names (build-container
+      # The default `mcuhome device build` resolves the device's SDK pin against
+      # the source directories `--sdk-sources` names (build-container
       # contract v1's first tier) and mounts the selected package into
       # the container as the SDK tree, so this job has to produce one.
       # It is the same archive the sdk-package job publishes, built by the
@@ -562,8 +562,8 @@ jobs:
       # (mcuhome.compiler.workspace.auto_jobs).
       - name: Build the reference Matter device
         run: |
-          mcuhome build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
-            --build-dir build/bmp180-node --sdk-source dist/sdk -S debug-rtt
+          mcuhome device build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
+            --build-dir build/bmp180-node --sdk-sources dist/sdk -S debug-rtt
 
       # A green build that produced nothing is worse than a red one. This
       # is the default (container) path, so the build directory holds a
