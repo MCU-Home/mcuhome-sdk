@@ -411,7 +411,11 @@ user in `$XDG_CONFIG_HOME/mcuhome/signing.key`): the builder generates
 an ECDSA P-256 key pair on first need into the project's
 `secrets/firmware/mcuboot.yaml`, under the key `firmware_signing_key`
 (ADR 0022's secrets rules — 700/600, checked, refusal on insecure key
-material). All devices of a project share it; a user who wants one
+material). One consequence of the YAML home: `imgtool` signs with
+`--key <file>`, so the workbench materializes the key as a short-lived
+owner-only file inside `secrets/firmware/` for exactly the duration of
+the imgtool run — never in a build directory, never outside
+`secrets/`. All devices of a project share it; a user who wants one
 vendor key across projects copies the file. `MCUHOME_SIGNING_KEY` (and
 the CLI's `--signing-key`, cli ADR 0003) still points elsewhere. The key
 lives **where the user's controlling instance runs, never on a build
