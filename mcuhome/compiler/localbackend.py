@@ -1358,7 +1358,7 @@ class LocalBackend:
                 hint=(
                     "the local build method resolves the recorded image against this "
                     "host's images and pulls nothing — pull or build the image the "
-                    "manifest names, or point --image at it"
+                    "manifest names, or point --container-image at it"
                 ),
             )
         offered = facts.labels.get(ZEPHYR_LABEL) or ""
@@ -1375,7 +1375,7 @@ class LocalBackend:
                 hint=(
                     "a context states the Zephyr line its model was resolved against and "
                     "the backend picks a container of that line (E61) — this image is not "
-                    "one. Point --image at a container of that line, or rebuild the "
+                    "one. Point --container-image at a container of that line, or rebuild the "
                     "context for a line this host serves."
                 ),
             )

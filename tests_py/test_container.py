@@ -281,7 +281,9 @@ def test_no_docker_at_all_says_what_to_install() -> None:
     assert "cannot find docker on your PATH" in caught.value.message
     hint = caught.value.hint or ""
     assert "docs.docker.com" in hint
-    assert "--build-mode local-dev" in hint
+    # The container-less alternative is one generic pointer (PO
+    # 2026-08-15) — mode specifics belong to the build command's help.
+    assert "mcuhome device build --help" in hint
     # Asking an absent program a second question tells nobody anything.
     assert len(runner.commands) == 1
 
@@ -293,7 +295,10 @@ def test_a_stopped_daemon_is_not_a_missing_docker() -> None:
     assert "systemctl start docker" in (caught.value.hint or "")
 
 
-def test_a_missing_image_says_how_to_get_one_both_ways() -> None:
+def test_a_missing_image_leads_with_the_pull_command() -> None:
+    """PO 2026-08-15: the pull is the fix for almost everyone, so it
+    comes first; alternatives are one line, and building the image from
+    source stays in the container README."""
     with pytest.raises(BuildError) as caught:
         container.preflight(
             "docker",
@@ -305,13 +310,11 @@ def test_a_missing_image_says_how_to_get_one_both_ways() -> None:
         "The MCUHome builder image ghcr.io/mcu-home/build-container:x is not on this machine."
     )
     hint = caught.value.hint or ""
-    assert "docker pull ghcr.io/mcu-home/build-container:x" in hint
-    assert (
-        "docker build -t ghcr.io/mcu-home/build-container:x "
-        f"-f {container.DOCKERFILE_DIR}/Dockerfile ." in hint
-    )
+    assert "docker pull ghcr.io/mcu-home/build-container:x" in hint.splitlines()[1].strip()
+    assert "--container-image" in hint
+    assert "mcuhome device build --help" in hint
+    assert "docker build" not in hint
     assert container.IMAGE_VAR in hint
-    assert "--build-mode local-dev" in hint
 
 
 def test_a_working_docker_with_the_image_says_nothing() -> None:

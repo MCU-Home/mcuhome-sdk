@@ -97,7 +97,7 @@ def _image_not_found(reference: str) -> BuildError:
         hint=(
             "the local build compiles in the MCUHome builder image and pulls "
             "nothing — pull or build the image (docker pull "
-            f"{container.IMAGE}), or point --image at one. --build-mode local-dev "
+            f"{container.IMAGE}), or point --container-image at one. --build-mode local-dev "
             "needs no image."
         ),
     )
@@ -106,7 +106,7 @@ def _image_not_found(reference: str) -> BuildError:
 def image_zephyr_version(profile: lb.ImageProfile) -> str:
     """Which Zephyr release *profile* carries, by its own label (§2.1).
 
-    The image's own claim and nothing else: ``--image`` may point at any
+    The image's own claim and nothing else: ``--container-image`` may point at any
     image at all, and the whole point of the coupling label is that a
     container states what it builds against. An image that carries no
     ``org.mcuhome.zephyr`` label states nothing, and the empty string is
@@ -145,7 +145,7 @@ def _line_unsatisfied(reference: str, offered: str, line: str) -> BuildError:
             "the context states the Zephyr line its model was resolved against "
             "(zephyr_version, ADR 0013) and the build method picks a container of "
             "that line — this host offers none. Pull or build a "
-            f"{line}.x builder image, point --image at one, or set zephyr_version "
+            f"{line}.x builder image, point --container-image at one, or set zephyr_version "
             "to a line this host can serve."
         ),
     )

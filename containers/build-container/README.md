@@ -228,7 +228,7 @@ justifies still stands.
   half is unchanged at ≈ 10 min cold.
 
 To use a locally built image, tag it however you like and select it per
-build with `--build-mode local --image …`, for a whole shell with
+build with `--build-mode local --container-image …`, for a whole shell with
 `MCUHOME_BUILDER_IMAGE=…`, or durably as a local builder's `image:`
 (ADR 0023).
 

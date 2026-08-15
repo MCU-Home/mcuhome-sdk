@@ -149,7 +149,7 @@ IMAGE_TAG = f"zephyr-{ZEPHYR_RELEASE}-r{IMAGE_REVISION}"
 IMAGE = f"{IMAGE_REPOSITORY}:{IMAGE_TAG}"
 
 #: Overrides :data:`IMAGE`. For a locally built image, a mirror, or a
-#: bisect across image revisions. ``--image`` beats it, it beats the
+#: bisect across image revisions. ``--container-image`` beats it, it beats the
 #: default.
 IMAGE_VAR = "MCUHOME_BUILDER_IMAGE"
 
@@ -188,7 +188,7 @@ DOCKERFILE_DIR = "containers/build-container"
 
 
 def image_reference(env: dict[str, str], *, override: str | None = None) -> str:
-    """Which image to build in: ``--image``, then the variable, then the pin."""
+    """Which image to build in: ``--container-image``, then the variable, then the pin."""
     if override:
         return override
     return env.get(IMAGE_VAR) or IMAGE
@@ -247,8 +247,7 @@ def _refuse_no_docker(docker: str) -> BuildError:
             "install Docker — https://docs.docker.com/engine/install/ — and run the "
             "same command again. That is the whole host setup: the Zephyr SDK, gn, "
             "zap and ccache live in the MCUHome builder image, not on your machine.\n"
-            "If you already have a west workspace with a Zephyr toolchain in it, "
-            "--build-mode local-dev compiles there instead."
+            "Building without a container is a build mode: mcuhome device build --help."
         ),
     )
 
@@ -261,7 +260,8 @@ def _refuse_no_daemon(docker: str) -> BuildError:
             "    sudo systemctl start docker      # Linux, system service\n"
             "    open -a Docker                   # macOS, Docker Desktop\n"
             f"If {docker} only works under sudo, add yourself to the `docker` group "
-            "and log in again. --build-mode local-dev compiles on the host instead."
+            "and log in again. Building without a container is a build mode: "
+            "mcuhome device build --help."
         ),
     )
 
@@ -270,13 +270,10 @@ def _refuse_missing_image(docker: str, reference: str) -> BuildError:
     return BuildError(
         f"The MCUHome builder image {reference} is not on this machine.",
         hint=(
-            "pull it — it is published with every MCUHome release:\n"
+            "pull it once — it is published with every MCUHome release:\n"
             f"    {docker} pull {reference}\n"
-            "or build it from the root of this repository (the context is the\n"
-            "repository, because west.yml and patches/ are image inputs):\n"
-            f"    {docker} build -t {reference} -f {DOCKERFILE_DIR}/Dockerfile .\n"
-            f"{IMAGE_VAR} selects a different image, --image does it per build, and "
-            "--build-mode local-dev skips the container altogether."
+            f"A different image: --container-image (or {IMAGE_VAR}); other build "
+            "modes: mcuhome device build --help."
         ),
     )
 
