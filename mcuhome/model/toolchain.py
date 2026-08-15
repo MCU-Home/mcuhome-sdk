@@ -219,7 +219,7 @@ def resolve_toolchain(
                 "integrated yet.",
                 location=blob_locs.get(name, version_loc),
                 hint=(
-                    "blob support is still being evaluated (ADR 0013) — remove the "
+                    "blob support is still being evaluated — remove the "
                     f"blobs: entry for now:\n    # {name}: enabled"
                 ),
             )

@@ -924,7 +924,7 @@ def render_sysbuild_conf(model: DeviceModel, *, config_name: str) -> str:
     if scheme is None:  # pragma: no cover - guarded by the caller
         raise GenerationError(
             f'The board "{model.device.board}" has no update scheme in the registry.',
-            hint="this is a builder bug — every buildable board carries one (ADR 0015)",
+            hint="this is a builder bug — every buildable board carries one",
         )
     mode_symbol = registry.MCUBOOT_MODE_SYMBOLS[scheme.mcuboot_mode]
     staging = {
@@ -1066,7 +1066,7 @@ def render_bootloader_conf(model: DeviceModel, *, config_name: str) -> str:
     if scheme is None:  # pragma: no cover - guarded by the caller
         raise GenerationError(
             f'The board "{model.device.board}" has no update scheme in the registry.',
-            hint="this is a builder bug — every buildable board carries one (ADR 0015)",
+            hint="this is a builder bug — every buildable board carries one",
         )
     intro = [
         "Kconfig fragment for the MCUboot image. Sysbuild derives the swap mode "
@@ -1155,7 +1155,7 @@ def render_bootloader_overlay(model: DeviceModel, *, config_name: str) -> str:
     if scheme is None:  # pragma: no cover - guarded by the caller
         raise GenerationError(
             f'The board "{model.device.board}" has no update scheme in the registry.',
-            hint="this is a builder bug — every buildable board carries one (ADR 0015)",
+            hint="this is a builder bug — every buildable board carries one",
         )
     intro = [f"Board: {model.device.board}.", *_BOOTLOADER_OVERLAY_INTRO]
     out = [_file_header("c", config_name, intro), "", _BOOTLOADER_CODE_PARTITION]

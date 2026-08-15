@@ -167,9 +167,20 @@ west twister -T mcuhome-sdk/tests --integration --inline-logs -v
 # command), and an aggregate that pulled the two from an index would
 # undo the editable installs it was asked for. The root pyproject.toml
 # says so at the top and keeps the tool configuration.
+python3 -m venv .venv && . .venv/bin/activate
 pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0'
-pip install -e ../mcuhome -e ../cli
 pytest
+
+# Optional: the `mcuhome` command, for driving the SDK by hand. Either
+# from sibling checkouts (cloned next to this repo) …
+pip install -e ../mcuhome -e ../cli
+# … or, working on this repository alone, straight from git — pip
+# clones internally, you keep exactly one checkout:
+pip install "mcuhome @ git+https://github.com/mcu-home/cli" \
+  "mcuhome-workbench[remote,local] @ git+https://github.com/mcu-home/mcuhome"
+
+# scripts/build_sdk_archive.py runs from this venv too — zstandard
+# comes with mcuhome-compiler; there is no system-python path.
 
 # Check one device configuration with the builder
 mcuhome device validate docs/design/examples/00-bmp180-two-endpoints.yaml

@@ -130,7 +130,16 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import zstandard
+try:
+    import zstandard
+except ModuleNotFoundError:  # a system python, not the repo's venv
+    sys.exit(
+        "build_sdk_archive.py needs the zstandard module.\n"
+        "Run it from this repository's own venv, which carries it via\n"
+        "mcuhome-compiler (CONTRIBUTING.md):\n"
+        "    python3 -m venv .venv && . .venv/bin/activate\n"
+        "    pip install -e ./packaging/model -e ./packaging/compiler"
+    )
 
 #: This repository, seen from ``scripts/``. The default rather than a
 #: constant, so a test can build a package from a checkout somewhere else.
