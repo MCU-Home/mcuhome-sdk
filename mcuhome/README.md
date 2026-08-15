@@ -11,7 +11,7 @@ produces Zephyr firmware. Design records:
 pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0'
 pip install -e ../mcuhome        # the workbench (own repo, github.com/mcu-home/mcuhome)
 pip install -e ../cli            # the `mcuhome` command (own repo, github.com/mcu-home/cli)
-mcuhome device init-pairing <device>    # draw this device's commissioning credentials
+mcuhome device matter-pairing --new <device>    # draw this device's commissioning credentials
 mcuhome device validate <device>        # stages 1-3, prints the resolved device
 mcuhome device build <device> --generate-only   # + stage 4, writes the application
 mcuhome device build <device>           # + stage 5, compiles it in the builder image

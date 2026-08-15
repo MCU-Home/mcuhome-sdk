@@ -127,7 +127,7 @@ the fully manual form is `--build-mode local-dev|local|remote` with mode-specifi
 
 ```sh
 mcuhome device new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
-mcuhome device init-pairing bedroom-climate      # this device's commissioning codes
+mcuhome device matter-pairing --new bedroom-climate      # this device's commissioning codes
 mcuhome device validate bedroom-climate
 ```
 

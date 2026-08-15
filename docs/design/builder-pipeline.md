@@ -377,12 +377,14 @@ What stays pipeline-relevant: `<device>` is a folder name resolved
 against the config tree root (`devices/<name>/main.yaml`; an explicit
 path works too; tree root `--config-root`, else auto-discovered cwd
 upwards — as built today; the target model, a project directory with
-`mcuhome.yaml` and `--project-dir`, is ADR 0022). `init-pairing` is the exception to "the builder never
-writes into the configuration tree" (§2), and it exists because of
-§1.4: a device needs credentials nobody else has, and a build has to
-be reproducible, so the randomness happens once — into the device's
-own YAML or the tree's `secrets.yaml` — and every build after that is
-deterministic input in, deterministic bytes out (yaml-schema.md §4.1).
+`mcuhome.yaml` and `--project-dir`, is ADR 0022). `mcuhome device
+matter-pairing --new` is the exception to "the builder never writes into
+the configuration tree" (§2), and it exists because of §1.4: a device
+needs credentials nobody else has, and a build has to be reproducible, so
+the randomness happens once — into the device's `secrets/devices/<name>.
+yaml` with `!secret` references in `main.yaml` — and every build after
+that is deterministic input in, deterministic bytes out (yaml-schema.md
+§4.1).
 `new` is the other end of the same rule: it deliberately draws no
 credentials, so re-running it after a mistake cannot silently
 invalidate every controller that already knows the device. Everything

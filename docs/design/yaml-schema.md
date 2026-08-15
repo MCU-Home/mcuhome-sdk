@@ -99,17 +99,23 @@ network:
   #   password: !secret wifi_password
 
   matter:
-    enabled: true                  # default; shown for clarity
-    discriminator: !secret bedroom_climate_discriminator   # 0…4095
-    passcode: !secret bedroom_climate_passcode             # 1…99999998
-    salt: !secret bedroom_climate_salt                     # base64, 16…32 B
+    enabled: true                  # the block is the opt-in; shown for clarity
+    discriminator: !secret matter_discriminator   # 0…4095
+    passcode: !secret matter_passcode             # 1…99999998
+    salt: !secret matter_salt                     # base64, 16…32 B
 ```
 
 - Exactly one transport must be configured; a board without radio for it
   is a validation error.
-- **Matter is the integration path** (ADR 0010): enabled by default
-  whenever a transport is configured; can be disabled for bench setups
-  (automations still run locally).
+- **Matter is the integration path** (ADR 0010), and it is on exactly
+  when the configuration says so (PO 2026-08-15): the `matter:` block
+  is the opt-in — a block stating credentials counts, `enabled:` line
+  or not — and `enabled: false` is the explicit off switch. A transport
+  alone does **not** imply Matter: deleting the block deactivates the
+  device now, loudly, instead of the day a second application protocol
+  changes an implied default. `mcuhome device new` writes
+  `matter: enabled: true` into every starter, so the normal path never
+  notices.
 - `coap:` is a **reserved key** for the future maintenance channel
   (§7). The v1 builder rejects it with "not yet implemented" — never
   silently ignores it.
@@ -138,19 +144,20 @@ requirements meet here and only one design satisfies both:
   (builder-pipeline.md §1.4) — which rules out drawing them per build.
 
 So randomness happens exactly once, in a command of its own, and its
-output lands in the configuration file, where it is ordinary input from
-then on:
+output lands in the configuration files:
 
 ```sh
-mcuhome init-pairing <device>             # writes the three keys into main.yaml
-mcuhome init-pairing <device> --secrets   # …into secrets.yaml, with !secret refs
-mcuhome init-pairing <device> --force     # replace existing ones (re-commissioning!)
+mcuhome device matter-pairing --new <device>         # draw fresh credentials
+mcuhome device matter-pairing --new --force <device> # replace existing ones (re-commissioning!)
 ```
 
-The file is edited by line, not re-serialized: comments and indentation
-survive untouched. Nothing is written anywhere else — no state directory,
-no cache, no log. **The configuration is the only copy**, and losing it
-means the device has to be re-flashed to be re-commissioned.
+Credentials go to `secrets/devices/<device>.yaml` (mode 600), and the
+device's `main.yaml` carries `!secret matter_discriminator`, `!secret
+matter_passcode`, and `!secret matter_salt` references to them. The
+lookup ladder is: device-local secrets first, then project-wide
+`secrets/main.yaml` for shared values (e.g. wifi passwords). No state
+directory, no cache, no log — **the configuration is the only copy**,
+and losing it means the device has to be re-flashed to be re-commissioned.
 
 A Matter device with no credentials and no explicit opt-out is a
 validation error, not a default. The opt-out exists for the bench:
@@ -168,8 +175,9 @@ have to be asked for by name. `mcuhome validate` and `mcuhome build` say
 so in the summary whenever they are in use.
 
 The two onboarding codes are printed by `validate`, `build` and
-`init-pairing`, and printed only — the manual pairing code and the `MT:`
-QR payload, both derived from the tuple above plus the vendor/product ID.
+`mcuhome device matter-pairing` (when showing), and printed only — the
+manual pairing code and the `MT:` QR payload, both derived from the tuple
+above plus the vendor/product ID.
 
 - **PBKDF2 iterations** are not a schema key: the builder uses 10000, ten
   times CHIP's default. The cost is the commissioner's alone — the device
