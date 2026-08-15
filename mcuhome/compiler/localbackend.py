@@ -1259,19 +1259,26 @@ class LocalBackend:
         )
 
         # §9.1: every invocation gets a **fresh, empty** `out` and `tmp`;
-        # `work` is "the session's persistent working area" and must
-        # survive between invocations, because that is the whole of what
-        # `mode: incremental` has to reason about. So `work` is created
-        # once and reused, and the invocation directory — which holds
-        # `out`, `tmp` and this run's request/result documents — is wiped
-        # and recreated. Without this, a second `run()` on the same
-        # `work_root` would inherit the previous invocation's `out`: an
-        # old `out/firmware.hex` that still matched a re-declared hash
-        # would let a later non-conforming build slip through egress, and
-        # a stale `result.json` would be judged as this run's answer.
+        # `work` is "the session's persistent working area" — and one
+        # `run()` IS one session here: it starts a fresh container and
+        # reaps it, so the environment whose working area `work` was is
+        # gone when `run()` returns. A `work` left by an earlier run
+        # belongs to a dead session, and the program rightly refuses it
+        # (`error.work.foreign` — the marker never matches a freshly
+        # drawn session ID), so it is removed rather than inherited.
+        # Incremental builds ACROSS runs would need a session identity
+        # persisted beside `work` and bound to the context ID — a named
+        # later step, not a by-product of leaking state. The invocation
+        # directory — `out`, `tmp`, this run's request/result documents —
+        # is wiped for §9.1's reason: an old `out/firmware.hex` that
+        # still matched a re-declared hash would let a later
+        # non-conforming build slip through egress, and a stale
+        # `result.json` would be judged as this run's answer.
         work = work_root / "work"
         invocation = work_root / "inv"
-        work.mkdir(parents=True, exist_ok=True)
+        if work.exists():
+            shutil.rmtree(work)
+        work.mkdir(parents=True)
         if invocation.exists():
             shutil.rmtree(invocation)
         out = invocation / "out"

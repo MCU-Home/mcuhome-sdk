@@ -602,6 +602,25 @@ def test_a_conforming_build_is_judged_successful(tmp_path) -> None:
     assert outcome.context_id == context_id_of(context)
 
 
+def test_a_second_run_does_not_inherit_the_dead_sessions_work(tmp_path) -> None:
+    """One ``run()`` is one session, and its container dies with it.
+
+    A later run must not inherit the dead session's working area: the
+    session ID is drawn fresh, so the program would refuse the leftover
+    as ``error.work.foreign`` — which turned every second build into
+    the same build directory into a refusal (bench find, 2026-08-15).
+    """
+    backend, context, seam = scenario(
+        tmp_path, build=conforming, describe_static=describe_result_document()
+    )
+    work_root = tmp_path / "work"
+    assert backend.run(context_dir=context, action="build", work_root=work_root).successful
+    residue = work_root / "work" / "session-marker-of-a-dead-session"
+    residue.write_text("{}", "utf-8")
+    assert backend.run(context_dir=context, action="build", work_root=work_root).successful
+    assert not residue.exists()
+
+
 def test_the_exec_argv_drives_the_program_through_the_run_path(tmp_path) -> None:
     backend, context, seam = scenario(
         tmp_path, build=conforming, describe_static=describe_result_document()
@@ -1120,14 +1139,17 @@ def test_verify_artifacts_rejects_a_special_file(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
-# A fresh out/tmp per invocation, while work persists (§9.1)
+# A fresh out/tmp per invocation, and a fresh work per run (§9.1, §6.3)
 # --------------------------------------------------------------------------
 
 
-def test_out_and_tmp_are_fresh_each_invocation_but_work_persists(tmp_path) -> None:
+def test_out_tmp_and_work_are_all_fresh_each_run(tmp_path) -> None:
     """§9.1: a second run() on one work_root gets an empty out and tmp — a
-    stale out/firmware.hex must not survive into a later build — while
-    work, the session's persistent area, carries over."""
+    stale out/firmware.hex must not survive into a later build. And work
+    is fresh too: one run() is one session whose container dies with it,
+    so a later run inheriting its work would be handed a directory the
+    program refuses as foreign (§6.3 — the marker can never match a
+    freshly drawn session ID)."""
     work_root = tmp_path / "work"
     out_seen: list[list[str]] = []
     work_marker_seen: list[bool] = []
@@ -1147,7 +1169,7 @@ def test_out_and_tmp_are_fresh_each_invocation_but_work_persists(tmp_path) -> No
     backend.run(context_dir=context, action="build", work_root=work_root)
 
     assert out_seen == [[], []]  # out empty at the start of both invocations
-    assert work_marker_seen == [False, True]  # the marker written in run 1 survived into run 2
+    assert work_marker_seen == [False, False]  # a dead session's work never carries over
 
 
 # --------------------------------------------------------------------------
