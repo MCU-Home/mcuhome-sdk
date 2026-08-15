@@ -75,8 +75,7 @@ def describe_version_problem(text: str) -> str | None:
     if any(int(part) > VERSION_FIELD_MAX for part in match.groups()):
         return (
             f"out of range — Matter's SoftwareVersion packs major, minor and patch "
-            f"into one byte each (ADR 0015 decision 9), so none of them may exceed "
-            f"{VERSION_FIELD_MAX}"
+            f"into one byte each, so none of them may exceed {VERSION_FIELD_MAX}"
         )
     return None
 

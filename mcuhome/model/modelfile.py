@@ -83,10 +83,10 @@ def read_model(path: Path) -> DeviceModel:
             f"The device model {path} is version {found!r}, and this builder "
             f"implements version {MODEL_VERSION}.",
             hint=(
-                "the canonical model is a versioned contract (dashboard ADR 0007 "
-                "decision 4): a mismatch is a refusal that names both numbers, "
-                f"never a guess. Build with a builder that implements model "
-                f"version {found!r}, or regenerate the model with this one "
+                "the canonical model is a versioned contract: a mismatch is a "
+                "refusal that names both numbers, never a guess. Build with a "
+                "builder that implements model version "
+                f"{found!r}, or regenerate the model with this one "
                 f"(MCUHome {VERSION})."
             ),
         )

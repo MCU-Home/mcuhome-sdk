@@ -112,10 +112,14 @@ Regenerate deliberately, never automatically — from the repository root:
 
 ```sh
 # the device model
-python -c "from pathlib import Path; from mcuhome.workbench.api import ConfigTree, load_model; \
-p = Path('docs/design/examples/00-bmp180-two-endpoints.yaml').resolve(); \
-print(load_model(p, tree=ConfigTree(root=p.parent, discovered=False)).to_json(), end='')" \
-  > tests_py/data/golden/00-bmp180-two-endpoints.device-model.json
+python - <<'PY'
+from pathlib import Path
+from mcuhome.workbench import api
+project, entry = api.find_device(
+    "docs/design/examples/00-bmp180-two-endpoints.yaml", env={}, cwd=Path.cwd())
+model = api.load_model(entry, project=project)
+Path("tests_py/data/golden/00-bmp180-two-endpoints.device-model.json").write_text(model.to_json())
+PY
 
 # the stage-4 artifacts, including the sample's C files
 mcuhome device build docs/design/examples/00-bmp180-two-endpoints.yaml \
