@@ -96,10 +96,11 @@ decision.
   stops Kconfig parsing the tree in *every* build in the repository, the
   native_sim suites included. The group is registry data
   (`UpdateSchemeDef.matter_ota_kconfig`) and the C side checks it by name.
-- **Credentials are drawn once, into the user's YAML** (`mcuhome
-  init-pairing`), never per build — random per device *and* byte-identical
-  builds, which is only possible if the configuration is the source
-  (yaml-schema.md §4.1).
+- **Credentials are drawn once** (`mcuhome device matter-pairing --new`) —
+  `!secret` references into the user's YAML, values into the device's
+  `secrets/devices/<name>.yaml` — never per build. Random per device *and*
+  byte-identical builds, which is only possible if the configuration is
+  the source (yaml-schema.md §4.1).
 - **Two files carry the Matter build glue** — `samples/matter-node/
   CMakeLists.txt` and the one `mcuhome/compiler/generate.py` emits — and
   `tests_py/test_generate.py` asserts the shared blocks stay byte-equal.

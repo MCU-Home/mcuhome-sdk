@@ -34,7 +34,7 @@ second — they are the fast half of the strategy in
 | `test_loader.py` | YAML parsing and `!secret` resolution, including their error messages |
 | `test_schema.py` | shape errors: unknown keys, wrong types, malformed durations |
 | `test_validate.py` | every v0.1 scope gate and cross-reference check, message **and** location |
-| `test_pairing.py` | commissioning: the CHIP vectors, the atomic Kconfig group, `init-pairing` |
+| `test_pairing.py` | commissioning: the CHIP vectors, the atomic Kconfig group, `matter-pairing` |
 | `test_registry.py` | the per-board update scheme and flash layout, and that no module branches on a board name (ADR 0015) |
 | `test_signing.py` | the per-user signing key: where it is, what it is, and how the refusals read (ADR 0015 §8) |
 | `test_examples.py` | the design examples in `docs/design/examples/` |
@@ -46,7 +46,7 @@ second — they are the fast half of the strategy in
 | `test_manifest.py` | `build-manifest.json`: its fields, its determinism, and the signing parameters it states |
 | `test_imgtool.py` | detached signing: the command is Zephyr's own, and two signings of one image differ only in the signature |
 | `test_export.py` | the registry and the `main.yaml` JSON Schema, golden and against the parser |
-| `test_scaffold.py` | `mcuhome new`: what it writes, what it refuses, and that init-pairing then validate works on it |
+| `test_scaffold.py` | `mcuhome new`: what it writes, what it refuses, and that matter-pairing then validate works on it |
 | `test_packaging.py` | the ADR 0020 layout: one distribution per subpackage, one version for all three, the two files outside Python that name an import path, and the `remote` extra's declaration |
 | `test_sessionclient.py` | the `remote` build method: the session-protocol client, driven against the **real** build server (see below) |
 
