@@ -91,18 +91,6 @@ class ResolvedImage:
         return self.profile.digest
 
 
-def _image_not_found(reference: str) -> BuildError:
-    return BuildError(
-        f"No build container on this host answers to {reference}.",
-        hint=(
-            "the local build compiles in the MCUHome builder image and pulls "
-            "nothing — pull or build the image (docker pull "
-            f"{container.IMAGE}), or point --container-image at one. --build-mode local-dev "
-            "needs no image."
-        ),
-    )
-
-
 def image_zephyr_version(profile: lb.ImageProfile) -> str:
     """Which Zephyr release *profile* carries, by its own label (§2.1).
 
@@ -170,7 +158,7 @@ def resolve_checked_image(
     seam = docker if docker is not None else lb.Docker(container.docker_program(env))
     profile = seam.inspect(reference)
     if profile is None:
-        raise _image_not_found(reference)
+        raise container.missing_image_refusal(container.docker_program(env), reference)
     offered = image_zephyr_version(profile)
     if not satisfies_line(offered, line=line):
         raise _line_unsatisfied(reference, offered, line)

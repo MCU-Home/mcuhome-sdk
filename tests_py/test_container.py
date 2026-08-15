@@ -296,9 +296,9 @@ def test_a_stopped_daemon_is_not_a_missing_docker() -> None:
 
 
 def test_a_missing_image_leads_with_the_pull_command() -> None:
-    """PO 2026-08-15: the pull is the fix for almost everyone, so it
-    comes first; alternatives are one line, and building the image from
-    source stays in the container README."""
+    """PO 2026-08-15: the pull is the fix for almost everyone, so it is
+    the whole hint apart from one pointer at the build command's help;
+    building the image from source stays in the container README."""
     with pytest.raises(BuildError) as caught:
         container.preflight(
             "docker",
@@ -307,14 +307,19 @@ def test_a_missing_image_leads_with_the_pull_command() -> None:
             runner=_Runner(0, 1),
         )
     assert caught.value.message == (
-        "The MCUHome builder image ghcr.io/mcu-home/build-container:x is not on this machine."
+        "The build container ghcr.io/mcu-home/build-container:x is missing on this host."
     )
     hint = caught.value.hint or ""
     assert "docker pull ghcr.io/mcu-home/build-container:x" in hint.splitlines()[1].strip()
-    assert "--container-image" in hint
     assert "mcuhome device build --help" in hint
     assert "docker build" not in hint
-    assert container.IMAGE_VAR in hint
+
+
+def test_the_default_image_missing_says_default() -> None:
+    """The everyday case reads as the everyday case, not as a reference."""
+    refusal = container.missing_image_refusal("docker", container.IMAGE)
+    assert refusal.message == "The default build container is missing on this host."
+    assert f"docker pull {container.IMAGE}" in (refusal.hint or "")
 
 
 def test_a_working_docker_with_the_image_says_nothing() -> None:
@@ -501,7 +506,7 @@ def test_the_plan_refuses_before_it_decides_anything_else(tmp_path) -> None:
             runner=_Runner(0, 1),
             jobs=2,
         )
-    assert "is not on this machine" in caught.value.message
+    assert "The default build container is missing on this host" in caught.value.message
     # Nothing was created for a build that was never going to happen.
     assert not (tmp_path / "cache").exists()
 

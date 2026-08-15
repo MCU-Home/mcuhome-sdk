@@ -57,6 +57,7 @@ __all__ = [
     "docker_program",
     "docker_run_command",
     "image_reference",
+    "missing_image_refusal",
     "mount_points",
     "plan_build",
     "preflight",
@@ -134,9 +135,8 @@ ZEPHYR_RELEASE = "4.4.0"
 #: qualify" — so this image satisfied no SDK release's constraint at all.
 IMAGE_REVISION = 8
 
-#: GitHub Container Registry under the MCUHome organization. The package
-#: is private while the repositories are; ``docker pull`` then needs a
-#: ``docker login ghcr.io`` with a token that can read packages.
+#: GitHub Container Registry under the MCUHome organization. Public
+#: since 2026-08-15 — ``docker pull`` works anonymously.
 IMAGE_REPOSITORY = "ghcr.io/mcu-home/build-container"
 
 #: ``zephyr-<line>-r<revision>``, and never ``latest``: a build
@@ -266,14 +266,26 @@ def _refuse_no_daemon(docker: str) -> BuildError:
     )
 
 
-def _refuse_missing_image(docker: str, reference: str) -> BuildError:
+def missing_image_refusal(docker: str, reference: str) -> BuildError:
+    """The one missing-image refusal, wherever the absence is noticed.
+
+    PO-worded (2026-08-15): what is missing, the pull command as the
+    fix, and one pointer at the build command's help for choosing a
+    different image or another build mode — nothing else. Both the
+    docker preflight and the image-resolution seam raise exactly this,
+    so the user reads one text however the build got there.
+    """
+    if reference == IMAGE:
+        message = "The default build container is missing on this host."
+    else:
+        message = f"The build container {reference} is missing on this host."
     return BuildError(
-        f"The MCUHome builder image {reference} is not on this machine.",
+        message,
         hint=(
-            "pull it once — it is published with every MCUHome release:\n"
+            "pull the image, then rerun the build:\n"
             f"    {docker} pull {reference}\n"
-            f"A different image: --container-image (or {IMAGE_VAR}); other build "
-            "modes: mcuhome device build --help."
+            "mcuhome device build --help shows how to select a different "
+            "container image or how to choose another build mode."
         ),
     )
 
@@ -303,7 +315,7 @@ def preflight(
     if status != 0:
         raise _refuse_no_daemon(docker)
     if runner([docker, "image", "inspect", reference], env) != 0:
-        raise _refuse_missing_image(docker, reference)
+        raise missing_image_refusal(docker, reference)
 
 
 # --------------------------------------------------------------------------
