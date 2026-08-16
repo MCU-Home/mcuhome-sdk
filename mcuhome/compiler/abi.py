@@ -241,7 +241,7 @@ This module reads no process state: ``argv`` arrives as an argument, and
 every path it touches comes out of the request document. The environment
 its **children** get is built here and passed to them, which is a
 different thing from reading one — and it is built from nothing, exactly
-as :func:`~mcuhome.compiler.container.container_environment` does for the other
+as the backend does for the other
 direction. That is what keeps this module off the exemption list of
 ``tests_py/test_userpaths.py``.
 """
@@ -1746,7 +1746,7 @@ class _Build:
         read out of the process (the module docstring) — by
         :func:`~mcuhome.compiler.workspace.build_environment`, which is the one
         definition of a Matter build environment in this package and is
-        also what :func:`~mcuhome.compiler.container.container_environment` reaches
+        also what a backend reaches
         for the other direction. It contributes the codegen shim on
         ``PYTHONPATH``, the two job caps that nothing inherits,
         ``ZEPHYR_BASE`` so the generated CMakeLists finds Zephyr and the

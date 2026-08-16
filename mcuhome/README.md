@@ -89,18 +89,21 @@ is a per-user secret and is passed on the command line
 
 Stage 5 runs in the **build-container image** (ADR 0007,
 [../containers/build-container/](../containers/build-container/README.md)): the host
-needs git and docker, the workspace is bind-mounted at its own absolute
-path, and the build runs as the calling user. `--build-mode local-dev` compiles in the
+needs git and docker, and the build runs as the calling user so nothing
+is left behind owned by root. `--build-mode local-dev` compiles in the
 west workspace `mcuhome.compiler` is installed in instead — the escape
 hatch for MCUHome's own contributors.
 
-The two paths meet at `BuildPlan`: a command plus an environment.
-`container.plan_build()` wraps `workspace.west_build_command()` in a
-`docker run` and reuses `run_build`, `build_images` and
-`parse_image_memory_report` unchanged, so there is one build
-orchestration and two ways of reaching a compiler. The container mounts
-the signing key as a single read-only file, because `imgtool` runs inside
-it and nothing in there should be able to write a key.
+The container path is `localbackend.py`, the backend half of the
+[build-container contract](../docs/design/build-container-contract.md):
+it starts one container per build, mounts what a session needs at the
+paths every build has — `/mcuhome/ctx`, `/mcuhome/work`,
+`/mcuhome/inv/<n>`, the compiler cache — and speaks the invocation ABI to
+the program inside. `container.py` is only what is decided *before* that:
+which image, which container program, and whether either is there at all.
+**The signing key never enters a container on this path**: the build
+delivers an unsigned image plus a report, and the signature is a
+host-side step afterwards (ADR 0015 decision 8).
 
 ## Three rules worth knowing before changing anything here
 
