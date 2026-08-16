@@ -374,7 +374,11 @@ jobs:
       # cache action has a path it can name. Without it
       # mcuhome.compiler.container falls back to $XDG_CACHE_HOME/$HOME, which is
       # the runner's business and not stable across runner images.
-      # `mcuhome device build` creates the directory and mounts it at /ccache.
+      # `mcuhome device build` creates the two role directories under it
+      # (cache-local, cache-shared) and mounts them where the image's own
+      # ccache configuration expects them. Caching the root therefore
+      # carries the written half; the read-only half stays empty here,
+      # because nobody fills it on a runner.
       MCUHOME_CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
       # Same topdir rule as the twister job: the workspace top directory
@@ -440,7 +444,7 @@ jobs:
 
       # Measured on the 2026-08-09 run: 72 GB total, 34 GB free after this
       # step. That is comfortable for what the job wants at once — the
-      # build container (the r7 image bakes a west workspace, Matter
+      # build container (the image bakes a west workspace, Matter
       # included), a restored compiler cache (up to the 5 GB
       # /etc/ccache.conf allows) and the build tree the container writes
       # back to the host. The host no longer clones connectedhomeip and
