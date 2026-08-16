@@ -544,6 +544,34 @@ class BootstrapDef:
 
 
 @dataclass(frozen=True)
+class BoardBusDef:
+    """One bus a board breaks out for peripherals to sit on.
+
+    ``hardware.buses.<id>.controller`` is a devicetree node label on the
+    board, and until this table existed it was knowledge that appeared
+    only in an error hint and an example comment — which is enough for a
+    person reading a message and not enough for a picker offering a
+    choice. A configuration naming a label the board does not have
+    fails in the generated overlay, at a point far from the line that
+    caused it.
+
+    Listed here, the same fact answers all three: the hint, the example
+    and the picker. It is deliberately **not** a validation whitelist —
+    a board's devicetree may carry labels MCUHome has never listed, and
+    refusing one of those would make this table a gate rather than a
+    catalogue.
+    """
+
+    #: Bus kind, matching :attr:`DriverDef.bus` — a peripheral may only
+    #: sit on a bus of the kind its driver speaks.
+    kind: str
+    #: The devicetree node label, verbatim: what ``controller:`` takes.
+    controller: str
+    #: What this is, for a human choosing between two of them.
+    description: str
+
+
+@dataclass(frozen=True)
 class BoardDef:
     """One Zephyr board target MCUHome can build for.
 
@@ -557,6 +585,9 @@ class BoardDef:
     name: str
     #: Transports the board can serve today.
     transports: frozenset[str]
+    #: Buses this board breaks out, in the order a picker should offer
+    #: them — the first of a kind is the ordinary choice.
+    buses: tuple[BoardBusDef, ...] = ()
     #: Board-scoped Kconfig, from the verified board configuration
     #: (samples/matter-node/boards/*.conf).
     kconfig: tuple[str, ...] = ()
@@ -919,6 +950,18 @@ BOARDS: dict[str, BoardDef] = {
     "nrf7002dk/nrf5340/cpuapp": BoardDef(
         name="nrf7002dk/nrf5340/cpuapp",
         transports=frozenset({"thread"}),
+        # The Arduino header's I2C, and only it. The same header breaks
+        # out `arduino_spi` (spi3), which is left off this list because
+        # the board ships it disabled and MCUHome has no SPI peripheral
+        # driver to put on it: a row here is a bus somebody can actually
+        # attach a supported part to, not an inventory of the silicon.
+        buses=(
+            BoardBusDef(
+                kind="i2c",
+                controller="arduino_i2c",
+                description="Arduino header I2C (SDA/SCL on the shield connector)",
+            ),
+        ),
         # The last four are what the entropy redirection in the overlay
         # costs. MCUHOME_ENTROPY_IPC cannot select them itself — its own
         # Kconfig explains why MBEDTLS_PSA_CRYPTO_C in particular would

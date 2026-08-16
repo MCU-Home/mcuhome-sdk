@@ -61,6 +61,22 @@ def test_every_board_is_exported_with_its_update_scheme() -> None:
         assert "mcuboot" in labels and "storage" in labels
 
 
+def test_a_board_says_which_buses_a_peripheral_can_sit_on() -> None:
+    """The fact a picker needs, as data rather than as an error hint.
+
+    ``hardware.buses.<id>.controller`` takes a devicetree node label, and
+    a consumer offering that choice cannot invent the list. Every bus
+    named here is one a supported driver could actually be attached to,
+    so the kinds are a subset of the kinds the drivers speak.
+    """
+    kinds = {driver.bus for driver in registry.DRIVERS.values() if driver.bus is not None}
+    for board in export.registry_data()["boards"]:
+        assert board["buses"], board["name"]
+        for bus in board["buses"]:
+            assert bus["kind"] in kinds, (board["name"], bus)
+            assert bus["controller"] and bus["description"]
+
+
 def test_every_board_carries_its_bootstrap_instructions() -> None:
     """ADR 0016: the bootstrap path is registry data, instructions included."""
     for board in export.registry_data()["boards"]:

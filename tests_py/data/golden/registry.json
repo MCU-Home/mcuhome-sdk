@@ -8,6 +8,13 @@
       "transports": [
         "thread"
       ],
+      "buses": [
+        {
+          "kind": "i2c",
+          "controller": "arduino_i2c",
+          "description": "Arduino header I2C (SDA/SCL on the shield connector)"
+        }
+      ],
       "update_scheme": {
         "board_class": "A",
         "mcuboot_mode": "swap-using-offset",
