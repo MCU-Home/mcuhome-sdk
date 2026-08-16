@@ -103,9 +103,10 @@ variable at CMake configure time; unset or empty keeps the upstream
 default. The builder sets it to the same value as its own `-o=-jN` job
 cap — auto-detected from CPU count and available RAM, `--jobs`/
 `MCUHOME_JOBS` override it (`mcuhome.compiler.workspace.resolve_jobs`,
-`mcuhome.compiler.workspace.auto_jobs`) — in both the local-dev environment
-(`mcuhome/compiler/workspace.py:build_environment`) and the container
-environment (`mcuhome/compiler/container.py:container_environment`).
+`mcuhome.compiler.workspace.auto_jobs`) — in both the local-dev environment and the
+container's, which are one function
+(`mcuhome/compiler/workspace.py:build_environment`) called from the
+invocation ABI on the container side.
 
 CHIP codegen also needs a build prerequisite outside these patches: its
 release tarball is missing the `python_path` helper its codegen scripts

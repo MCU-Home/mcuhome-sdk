@@ -24,17 +24,10 @@ from pathlib import Path
 
 import pytest
 
-from mcuhome.compiler import container, workspace
-from mcuhome.model import containerpaths
+from mcuhome.compiler import container
 from mcuhome.model.errors import BuildError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _fake_workspace(root: Path) -> Path:
-    (root / ".west").mkdir(parents=True)
-    (root / ".west" / "config").write_text("[manifest]\npath = mcuhome\n", "utf-8")
-    return root
 
 
 class _Runner:
@@ -52,23 +45,6 @@ class _Runner:
     def __call__(self, command: Sequence[str], env: dict[str, str]) -> int | None:
         self.commands.append(list(command))
         return self.answers.pop(0) if self.answers else 0
-
-
-def _plan(tmp_path: Path, monkeypatch, **kwargs):
-    top = _fake_workspace(tmp_path / "ws")
-    environment = {container.CCACHE_DIR_VAR: str(tmp_path / "cache")}
-    environment.update(kwargs.pop("env", {}))
-    kwargs.setdefault("jobs", 2)
-    return top, container.plan_build(
-        out_dir=kwargs.pop("out_dir", top / "build" / "node"),
-        app_subdir="app",
-        board=kwargs.pop("board", "nrf7002dk/nrf5340/cpuapp"),
-        env=environment,
-        module_dir=top / "mcuhome",
-        cwd=top,
-        runner=_Runner(0, 0),
-        **kwargs,
-    )
 
 
 # --------------------------------------------------------------------------
@@ -149,142 +125,6 @@ def test_a_tilde_in_the_cache_path_is_a_home_directory(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
-# What the container sees
-# --------------------------------------------------------------------------
-
-
-def test_the_workspace_is_the_only_mount_it_normally_needs(tmp_path) -> None:
-    top = tmp_path / "ws"
-    (top / "build" / "node").mkdir(parents=True)
-    assert container.mount_points(top, top / "build" / "node", top / "mcuhome") == [top]
-
-
-def test_a_build_directory_somewhere_else_is_mounted_too(tmp_path) -> None:
-    top = tmp_path / "ws"
-    top.mkdir()
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    assert container.mount_points(top, elsewhere) == [top, elsewhere]
-
-
-def test_the_same_outside_directory_is_not_mounted_twice(tmp_path) -> None:
-    top = tmp_path / "ws"
-    top.mkdir()
-    elsewhere = tmp_path / "elsewhere"
-    (elsewhere / "deeper").mkdir(parents=True)
-    mounts = container.mount_points(top, elsewhere, elsewhere / "deeper", elsewhere)
-    assert mounts == [top, elsewhere]
-
-
-def test_the_container_environment_is_composed_not_inherited(tmp_path) -> None:
-    """The point of a build container is independence from the shell.
-
-    Only what depends on where the workspace is gets passed in; the SDK,
-    the toolchain variant and the tool paths belong to the image.
-    """
-    env = container.container_environment(
-        topdir=tmp_path / "ws", pyshim_dir=tmp_path / "shim", jobs=2
-    )
-    assert env == {
-        "PYTHONPATH": str(tmp_path / "shim"),
-        "ZEPHYR_BASE": str(tmp_path / "ws" / "zephyr"),
-        "HOME": container.CONTAINER_HOME,
-        workspace.CHIP_JOBS_VAR: "2",
-        workspace.CMAKE_JOBS_VAR: "2",
-    }
-
-
-def test_the_container_environment_says_nothing_about_ccache(tmp_path) -> None:
-    """The image configures the cache; a variable here would override it.
-
-    Both roles are set in /etc/ccache.conf (containers/build-container/
-    Dockerfile), and ccache lets the environment win over that file — so
-    a CCACHE_DIR here would quietly move the cache out from under the
-    configuration that is meant to decide where it is.
-    """
-    env = container.container_environment(
-        topdir=tmp_path / "ws", pyshim_dir=tmp_path / "shim", jobs=2
-    )
-    assert not [name for name in env if name.startswith("CCACHE")]
-
-
-def test_the_container_environment_caps_the_chip_gn_sub_build_too(tmp_path) -> None:
-    """The inner CHIP GN/ninja build otherwise ignores the outer job cap.
-
-    (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
-    config/common/cmake/chip_gn.cmake.)
-    """
-    env = container.container_environment(
-        topdir=tmp_path / "ws", pyshim_dir=tmp_path / "shim", jobs=2
-    )
-    assert env[workspace.CHIP_JOBS_VAR] == "2"
-
-
-def test_a_different_jobs_value_reaches_the_chip_gn_sub_build_too(tmp_path) -> None:
-    env = container.container_environment(
-        topdir=tmp_path / "ws", pyshim_dir=tmp_path / "shim", jobs=4
-    )
-    assert env[workspace.CHIP_JOBS_VAR] == "4"
-
-
-def test_the_run_command_mounts_paths_onto_themselves(tmp_path) -> None:
-    """Identity mounts: a build tree is full of absolute paths.
-
-    Mounting the workspace at /workspace would make every path in the
-    CMake cache a lie the moment anyone looked at the build directory
-    from the host — or ran the same build with --build-mode local-dev.
-    """
-    command = container.docker_run_command(
-        docker="docker",
-        image="img:tag",
-        mounts=[Path("/ws")],
-        ccache_dir=Path("/home/u/.cache/mcuhome/ccache"),
-        workdir=Path("/ws"),
-        environment={"B": "2", "A": "1"},
-        command=["west", "build"],
-        user="1000:1000",
-    )
-    assert command == [
-        "docker",
-        "run",
-        "--rm",
-        "--init",
-        "--network=none",
-        "--user",
-        "1000:1000",
-        "--volume",
-        "/ws:/ws",
-        "--volume",
-        f"/home/u/.cache/mcuhome/ccache/cache-local:{containerpaths.CCACHE_LOCAL}",
-        "--volume",
-        f"/home/u/.cache/mcuhome/ccache/cache-shared:{containerpaths.CCACHE_SHARED}:ro",
-        "--workdir",
-        "/ws",
-        "--env",
-        "A=1",
-        "--env",
-        "B=2",
-        "img:tag",
-        "west",
-        "build",
-    ]
-
-
-def test_a_platform_without_uids_simply_does_not_map_one(tmp_path) -> None:
-    command = container.docker_run_command(
-        docker="docker",
-        image="img:tag",
-        mounts=[Path("/ws")],
-        ccache_dir=Path("/c"),
-        workdir=Path("/ws"),
-        environment={},
-        command=["true"],
-        user=None,
-    )
-    assert "--user" not in command
-
-
-# --------------------------------------------------------------------------
 # The three ways it refuses
 # --------------------------------------------------------------------------
 
@@ -346,14 +186,12 @@ def test_a_working_docker_with_the_image_says_nothing() -> None:
     ]
 
 
-def test_the_process_runner_is_resolved_at_call_time(tmp_path, monkeypatch) -> None:
-    """Not a style point — a default bound in the signature is a real build.
+def test_the_process_runner_is_resolved_at_call_time(monkeypatch) -> None:
+    """The one impure thing is replaceable, and replacing it works.
 
-    ``plan_build`` looks its runner up when it is called, so that
-    replacing ``container._run_quiet`` actually replaces it. A default
-    evaluated at definition time cannot be monkeypatched, and a test that
-    believes it stubbed docker out but did not is a test that starts a
-    Matter build on whoever ran pytest. That happened once.
+    A default bound in a signature cannot be monkeypatched, and a test
+    that thinks it stubbed docker out but did not is a test that starts a
+    real container.
     """
     calls: list[list[str]] = []
 
@@ -362,16 +200,7 @@ def test_the_process_runner_is_resolved_at_call_time(tmp_path, monkeypatch) -> N
         return 0
 
     monkeypatch.setattr(container, "_run_quiet", fake)
-    top = _fake_workspace(tmp_path / "ws")
-    container.plan_build(
-        out_dir=top / "build" / "node",
-        app_subdir="app",
-        board="x",
-        env={container.CCACHE_DIR_VAR: str(tmp_path / "cache")},
-        module_dir=top / "mcuhome",
-        cwd=top,
-        jobs=2,
-    )
+    container.preflight("docker", "img:tag", env={})
     assert [command[1] for command in calls] == ["version", "image"]
 
 
@@ -379,192 +208,3 @@ def test_the_swapped_program_is_the_one_that_gets_asked() -> None:
     runner = _Runner(0, 0)
     container.preflight("podman", "img:tag", env={}, runner=runner)
     assert all(command[0] == "podman" for command in runner.commands)
-
-
-# --------------------------------------------------------------------------
-# The plan
-# --------------------------------------------------------------------------
-
-
-def test_the_plan_is_a_west_build_inside_a_docker_run(tmp_path, monkeypatch) -> None:
-    top, plan = _plan(tmp_path, monkeypatch)
-
-    assert plan.topdir == top
-    assert plan.app_dir == top / "build" / "node" / "app"
-    assert plan.build_dir == top / "build" / "node" / "build"
-    assert plan.image == container.IMAGE
-    assert plan.command[:4] == ["docker", "run", "--rm", "--init"]
-    # The inner half is the local-dev path's command, character for character:
-    # one build invocation, two ways of reaching a compiler.
-    inner = plan.command[plan.command.index(container.IMAGE) + 1 :]
-    assert inner == workspace.west_build_command(
-        app_dir=plan.app_dir,
-        build_dir=plan.build_dir,
-        board="nrf7002dk/nrf5340/cpuapp",
-        snippets=(),
-        jobs=2,
-    )
-
-
-def test_the_plan_caps_the_chip_gn_sub_build_in_the_container_too(tmp_path, monkeypatch) -> None:
-    """Same OOM risk as the local-dev path, one process tree down.
-
-    (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
-    config/common/cmake/chip_gn.cmake.)
-    """
-    _, plan = _plan(tmp_path, monkeypatch)
-    assert f"{workspace.CHIP_JOBS_VAR}=2" in plan.command
-
-
-def test_a_resolved_job_count_reaches_both_the_outer_and_inner_ninja(tmp_path, monkeypatch) -> None:
-    """Both the outer west build and CHIP's inner GN sub-build agree.
-
-    The host resolves jobs once; the container sees that same number for
-    both — not a figure guessed at from inside the container, which may
-    see a cgroup-limited view of the host's memory.
-    """
-    _, plan = _plan(tmp_path, monkeypatch, jobs=6)
-    assert "-o=-j6" in plan.command
-    assert f"{workspace.CHIP_JOBS_VAR}=6" in plan.command
-
-
-def test_the_plan_needs_no_toolchain_on_the_host(tmp_path, monkeypatch) -> None:
-    """The whole promise of ADR 0007, as an assertion.
-
-    An empty PATH is what a user who installed nothing but docker has.
-    The local-dev path refuses that by design; this one must not notice.
-    """
-    _, plan = _plan(tmp_path, monkeypatch, env={"PATH": ""})
-    assert plan.image == container.IMAGE
-
-
-def test_the_plan_mounts_the_workspace_and_the_cache(tmp_path, monkeypatch) -> None:
-    top, plan = _plan(tmp_path, monkeypatch)
-    volumes = [
-        plan.command[index + 1] for index, item in enumerate(plan.command) if item == "--volume"
-    ]
-    assert f"{top}:{top}" in volumes
-    assert f"{tmp_path / 'cache' / 'cache-local'}:{containerpaths.CCACHE_LOCAL}" in volumes
-    assert f"{tmp_path / 'cache' / 'cache-shared'}:{containerpaths.CCACHE_SHARED}:ro" in volumes
-
-
-def test_the_cache_directory_exists_before_docker_could_create_it(tmp_path, monkeypatch) -> None:
-    """Docker would create the bind-mount source owned by root.
-
-    Which is the one thing the UID mapping above exists to prevent, so
-    the builder makes the directory itself, first.
-    """
-    cache = tmp_path / "cache"
-    assert not cache.exists()
-    _plan(tmp_path, monkeypatch)
-    assert (cache / "cache-local").is_dir()
-    assert (cache / "cache-shared").is_dir()
-
-
-def test_the_plan_can_be_pointed_at_another_image(tmp_path, monkeypatch) -> None:
-    _, plan = _plan(tmp_path, monkeypatch, image="localhost/builder:wip")
-    assert plan.image == "localhost/builder:wip"
-    assert "localhost/builder:wip" in plan.command
-
-
-def test_the_signing_key_is_mounted_read_only_and_by_itself(tmp_path, monkeypatch) -> None:
-    """imgtool runs inside the container, so the key has to be reachable.
-
-    One file, not its directory, and read-only: nothing in a build
-    container has any business writing a signing key, and the rest of
-    ~/.config is none of its business either (ADR 0015 decision 8).
-    """
-    key = tmp_path / "cfg" / "mcuhome" / "signing.key"
-    key.parent.mkdir(parents=True)
-    key.write_text("", "utf-8")
-    _, plan = _plan(tmp_path, monkeypatch, signing_key=key)
-
-    volumes = [
-        plan.command[index + 1] for index, item in enumerate(plan.command) if item == "--volume"
-    ]
-    assert f"{key}:{key}:ro" in volumes
-    assert f"{key.parent}:{key.parent}" not in volumes
-    assert f'-D{workspace.SIGNING_KEY_OPTION}="{key}"' in plan.command
-
-
-def test_without_a_key_nothing_extra_is_mounted(tmp_path, monkeypatch) -> None:
-    _, plan = _plan(tmp_path, monkeypatch)
-    read_only = [item for item in plan.command if item.endswith(":ro")]
-    assert read_only == [f"{tmp_path / 'cache' / 'cache-shared'}:{containerpaths.CCACHE_SHARED}:ro"]
-
-
-def test_the_inner_command_is_a_sysbuild_build(tmp_path, monkeypatch) -> None:
-    """The container path builds exactly what the local-dev path builds."""
-    _, plan = _plan(tmp_path, monkeypatch, snippets=("matter",), bootloader_snippets=("boot-mode",))
-    assert "--sysbuild" in plan.command
-    assert "-Dapp_SNIPPET=matter" in plan.command
-    assert "-Dmcuboot_SNIPPET=boot-mode" in plan.command
-
-
-def test_a_build_directory_outside_the_workspace_is_still_visible(tmp_path, monkeypatch) -> None:
-    outside = tmp_path / "elsewhere" / "node"
-    outside.mkdir(parents=True)
-    _, plan = _plan(tmp_path, monkeypatch, out_dir=outside)
-    volumes = [
-        plan.command[index + 1] for index, item in enumerate(plan.command) if item == "--volume"
-    ]
-    assert f"{outside}:{outside}" in volumes
-
-
-def test_the_plan_refuses_before_it_decides_anything_else(tmp_path) -> None:
-    top = _fake_workspace(tmp_path / "ws")
-    with pytest.raises(BuildError) as caught:
-        container.plan_build(
-            out_dir=top / "build" / "node",
-            app_subdir="app",
-            board="x",
-            env={container.CCACHE_DIR_VAR: str(tmp_path / "cache")},
-            module_dir=top / "mcuhome",
-            cwd=top,
-            runner=_Runner(0, 1),
-            jobs=2,
-        )
-    assert "The default build container is missing on this host" in caught.value.message
-    # Nothing was created for a build that was never going to happen.
-    assert not (tmp_path / "cache").exists()
-
-
-def test_the_build_gets_no_network() -> None:
-    """Contract §9 makes the isolation the backend's obligation.
-
-    "Everything a build needs is mounted or in the image" cannot be read
-    off a build log: a step that fetches something succeeds on the
-    machine that has the network and fails on the one that does not.
-    Three undeclared build inputs survived until 2026-08-09 for exactly
-    that reason. Taking the network away is what turns the sentence into
-    a property the build either has or does not.
-    """
-    command = container.docker_run_command(
-        docker="docker",
-        image="img:tag",
-        mounts=[Path("/ws")],
-        ccache_dir=Path("/c"),
-        workdir=Path("/ws"),
-        environment={},
-        command=["west", "build"],
-    )
-    assert "--network=none" in command
-
-
-def test_the_network_can_be_restored_for_a_bisect() -> None:
-    """The escape hatch exists to find what reaches out, not to build with.
-
-    A build that needs it is a build with an undeclared input, so the
-    variable's only legitimate use is finding out which one.
-    """
-    command = container.docker_run_command(
-        docker="docker",
-        image="img:tag",
-        mounts=[Path("/ws")],
-        ccache_dir=Path("/c"),
-        workdir=Path("/ws"),
-        environment={},
-        command=["west", "build"],
-        network=True,
-    )
-    assert not any(argument.startswith("--network") for argument in command)

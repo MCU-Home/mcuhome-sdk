@@ -88,7 +88,7 @@ either read a secret or create one outside a temporary directory.
 **No build ever runs here, and neither does docker.** `test_workspace.py`
 and `test_container.py` (plus the `build` tests in the cli repository)
 cover everything stage 5 decides *before* the compiler starts and mock
-the subprocess itself — `container.plan_build()` takes its process
+the subprocess itself — `container.preflight()` takes its process
 runner as an argument for exactly that reason, and an autouse fixture in
 `conftest.py` makes the real one raise, so a test that forgets to stub
 stage 5 fails instead of starting a Matter build. Compiling a Matter node takes
