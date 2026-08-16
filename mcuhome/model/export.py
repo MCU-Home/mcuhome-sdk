@@ -102,10 +102,17 @@ def _bootstrap(bootstrap: registry.BootstrapDef) -> dict[str, Any]:
     }
 
 
+def _bus(bus: registry.BoardBusDef) -> dict[str, Any]:
+    return {"kind": bus.kind, "controller": bus.controller, "description": bus.description}
+
+
 def _board(board: registry.BoardDef) -> dict[str, Any]:
     return {
         "name": board.name,
         "transports": sorted(board.transports),
+        # Declaration order, not sorted: the first bus of a kind is the
+        # ordinary choice, and sorting would throw that away.
+        "buses": [_bus(bus) for bus in board.buses],
         "update_scheme": None
         if board.update_scheme is None
         else _update_scheme(board.update_scheme),
