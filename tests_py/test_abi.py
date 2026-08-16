@@ -1553,7 +1553,12 @@ def test_the_command_and_the_environment_a_build_would_run(build: BuildSetup) ->
     assert plan.env["ZEPHYR_BASE"] == str(build.workspace_dir / "zephyr")
     assert plan.env["TMPDIR"] == str(build.tmp)
     assert plan.env["PYTHONPATH"] == str(build.sdk / "scripts" / "pyshim")
-    assert plan.env["CCACHE_BASEDIR"] == str(build.workspace_dir)
+    # Nothing about ccache: the build environment configures both of its
+    # roles itself, and a variable here would override that file. Nor
+    # CCACHE_BASEDIR — with -g on every Zephyr compile, ccache hashes the
+    # working directory anyway, so normalizing bought nothing and changed
+    # the paths the compiler recorded.
+    assert not [name for name in plan.env if name.startswith("CCACHE")]
     # West's first build writes its zephyr.base cache into the local
     # config; the workspace is a frozen input, so west reads and writes a
     # copy in `work` instead — same content, writable owner.
@@ -2192,6 +2197,17 @@ def test_a_read_only_shared_cache_is_a_secondary_one(build: BuildSetup) -> None:
     assert env["CCACHE_DIR"] == str(build.work / abi.WORK_CCACHE)
     assert env["CCACHE_REMOTE_STORAGE"] == f"file:{shared}|read-only"
     assert list(shared.iterdir()) == []
+
+
+def test_an_absent_cache_is_left_to_the_build_environment(build: BuildSetup) -> None:
+    """§10: "any cache is the program's own and dies with the session".
+
+    Which is what happens when nothing is mounted on the cache the build
+    environment configures — and the backends MCUHome ships name no cache
+    at all, precisely so that the mount is the whole interface.
+    """
+    assert build.run() == abi.EXIT_SUCCESS
+    assert not [name for name in build.plans[0].env if name.startswith("CCACHE")]
 
 
 def test_a_writable_shared_cache_may_be_the_primary_one(build: BuildSetup) -> None:

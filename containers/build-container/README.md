@@ -6,7 +6,7 @@ CI and the Home Assistant add-on all compile in this image, which is what
 makes "works on my machine" and "passes in CI" the same statement.
 
 ```sh
-docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8   # or build it, below
+docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9   # or build it, below
 mcuhome device build <device>                                 # uses it by default
 ```
 
@@ -183,7 +183,7 @@ image (ADR 0020 decision 8).
 ```sh
 # from the repository ROOT — the context is the repository, not this
 # directory, because west.yml and patches/ are image inputs
-docker build -t ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8 \
+docker build -t ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9 \
     -f containers/build-container/Dockerfile .
 ```
 
@@ -235,7 +235,7 @@ build with `--build-mode local --container-image …`, for a whole shell with
 Inspecting what a given image actually carries needs no build:
 
 ```sh
-docker run --rm ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8 \
+docker run --rm ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9 \
     cat /mcuhome/workspace.json
 ```
 
@@ -248,13 +248,16 @@ prints it before it runs. In short:
 - `--user <your uid>:<your gid>` — nothing is left behind owned by root.
 - the workspace mounted onto itself, and the build directory too when it
   lives somewhere else.
-- the ccache bind-mounted from `~/.cache/mcuhome/ccache`
-  (`MCUHOME_CCACHE_DIR` moves it), so it survives the container. A
-  directory rather than a named volume, because a fresh named volume is
-  root-owned and a container running as you cannot write to it.
+- the two ccache directories bind-mounted from `~/.cache/mcuhome/ccache`
+  (`MCUHOME_CCACHE_DIR` moves it), so the cache survives the container.
+  Host directories rather than named volumes: a fresh named volume is
+  root-owned and a container running as you cannot write to it, the
+  shared one is meant to be filled from outside, and both have to be
+  inspectable when docker is not running at all.
 - an environment that is composed, not inherited: only `ZEPHYR_BASE`,
-  `PYTHONPATH`, `HOME` and the ccache settings, all of which depend on
-  where the workspace is. Everything else belongs to the image.
+  `PYTHONPATH` and `HOME`, all of which depend on where the workspace
+  is. Everything else belongs to the image — the ccache settings
+  included, which is why no `CCACHE_*` variable is passed in.
 
 ## ccache
 
@@ -274,7 +277,33 @@ through it:
 
 `-DUSE_CCACHE=0` (Zephyr's own switch) turns off both.
 
-The image's `/etc/ccache.conf` carries one non-obvious line,
+### The two cache directories
+
+`/etc/ccache.conf` configures both of ccache's roles, and a build is
+never told about either — what happens is decided entirely by what the
+caller mounts:
+
+| path in the image | role | mounted by the builder from |
+|---|---|---|
+| `/ccache/cache-local` | the cache proper: read and written | `~/.cache/mcuhome/ccache/cache-local` |
+| `/ccache/cache-shared` | read-only secondary store | `~/.cache/mcuhome/ccache/cache-shared` |
+
+Mount nothing and the cache lives in the container's own layer and dies
+with it. Mount a directory on `cache-local` and it survives, which is
+what makes a second build of the same device fast. `cache-shared` is
+empty until somebody fills it — from another machine, from a build
+server, by hand — and ccache copies what it finds there into the local
+cache, so warming happens by itself. Both are mode 1777 in the image,
+because the container runs as a UID this image cannot know.
+
+Two settings are deliberately left at their defaults, and both matter:
+there is **no `base_dir`** and `hash_dir` stays **on**. Every session is
+mounted at the same paths, so there is nothing to normalize — and with
+`-g` on every Zephyr compile, an object served from a cache filled under
+`base_dir` would carry another build's directory in its debug
+information.
+
+`/etc/ccache.conf` also carries one non-obvious line,
 `ignore_options = -specs=*`, without which **a Zephyr build caches
 nothing at all**: `-specs=picolibc.specs` is a bare file name that the
 toolchain resolves and ccache does not, so ccache fails to stat it and
@@ -283,10 +312,11 @@ says the same thing at more length, including why excluding it from the
 hash is safe.
 
 ```sh
-# what the cache is doing, with the same mount the builder uses
+# what the cache is doing, with the same mounts the builder uses
 docker run --rm --user "$(id -u):$(id -g)" \
-    --volume ~/.cache/mcuhome/ccache:/ccache \
-    ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8 ccache -s
+    --volume ~/.cache/mcuhome/ccache/cache-local:/ccache/cache-local \
+    --volume ~/.cache/mcuhome/ccache/cache-shared:/ccache/cache-shared:ro \
+    ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9 ccache -s
 ```
 
 ## Bumping Zephyr

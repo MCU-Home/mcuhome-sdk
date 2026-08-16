@@ -1780,13 +1780,29 @@ class _Build:
         :func:`~mcuhome.compiler.workspace.resolve_jobs` and its auto-detection stay
         on the host side of the contract and are never called here.
 
-        The cache follows §10 exactly. A ``writable: true`` shared cache
-        "MAY be used as the primary cache"; a ``writable: false`` one
-        "MUST be treated as a read-only secondary cache, with its own
-        primary cache in ``work`` or ``tmp``", which is what the two
-        variables below say to ccache; and an absent one leaves the
-        program with a cache of its own that dies with the session.
+        The cache follows §10 exactly **when the request names one**. A
+        ``writable: true`` shared cache "MAY be used as the primary
+        cache"; a ``writable: false`` one "MUST be treated as a read-only
+        secondary cache, with its own primary cache in ``work`` or
+        ``tmp``", which is what the two variables below say to ccache.
         ``writable`` is read and never probed (§4.1).
+
+        When the request names **none** — which is the case for every
+        backend MCUHome ships — this says nothing about ccache at all,
+        and that is deliberate rather than an omission. The build
+        environment configures both of ccache's roles itself (this
+        image's ``/etc/ccache.conf``: a writable cache, and a read-only
+        secondary), an environment variable set here would *override*
+        that file rather than agree with it, and what actually lives at
+        those two paths is the backend's to decide by mounting or not
+        mounting. §10's "any cache is the program's own and dies with the
+        session" describes exactly what happens with nothing mounted.
+
+        ``CCACHE_BASEDIR`` is set by nobody, here or anywhere. It
+        normalizes absolute paths below it into paths relative to the
+        working directory, and every Zephyr compile carries ``-g``, which
+        makes ccache hash the working directory regardless — so it
+        changed the paths the compiler recorded and bought no hit for it.
         """
         home = self.work_dir / WORK_HOME
         home.mkdir(parents=True, exist_ok=True)
@@ -1832,17 +1848,17 @@ class _Build:
         env["WEST_CONFIG_LOCAL"] = str(west_config)
         env["XDG_CACHE_HOME"] = str(cache_home)
         cache = self.document.get("ccache")
-        shared = cache.get("path") if isinstance(cache, dict) else None
-        if isinstance(cache, dict) and cache.get("writable") is True:
-            env["CCACHE_DIR"] = str(shared)
-        else:
-            env["CCACHE_DIR"] = str(self.work_dir / WORK_CCACHE)
-            if isinstance(shared, str):
-                # ccache >= 4.8 spells the secondary store this way; the
-                # `|read-only` attribute is what makes the MUST above true
-                # rather than merely intended.
-                env["CCACHE_REMOTE_STORAGE"] = f"file:{shared}|read-only"
-        env["CCACHE_BASEDIR"] = str(topdir)
+        if isinstance(cache, dict):
+            shared = cache.get("path")
+            if cache.get("writable") is True:
+                env["CCACHE_DIR"] = str(shared)
+            else:
+                env["CCACHE_DIR"] = str(self.work_dir / WORK_CCACHE)
+                if isinstance(shared, str):
+                    # ccache >= 4.8 spells the secondary store this way; the
+                    # `|read-only` attribute is what makes the MUST above true
+                    # rather than merely intended.
+                    env["CCACHE_REMOTE_STORAGE"] = f"file:{shared}|read-only"
         try:
             workspace.require_tools(env)
         except BuildError as unusable:

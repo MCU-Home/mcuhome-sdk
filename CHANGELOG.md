@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `mcuhome.model.containerpaths`: the paths a session's directories have
+  *inside* a build container, chosen once for every session on every
+  machine. Build-container contract §4 leaves mount points to the
+  backend and forbids a program from depending on one; both container
+  backends now use the same ones, and the program still reads them out
+  of the request document.
+
+### Changed
+
+- Build-container image r9: ccache is configured by the image, in both
+  of the roles ccache has — `/ccache/cache-local` written, and
+  `/ccache/cache-shared` read-only — and `CCACHE_DIR` leaves the
+  environment, because a variable overrides the file that decides this.
+  A backend now steers the cache by mounting and by nothing else.
+- The invocation ABI sets no `CCACHE_*` variable when the request
+  document names no cache, and none at all for `CCACHE_BASEDIR`: every
+  Zephyr compile carries `-g`, so ccache hashes the working directory
+  regardless, and the normalization only changed the paths the compiler
+  recorded.
+
+### Fixed
+
+- A build no longer starts with an empty compiler cache every time. The
+  cache lived in the session's `work` directory, which is wiped before
+  each build: a real build made 1318 cacheable compiles and took 2 of
+  them from the cache.
+
 ## [0.1.0.dev1] - 2026-08-16
 
 ### Added

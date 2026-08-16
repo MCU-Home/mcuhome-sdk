@@ -42,7 +42,7 @@ from pathlib import Path
 
 from mcuhome.compiler import container
 from mcuhome.compiler import localbackend as lb
-from mcuhome.model.errors import BuildError
+from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.toolchain import satisfies_line
 
 __all__ = [
@@ -165,6 +165,30 @@ def resolve_checked_image(
     return ResolvedImage(reference=reference, profile=profile)
 
 
+def _cache_root(env: dict[str, str], stated: Path | None) -> Path | None:
+    """Where this machine keeps its compiler cache, or ``None`` for nowhere.
+
+    The compiler cache belongs to the person building rather than to the
+    build directory: it holds the same objects for every device and every
+    project, and the working area it used to live in is wiped before each
+    build. A caller that resolved a location through the configuration
+    layers states it; otherwise the user's cache directory answers.
+
+    **A home directory nobody named is not a refusal here.** A cache is
+    an optimization, and a caller with no ``HOME`` — a service, a
+    container, a test — is entitled to a build that simply has no cache
+    and dies with its container. The refusal
+    :func:`~mcuhome.model.userpaths.home` raises is right where it was
+    written for, the signing key, and wrong for this.
+    """
+    if stated:
+        return Path(stated)
+    try:
+        return container.ccache_directory(env)
+    except ConfigError:
+        return None
+
+
 def run_locked_build(
     context_dir: Path,
     *,
@@ -174,6 +198,7 @@ def run_locked_build(
     env: dict[str, str],
     jobs: int = 1,
     mode: str = "clean",
+    ccache_dir: Path | None = None,
     on_line: lb.LineSink | None = None,
     docker: lb.Docker | None = None,
 ) -> LocalBuildResult:
@@ -196,7 +221,10 @@ def run_locked_build(
     seam = docker if docker is not None else lb.Docker(container.docker_program(env))
     backend = lb.LocalBackend(
         lb.BackendConfig(
-            sdk_sources=tuple(Path(source) for source in sdk_sources), jobs=jobs, image=image
+            sdk_sources=tuple(Path(source) for source in sdk_sources),
+            jobs=jobs,
+            image=image,
+            ccache_dir=_cache_root(env, ccache_dir),
         ),
         docker=seam,
     )

@@ -80,7 +80,7 @@ the MCUHome builder image
 versioned in lockstep with the pinned Zephyr release:
 
 ```sh
-docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8
+docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9
 ```
 
 Then build a device from its YAML description. The `mcuhome` command is
