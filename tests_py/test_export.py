@@ -29,7 +29,11 @@ VERSION_PLACEHOLDER = "0.1.0.dev0"
 
 
 def _stable(text: str) -> str:
-    return text.replace(f'"{__version__}"', f'"{VERSION_PLACEHOLDER}"')
+    # Not only the quoted form: a version stamped *inside* a description
+    # would slip past that and make a release turn a golden red for a
+    # reason unrelated to its content — which is what happened to the
+    # workbench's schema golden when 0.1.0.dev1 went out.
+    return text.replace(__version__, VERSION_PLACEHOLDER)
 
 
 # --------------------------------------------------------------------------
