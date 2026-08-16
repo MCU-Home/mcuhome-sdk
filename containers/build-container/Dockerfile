@@ -530,9 +530,37 @@ RUN git config --system --add safe.directory '/mcuhome/workspace/*'
 
 # ccache configuration belongs to the image, not to every invocation: the
 # system-wide file is what a bare `docker run <image> ccache -s` sees too,
-# which is how the cache is inspected. CCACHE_DIR is a bind mount the
-# runner supplies (mcuhome/compiler/container.py) so the cache outlives the
-# container.
+# which is how the cache is inspected.
+#
+# BOTH cache roles are configured here, statically, and a build never
+# learns about either from anywhere else. The backend steers by mounting
+# and by nothing else (mcuhome/model/containerpaths.py):
+#
+#   cache_dir      /ccache/cache-local    read AND written. Nothing
+#                                         mounted on it: the cache lives
+#                                         in the container's own layer and
+#                                         dies with it. A host directory
+#                                         mounted on it: the cache
+#                                         survives, and the next build
+#                                         starts warm.
+#   remote_storage /ccache/cache-shared   read only, always. What a host
+#                                         mounts here is a store somebody
+#                                         else filled — another machine,
+#                                         a build server, a colleague.
+#                                         Empty is the normal case and
+#                                         costs nothing. ccache copies
+#                                         what it finds into the local
+#                                         cache, so warming is automatic.
+#
+# Both are mode 1777 because the container runs as the calling user's UID
+# (see HOME below), which is not known when this image is built. This is
+# the fallback that keeps an unmounted cache working for any caller; a
+# mounted one carries its own owner from the host.
+#
+# There is deliberately no CCACHE_DIR in ENV: an environment variable
+# OVERRIDES this file (measured — `ccache --show-config` reports the
+# origin of every setting), so a leftover one would silently move the
+# cache out from under the configuration that is supposed to decide it.
 #
 #   compiler_check = content   the compilers here never change without the
 #                              image tag changing, and mtimes (the default
@@ -552,13 +580,24 @@ RUN git config --system --add safe.directory '/mcuhome/workspace/*'
 #                              toolchain is part of the image tag.
 #
 # `temporary_dir` is deliberately NOT set: ccache's default puts it inside
-# CCACHE_DIR, which is the bind mount — so the final rename of a cached
-# object stays on one filesystem, and the inode cache (which lives there)
-# actually works. Pointing it at the container's own /tmp costs a
+# the cache directory, which is the bind mount — so the final rename of a
+# cached object stays on one filesystem, and the inode cache (which lives
+# there) actually works. Pointing it at the container's own /tmp costs a
 # cross-device copy per object and silently disables that cache.
-RUN mkdir -p /ccache \
- && chmod 1777 /ccache \
+#
+# `hash_dir` is deliberately NOT set either, i.e. left ON. Every Zephyr
+# compile carries `-g -gdwarf-4`, and the object then contains the
+# directory it was compiled in, so ccache puts that directory in the key.
+# Turning it off is what a build with per-project paths would need, and
+# it is exactly what makes an object served from the cache carry a
+# FOREIGN project's directory in its debug information (measured). The
+# paths are the same in every container instead, so there is nothing to
+# turn off and nothing to normalize: no `base_dir` here either.
+RUN mkdir -p /ccache/cache-local /ccache/cache-shared \
+ && chmod 1777 /ccache /ccache/cache-local /ccache/cache-shared \
  && printf '%s\n' \
+        'cache_dir = /ccache/cache-local' \
+        'remote_storage = file:/ccache/cache-shared|read-only' \
         'max_size = 5.0G' \
         'compiler_check = content' \
         'ignore_options = -specs=*' \
@@ -575,8 +614,7 @@ ENV PATH=/opt/venv/bin:/opt/gn:/opt/zap:/usr/local/bin:/usr/bin:/bin \
     HOME=/tmp/mcuhome-home \
     ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
     ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-${ZEPHYR_SDK_VERSION} \
-    ZAP_INSTALL_PATH=/opt/zap \
-    CCACHE_DIR=/ccache
+    ZAP_INSTALL_PATH=/opt/zap
 
 # No ENTRYPOINT: the image is invoked with a full command line (`west
 # build …`, `west twister …`, `ccache -s`) by the builder, by CI and by

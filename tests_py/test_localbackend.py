@@ -21,7 +21,7 @@ import io
 import json
 import os
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -30,6 +30,7 @@ from conftest import lock_context, write_context_request
 
 from mcuhome.compiler import localbackend as lb
 from mcuhome.compiler.contextread import read_context_manifest
+from mcuhome.model import containerpaths
 from mcuhome.model.context import ContainerResolution, ContextRequest, SdkPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
@@ -37,7 +38,7 @@ from mcuhome.model.hashes import sha256_file
 DIGEST = "sha256:" + "1" * 64
 SDK_VERSION = "0.1.0"
 IMAGE = "ghcr.io/mcu-home/build-container"
-TAG = "zephyr-4.4.0-r8"
+TAG = "zephyr-4.4.0-r9"
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 ZEPHYR = "4.4"
 CONTAINER_ID = "c" * 64
@@ -261,6 +262,32 @@ class Seam:
         self.calls: list[list[str]] = []
         self.exec_request: dict[str, Any] | None = None
         self.describe_invoked = False
+        #: ``container target -> host source``, learned from the mounts of
+        #: the ``docker run`` that created the container. It is what makes
+        #: this seam a container rather than a rename: paths in the request
+        #: document are the container's, and the invocation reaches the
+        #: host files through the mounts, exactly as the real one does.
+        self.mounts: dict[PurePosixPath, Path] = {}
+
+    def _host(self, path: str) -> Path:
+        """*path*, as the host spells it — or unchanged if nothing mounts it."""
+        inside = PurePosixPath(path)
+        for target, source in self.mounts.items():
+            if inside == target:
+                return source
+            if target in inside.parents:
+                return source / inside.relative_to(target)
+        return Path(path)
+
+    def _host_view(self, value):
+        """The request document with every path mapped through the mounts."""
+        if isinstance(value, dict):
+            return {key: self._host_view(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._host_view(item) for item in value]
+        if isinstance(value, str) and value.startswith("/"):
+            return str(self._host(value))
+        return value
 
     def __call__(self, argv, on_line=None) -> lb.Completed:
         argv = list(argv)
@@ -278,11 +305,14 @@ class Seam:
             Path(request["result"]).write_text(describe_result_document(), "utf-8")
             return lb.Completed(0, "")
         if verb == "run" and "--detach" in argv:
+            for volume in mounts_of(argv):
+                source, target = volume.removesuffix(":ro").split(":")
+                self.mounts[PurePosixPath(target)] = Path(source)
             return lb.Completed(self.start_status, self.container_id + "\n")
         if verb == "exec":
-            request = json.loads(Path(argv[-1]).read_text("utf-8"))
+            request = json.loads(self._host(argv[-1]).read_text("utf-8"))
             self.exec_request = request
-            self.build(request)
+            self.build(self._host_view(request))
             return lb.Completed(self.exec_status, "compiling...\n")
         if verb == "rm":
             return lb.Completed(0, "")
@@ -297,6 +327,7 @@ def scenario(
     facts: str | None = None,
     patches: dict[str, str] | None = None,
     index_sha: str | None = None,
+    ccache_dir: Path | None = None,
     **seam_kwargs,
 ):
     """Build a source, a matching context, and a backend over a scripted seam.
@@ -315,7 +346,8 @@ def scenario(
         **seam_kwargs,
     )
     backend = lb.LocalBackend(
-        lb.BackendConfig(sdk_sources=(tmp_path / "src",), jobs=4), docker=lb.Docker(runner=seam)
+        lb.BackendConfig(sdk_sources=(tmp_path / "src",), jobs=4, ccache_dir=ccache_dir),
+        docker=lb.Docker(runner=seam),
     )
     return backend, context, seam
 
@@ -660,14 +692,16 @@ def test_the_mounts_are_piece_by_piece_and_never_wholesale(tmp_path) -> None:
     start = next(c for c in seam.calls if "--detach" in c)
     volumes = mounts_of(start)
     document = seam.exec_request
-    assert f"{context}:{context}:ro" in volumes  # context read-only
-    assert f"{document['work']}:{document['work']}" in volumes  # work writable
-    inv = str(Path(document["out"]).parent)
-    assert f"{inv}:{inv}" in volumes  # the invocation dir, mounted as itself
+    work_root = tmp_path / "work"
+    assert f"{context}:{containerpaths.CONTEXT}:ro" in volumes  # context read-only
+    assert f"{work_root / 'work'}:{containerpaths.WORK}" in volumes  # work writable
+    inv = PurePosixPath(document["out"]).parent
+    assert f"{work_root / 'inv'}:{inv}" in volumes  # the invocation directory
     sdk = document["trees"]["sdk"]["path"]
-    assert f"{sdk}:{sdk}:ro" in volumes  # the SDK, read-only (unpatched)
-    work_root = str(Path(document["work"]).parent)
+    assert any(volume.endswith(f":{sdk}:ro") for volume in volumes)  # the SDK, read-only
     assert f"{work_root}:{work_root}" not in volumes  # no wholesale mount
+    # Every target is the same string on every machine (containerpaths).
+    assert all(volume.split(":")[1].startswith(("/mcuhome/", "/ccache/")) for volume in volumes)
 
 
 def test_a_bad_session_echo_fails_the_judgment(tmp_path) -> None:
@@ -1246,3 +1280,157 @@ def test_the_safe_extractor_types_a_name_the_filesystem_rejects(tmp_path) -> Non
     with pytest.raises(BuildError) as caught:
         lb._safe_extract(spool, into=tmp_path / "out", quota_bytes=lb.SDK_MAX_BYTES)
     assert "cannot unpack" in caught.value.message
+
+
+# --------------------------------------------------------------------------
+# Static paths, and the compiler cache behind them
+# --------------------------------------------------------------------------
+
+
+def test_every_path_the_program_is_given_is_the_same_on_every_machine(tmp_path) -> None:
+    """The request document names container paths, not this machine's.
+
+    It is what makes the cache worth having — Zephyr puts three
+    ``-fmacro-prefix-map=<absolute path>`` options on every compile, so a
+    host path in here is a host path in every cache key — and it is why a
+    build cannot tell a local backend from a build server's.
+    """
+    backend, context, seam = scenario(
+        tmp_path, build=conforming, describe_static=describe_result_document()
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    document = seam.exec_request
+    assert document["context"] == str(containerpaths.CONTEXT)
+    assert document["work"] == str(containerpaths.WORK)
+    assert document["out"] == str(containerpaths.invocation("inv-1") / "out")
+    assert document["tmp"] == str(containerpaths.invocation("inv-1") / "tmp")
+    assert document["result"] == str(containerpaths.invocation("inv-1") / "result.json")
+    assert str(tmp_path) not in json.dumps(document)
+
+
+def test_the_invocation_is_numbered_like_a_sessions_first_step(tmp_path) -> None:
+    """One container, one invocation here — and the shape of a session's.
+
+    A session runs several invocations over its life (the steps of one
+    build), each with its own out, tmp and documents. This backend runs
+    the first and only one, and spells it the same way.
+    """
+    backend, context, seam = scenario(
+        tmp_path, build=conforming, describe_static=describe_result_document()
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert PurePosixPath(seam.exec_request["out"]).parent.name == "inv-1"
+    assert PurePosixPath(seam.exec_request["out"]).parent.parent == containerpaths.INVOCATIONS
+
+
+def test_both_cache_roles_are_mounted_and_only_one_is_writable(tmp_path) -> None:
+    """The image decides what ccache does; the backend decides what is there.
+
+    Writable local cache, read-only shared one, both at the paths
+    /etc/ccache.conf names — so nothing has to be said in the request
+    document and nothing has to be honoured by the program.
+    """
+    cache = tmp_path / "cache"
+    backend, context, seam = scenario(
+        tmp_path,
+        build=conforming,
+        describe_static=describe_result_document(),
+        ccache_dir=cache,
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    volumes = mounts_of(next(c for c in seam.calls if "--detach" in c))
+    assert f"{cache / 'cache-local'}:{containerpaths.CCACHE_LOCAL}" in volumes
+    assert f"{cache / 'cache-shared'}:{containerpaths.CCACHE_SHARED}:ro" in volumes
+    # Never mentioned to the program: §10's request field stays unused,
+    # because the image configures both roles statically.
+    assert "ccache" not in seam.exec_request
+
+
+def test_the_cache_directories_exist_before_docker_could_create_them(tmp_path) -> None:
+    """A missing bind-mount source is created by docker, owned by root."""
+    cache = tmp_path / "cache"
+    backend, context, _ = scenario(
+        tmp_path,
+        build=conforming,
+        describe_static=describe_result_document(),
+        ccache_dir=cache,
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert (cache / "cache-local").is_dir()
+    assert (cache / "cache-shared").is_dir()
+
+
+def test_without_a_cache_directory_nothing_is_mounted_for_it(tmp_path) -> None:
+    """A slow build, never a broken one: the cache then dies with the container."""
+    backend, context, seam = scenario(
+        tmp_path, build=conforming, describe_static=describe_result_document()
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    volumes = mounts_of(next(c for c in seam.calls if "--detach" in c))
+    assert not any("ccache" in volume or "/ccache" in volume for volume in volumes)
+
+
+def test_the_build_method_hands_the_backend_the_users_own_cache(tmp_path, monkeypatch) -> None:
+    """One cache per user, resolved from the environment it was given.
+
+    Not per project and not per build directory: its keys are content
+    addresses, so two projects share an entry exactly when the
+    compilation is the same one — and the work directory the cache used
+    to live in is wiped before every build.
+    """
+    from types import SimpleNamespace
+
+    from mcuhome.compiler import localbuild
+
+    captured: dict[str, lb.BackendConfig] = {}
+
+    class Stub:
+        def __init__(self, config, *, docker) -> None:
+            captured["config"] = config
+
+        def run(self, **kwargs) -> SimpleNamespace:
+            return SimpleNamespace(out=None)
+
+    monkeypatch.setattr(lb, "LocalBackend", Stub)
+    localbuild.run_locked_build(
+        tmp_path / "ctx",
+        image="img:tag",
+        sdk_sources=(),
+        work_root=tmp_path / "work",
+        env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
+        docker=lb.Docker(runner=lambda argv, on_line=None: lb.Completed(0, "")),
+    )
+    assert captured["config"].ccache_dir == tmp_path / "xdg" / "mcuhome" / "ccache"
+
+
+def test_a_caller_whose_environment_names_no_home_still_builds(tmp_path, monkeypatch) -> None:
+    """No home directory means no cache — never a refused build.
+
+    A service, a container or a test may run with no ``HOME`` at all, and
+    the refusal :func:`mcuhome.model.userpaths.home` raises was written
+    for the signing key, where guessing a directory would be wrong. A
+    compiler cache is an optimization: its absence costs time.
+    """
+    from types import SimpleNamespace
+
+    from mcuhome.compiler import localbuild
+
+    captured: dict[str, lb.BackendConfig] = {}
+
+    class Stub:
+        def __init__(self, config, *, docker) -> None:
+            captured["config"] = config
+
+        def run(self, **kwargs) -> SimpleNamespace:
+            return SimpleNamespace(out=None)
+
+    monkeypatch.setattr(lb, "LocalBackend", Stub)
+    localbuild.run_locked_build(
+        tmp_path / "ctx",
+        image="img:tag",
+        sdk_sources=(),
+        work_root=tmp_path / "work",
+        env={},
+        docker=lb.Docker(runner=lambda argv, on_line=None: lb.Completed(0, "")),
+    )
+    assert captured["config"].ccache_dir is None

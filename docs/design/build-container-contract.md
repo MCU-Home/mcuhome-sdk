@@ -627,6 +627,14 @@ paths are also wrong in the `container` profile, for the smaller reason
 that a fixed path is a promise about a filesystem the contract does not
 own.
 
+Both MCUHome backends of the `container` profile nevertheless choose the
+same paths for every session, and state them in the request document
+like any others (`mcuhome/model/containerpaths.py`). That is the
+convention this paragraph permits and not an exception to it: the
+program reads them where it reads every other path, and the conformance
+suite moves them as it moves everything else. §10.1 says why they are
+worth choosing.
+
 **A `trees` entry is the one thing a program may have a fixed path
 for**, and it may because a tree is a property of the *image* rather
 than of the session. A program MAY declare, in `describe`'s
@@ -2070,13 +2078,46 @@ one subdirectory per implementation, named from `describe`'s
 `program.id`, so that two foreign images cannot corrupt each other's
 store.
 
-Note a cost the contract does not remove: cache hit rates depend on
-stable paths. MCUHome's own container mounts the workspace at its own
-host path and sets `CCACHE_BASEDIR` to exactly one prefix
-(`mcuhome/compiler/container.py:362`) — a single prefix does not normalize the
-independent roots `context`, `trees`, `work` and `tmp`. Keeping those
-paths stable per session, or using `-ffile-prefix-map`, is backend
-policy, not contract.
+### 10.1 The image may configure the cache instead — and MCUHome's does
+
+Nothing above obliges a backend to *use* the `ccache` field. A build
+environment that configures ccache itself needs no field at all, and the
+backend then steers the cache the same way it steers everything else in
+the `container` profile: by what it mounts. MCUHome's own image does
+exactly this — `/etc/ccache.conf` names a writable cache directory and a
+read-only secondary store, at two fixed paths in the image — and no
+MCUHome backend sends `ccache`:
+
+| mounted on the writable path | mounted on the read-only path | effect |
+|---|---|---|
+| nothing | nothing | the cache lives in the container and dies with it — §10's "absent" case, word for word |
+| a host directory | nothing | the cache outlives the container; the next build starts warm |
+| a host directory | a store somebody else filled | as above, and the first build starts warm too |
+| nothing | a store somebody else filled | reads only, keeps nothing |
+
+The field remains for the backend that needs it: one serving a foreign
+image, one whose store is not a mount, one that must decide per session.
+A program MUST still honour the field when it is there — that is what
+makes those backends possible — and MUST NOT require it, which is what
+makes this paragraph possible.
+
+**Cache hit rates depend on stable paths, and this is the whole of it.**
+Zephyr appends `-fmacro-prefix-map=<absolute path>=…` to every compile
+for three roots — the application source, `ZEPHYR_BASE` and the west
+topdir — and compiles with `-g`, which makes ccache hash the working
+directory as well. Both are correct behaviour, and both put the
+backend's directory layout inside every cache key. A backend that mounts
+at host paths therefore has a cache per project directory, however large
+its store is.
+
+`CCACHE_BASEDIR` is the documented remedy and a poor one here: it only
+takes effect once `hash_dir` is off, and an object then served from the
+cache carries the *first* build's directory in its debug information —
+the output of a build would depend on whether the cache was warm.
+Mounting every session at the same paths costs nothing and needs neither
+setting; it is what MCUHome's two `container`-profile backends do
+(`mcuhome/model/containerpaths.py`), and §4 sanctions it as the backend
+convention it is.
 
 ## 11. Versioning and evolution
 

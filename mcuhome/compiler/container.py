@@ -17,16 +17,19 @@ images) is shared code. The command happens to start with ``docker run``
 and the west invocation inside it is assembled by the very same
 :func:`~mcuhome.compiler.workspace.west_build_command`.
 
-**Same paths inside and outside.** The workspace is bind-mounted at the
-absolute path it has on the host, not at some ``/workspace``. A CMake
-build tree is full of absolute paths, so this is what makes a build
-directory usable from both sides — ``local-dev`` after a container build,
-a debugger on the host, an error message a human can copy. The price is
-that container paths mirror host paths, which is a price worth paying.
+**Same paths inside and outside — here.** The workspace is bind-mounted
+at the absolute path it has on the host, not at some ``/workspace``: this
+path shares a build directory with a ``local-dev`` build of the same
+workspace, and a CMake tree full of absolute paths only survives that if
+the two agree. The contract path decides the opposite way for the
+opposite reason (:mod:`mcuhome.model.containerpaths`), and the two do not
+meet: a context build has no host workspace to agree with.
 
 **Nothing is left behind owned by root.** The container runs as the
 calling user's UID/GID, so the build directory, the generated files and
-the ccache belong to the person who asked for them.
+the compiler cache belong to the person who asked for them. The cache is
+the two directories of :data:`CCACHE_ROLES`, mounted where the image's
+own ccache configuration expects them.
 """
 
 from __future__ import annotations
@@ -37,12 +40,13 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from mcuhome.compiler import workspace
+from mcuhome.model import containerpaths
 from mcuhome.model.errors import BuildError
 from mcuhome.model.userpaths import expand, home
 
 __all__ = [
     "CCACHE_DIR_VAR",
-    "CONTAINER_CCACHE_DIR",
+    "CCACHE_ROLES",
     "CONTAINER_HOME",
     "DOCKER_VAR",
     "IMAGE",
@@ -133,7 +137,17 @@ ZEPHYR_RELEASE = "4.4.0"
 #: permitted character class. A constraint is evaluated against those
 #: values, and "a container that does not carry a named label does not
 #: qualify" — so this image satisfied no SDK release's constraint at all.
-IMAGE_REVISION = 8
+#:
+#: r9 = the compiler cache, in the two roles ccache itself has, at two
+#: paths the image configures and that a build therefore never has to be
+#: told about (``/ccache/cache-local`` writable, ``/ccache/cache-shared``
+#: read-only). ``CCACHE_DIR`` leaves the environment in the same move,
+#: because an environment variable overrides the file that is supposed to
+#: decide this. The measurement behind it: a real build made 1318
+#: cacheable compiles and took 2 of them from a cache — the only cache
+#: there was lived in the session's ``work`` directory, and every build
+#: wipes that before it starts.
+IMAGE_REVISION = 9
 
 #: GitHub Container Registry under the MCUHome organization. Public
 #: since 2026-08-15 — ``docker pull`` works anonymously.
@@ -172,10 +186,11 @@ DOCKER_VAR = "MCUHOME_DOCKER"
 #: network access is not reproducible anywhere else.
 NETWORK_VAR = "MCUHOME_BUILD_NETWORK"
 
-#: Where the ccache is mounted inside the container. Matches the
-#: ``CCACHE_DIR`` the image already sets, so ``docker run <image> ccache
-#: -s`` with the same mount reports on the same cache.
-CONTAINER_CCACHE_DIR = "/ccache"
+#: The two cache directories on the host, under :func:`ccache_directory`.
+#: Their names are the container paths' own last segments — one spelling,
+#: so ``du -sh`` and ``docker inspect`` say the same words and neither
+#: side can drift.
+CCACHE_ROLES = (containerpaths.CCACHE_LOCAL.name, containerpaths.CCACHE_SHARED.name)
 
 #: A writable ``HOME`` for a UID that has no entry in the container's
 #: ``/etc/passwd`` — which is the normal case, because the UID comes from
@@ -200,17 +215,38 @@ def docker_program(env: dict[str, str]) -> str:
 
 
 def ccache_directory(env: dict[str, str]) -> Path:
-    """Where the compiler cache lives on the host.
+    """Where the compiler cache lives on the host — the root of both roles.
 
-    A host directory rather than a named docker volume, for one reason
-    that decides it: a fresh named volume is created root-owned, and a
-    container running as the calling user cannot write to it. A directory
-    the builder creates itself has the right owner from the start — and
-    can be inspected, backed up and deleted with ordinary tools.
+    A host directory rather than a named docker volume, for reasons that
+    decide it together: a fresh named volume is created root-owned and a
+    container running as the calling user cannot write to it; the shared
+    half is meant to be filled from outside, and there is no way into a
+    named volume without starting a container; and the cache has to be
+    listable, movable and deletable when docker is not running at all
+    (the ``subprocess`` profile has no docker in the first place). On
+    Linux the two are the same bind mount underneath, so nothing is
+    traded away for it.
+
+    One cache per user, not per project. Its keys are content addresses —
+    the preprocessed source, the compiler's own bytes, the command line —
+    so two projects share an entry exactly when the compilation is the
+    same compilation, and a per-project split would cost the sharing
+    while protecting nothing. Isolation between *parties* is a different
+    question with a different answer, and it belongs to whoever serves
+    more than one of them.
     """
     override = env.get(CCACHE_DIR_VAR)
     if override:
         return expand(override, env)
+    if os.name == "nt":
+        # LOCALAPPDATA, not APPDATA: the latter roams, and a five-gigabyte
+        # compiler cache has no business being copied to a file server at
+        # every logon. An environment that names neither falls through to
+        # the POSIX form below, which is wrong on Windows but is a path
+        # rather than a crash.
+        local = env.get("LOCALAPPDATA")
+        if local:
+            return expand(local, env) / "mcuhome" / "ccache"
     cache_home = env.get("XDG_CACHE_HOME")
     base = expand(cache_home, env) if cache_home else home(env) / ".cache"
     return base / "mcuhome" / "ccache"
@@ -358,9 +394,16 @@ def container_environment(
     shim on ``PYTHONPATH``, ``ZEPHYR_BASE``, ``HOME``, and the two job
     caps that nothing inherits — come from
     :func:`~mcuhome.compiler.workspace.build_environment`, which is their one
-    definition. What this function adds is the two values that are true
-    of a ``docker run`` and of nothing else: the cache is at the fixed
-    mount point, not wherever the host keeps it.
+    definition. What this function adds is nothing at all.
+
+    **No ``CCACHE_*`` here.** The image configures both cache roles in
+    ``/etc/ccache.conf`` (``containers/build-container/Dockerfile``), and
+    an environment variable would override that file rather than agree
+    with it. ``CCACHE_BASEDIR`` used to be set to the workspace and is
+    gone with it: with ``-g`` in every Zephyr compile, ccache hashes the
+    working directory anyway, so the normalization it performed bought
+    nothing and its one visible effect was rewriting the paths the
+    compiler recorded.
 
     ``PATH`` is deliberately **not** here. It is the image's, set by the
     Dockerfile and inherited by the process docker starts; stating a
@@ -380,11 +423,6 @@ def container_environment(
         pyshim_dir=pyshim_dir,
         home=Path(CONTAINER_HOME),
     )
-    env["CCACHE_DIR"] = CONTAINER_CCACHE_DIR
-    # Absolute paths under the workspace are hashed relative to it, so one
-    # cache serves several build directories — and, because the mount is
-    # path-identical, the same cache serves a local-dev build.
-    env["CCACHE_BASEDIR"] = str(topdir)
     return env
 
 
@@ -437,7 +475,13 @@ def docker_run_command(
         argv += ["--volume", f"{mount}:{mount}"]
     for mount in read_only_mounts:
         argv += ["--volume", f"{mount}:{mount}:ro"]
-    argv += ["--volume", f"{ccache_dir}:{CONTAINER_CCACHE_DIR}"]
+    # Both cache roles, at the paths the image configures. The writable
+    # one is why a second build of the same tree is fast; the read-only
+    # one is empty unless somebody filled it, and mounting it anyway is
+    # what makes every build behave the same way.
+    local, shared = containerpaths.CCACHE_LOCAL, containerpaths.CCACHE_SHARED
+    argv += ["--volume", f"{ccache_dir / local.name}:{local}"]
+    argv += ["--volume", f"{ccache_dir / shared.name}:{shared}:ro"]
     argv += ["--workdir", str(workdir)]
     for name in sorted(environment):
         argv += ["--env", f"{name}={environment[name]}"]
@@ -473,10 +517,10 @@ def plan_build(
 ) -> workspace.BuildPlan:
     """Resolve image, mounts and command, or refuse with a reason.
 
-    Compiles nothing. The one thing it writes is the ccache directory,
-    and only because docker would otherwise create the bind-mount source
-    itself, owned by root, in a build that is meant to leave no
-    root-owned anything behind.
+    Compiles nothing. The one thing it writes is the two ccache
+    directories, and only because docker would otherwise create the
+    bind-mount sources itself, owned by root, in a build that is meant to
+    leave no root-owned anything behind.
 
     *module_dir* and *cwd* mean what they mean in
     :func:`mcuhome.compiler.workspace.plan_build`, and are required for the same
@@ -491,7 +535,8 @@ def plan_build(
     preflight(docker, reference, env=host_env, runner=runner)
 
     cache = ccache_directory(host_env)
-    cache.mkdir(parents=True, exist_ok=True)
+    for role in CCACHE_ROLES:
+        (cache / role).mkdir(parents=True, exist_ok=True)
 
     app_dir = out_dir / app_subdir
     build_dir = out_dir / workspace.BUILD_SUBDIR

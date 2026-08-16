@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from mcuhome.compiler import container, workspace
+from mcuhome.model import containerpaths
 from mcuhome.model.errors import BuildError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -188,11 +189,23 @@ def test_the_container_environment_is_composed_not_inherited(tmp_path) -> None:
         "PYTHONPATH": str(tmp_path / "shim"),
         "ZEPHYR_BASE": str(tmp_path / "ws" / "zephyr"),
         "HOME": container.CONTAINER_HOME,
-        "CCACHE_DIR": container.CONTAINER_CCACHE_DIR,
-        "CCACHE_BASEDIR": str(tmp_path / "ws"),
         workspace.CHIP_JOBS_VAR: "2",
         workspace.CMAKE_JOBS_VAR: "2",
     }
+
+
+def test_the_container_environment_says_nothing_about_ccache(tmp_path) -> None:
+    """The image configures the cache; a variable here would override it.
+
+    Both roles are set in /etc/ccache.conf (containers/build-container/
+    Dockerfile), and ccache lets the environment win over that file — so
+    a CCACHE_DIR here would quietly move the cache out from under the
+    configuration that is meant to decide where it is.
+    """
+    env = container.container_environment(
+        topdir=tmp_path / "ws", pyshim_dir=tmp_path / "shim", jobs=2
+    )
+    assert not [name for name in env if name.startswith("CCACHE")]
 
 
 def test_the_container_environment_caps_the_chip_gn_sub_build_too(tmp_path) -> None:
@@ -242,7 +255,9 @@ def test_the_run_command_mounts_paths_onto_themselves(tmp_path) -> None:
         "--volume",
         "/ws:/ws",
         "--volume",
-        f"/home/u/.cache/mcuhome/ccache:{container.CONTAINER_CCACHE_DIR}",
+        f"/home/u/.cache/mcuhome/ccache/cache-local:{containerpaths.CCACHE_LOCAL}",
+        "--volume",
+        f"/home/u/.cache/mcuhome/ccache/cache-shared:{containerpaths.CCACHE_SHARED}:ro",
         "--workdir",
         "/ws",
         "--env",
@@ -429,7 +444,8 @@ def test_the_plan_mounts_the_workspace_and_the_cache(tmp_path, monkeypatch) -> N
         plan.command[index + 1] for index, item in enumerate(plan.command) if item == "--volume"
     ]
     assert f"{top}:{top}" in volumes
-    assert f"{tmp_path / 'cache'}:{container.CONTAINER_CCACHE_DIR}" in volumes
+    assert f"{tmp_path / 'cache' / 'cache-local'}:{containerpaths.CCACHE_LOCAL}" in volumes
+    assert f"{tmp_path / 'cache' / 'cache-shared'}:{containerpaths.CCACHE_SHARED}:ro" in volumes
 
 
 def test_the_cache_directory_exists_before_docker_could_create_it(tmp_path, monkeypatch) -> None:
@@ -441,7 +457,8 @@ def test_the_cache_directory_exists_before_docker_could_create_it(tmp_path, monk
     cache = tmp_path / "cache"
     assert not cache.exists()
     _plan(tmp_path, monkeypatch)
-    assert cache.is_dir()
+    assert (cache / "cache-local").is_dir()
+    assert (cache / "cache-shared").is_dir()
 
 
 def test_the_plan_can_be_pointed_at_another_image(tmp_path, monkeypatch) -> None:
@@ -472,7 +489,8 @@ def test_the_signing_key_is_mounted_read_only_and_by_itself(tmp_path, monkeypatc
 
 def test_without_a_key_nothing_extra_is_mounted(tmp_path, monkeypatch) -> None:
     _, plan = _plan(tmp_path, monkeypatch)
-    assert not any(item.endswith(":ro") for item in plan.command)
+    read_only = [item for item in plan.command if item.endswith(":ro")]
+    assert read_only == [f"{tmp_path / 'cache' / 'cache-shared'}:{containerpaths.CCACHE_SHARED}:ro"]
 
 
 def test_the_inner_command_is_a_sysbuild_build(tmp_path, monkeypatch) -> None:

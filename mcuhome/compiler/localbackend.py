@@ -35,15 +35,17 @@ exec`` and streams the log to a sink as it comes. The async commitment of
 6, the remote method), which drives a socket and genuinely waits; this
 one drives a subprocess and is done when it returns.
 
-**The same-path principle.** Every mount is host path to the identical
-container path, so the request document's absolute paths mean the same
-thing on both sides of the boundary — which is what makes a stalled build
-inspectable from the host and, since the session tree is mounted piece by
-piece rather than wholesale, what makes the request document's paths
-*exactly* the set the container can see. The one mount that is not
-path-identical is the SDK when ``describe`` declares a fixed path for it:
-the tree is unpacked at a backend-chosen path and mounted at the path the
-image requires (§4.1).
+**The same-target principle.** Every mount target is the same string for
+every build on every machine (:mod:`mcuhome.model.containerpaths`), so
+what the request document names does not depend on where this project
+happens to live. That is what makes the compiler cache worth having —
+Zephyr appends three ``-fmacro-prefix-map=<absolute path>`` options to
+every single compile, so a project directory in a target is a project
+directory in every cache key — and it is why a build inside the container
+cannot tell this backend from a build server's. The mount *sources* are
+this build's own, and since the session tree is mounted piece by piece
+rather than wholesale, the request document's paths are *exactly* the set
+the container can see.
 """
 
 from __future__ import annotations
@@ -59,7 +61,7 @@ import tempfile
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import zstandard
@@ -73,6 +75,7 @@ from mcuhome.compiler.contextread import read_context_manifest
 # not import this module to say so (ADR 0020 decision 3), so the class
 # lives in `mcuhome-model` and is re-exported here — `localbackend.Artifact`
 # stays the name every caller already uses.
+from mcuhome.model import containerpaths
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import ContextManifest
 from mcuhome.model.errors import BuildError
@@ -126,6 +129,22 @@ __all__ = [
 # --------------------------------------------------------------------------
 # The frozen names of the contract, from the backend's side
 # --------------------------------------------------------------------------
+
+#: A path as the **container** spells it: what goes into the request
+#: document, into a mount's target, into the argv of an exec. POSIX
+#: whatever the host is — ``str()`` of a ``WindowsPath`` would hand docker
+#: backslashes — and never to be confused with the host path beside it,
+#: which is what this backend reads results back through.
+Inside = PurePosixPath | Path
+
+#: This backend runs one invocation per container, so the session's one
+#: invocation directory can be numbered rather than drawn. The number
+#: exists at all because the *shape* is the contract's, not this
+#: backend's: a session may run several invocations over its life — the
+#: steps of one build — and each needs its own ``out``, ``tmp`` and
+#: documents. A container the build server started looks exactly the
+#: same from the inside, which is the point.
+_INVOCATION_ID = "inv-1"
 
 #: The program every conforming image carries, at the one absolute path
 #: §2.2 fixes. Never looked up on ``PATH``: the invocation is resolved
@@ -243,7 +262,7 @@ class Mount:
     """
 
     source: Path
-    target: Path
+    target: Inside
     read_only: bool = False
 
     def to_argument(self) -> str:
@@ -284,7 +303,7 @@ class TreeEntry:
     program** (§4.1), so the flag has to be truthful.
     """
 
-    path: Path
+    path: Inside
     writable: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -399,6 +418,11 @@ class BackendConfig:
     sdk_sources: tuple[Path, ...]
     jobs: int
     image: str | None = None
+    #: Root of the host's compiler cache — the parent of the two role
+    #: directories, from :func:`mcuhome.compiler.container.ccache_directory`.
+    #: ``None`` mounts nothing, and the cache then lives in the container
+    #: and dies with it, which is a slow build rather than a broken one.
+    ccache_dir: Path | None = None
     memory: str | None = None
     cpus: str | None = None
     pids: int | None = None
@@ -699,12 +723,12 @@ class Docker:
 
 def request_document(
     *,
-    result: Path,
+    result: Inside,
     session: str,
-    out: Path,
-    work: Path,
-    tmp: Path,
-    context: Path,
+    out: Inside,
+    work: Inside,
+    tmp: Inside,
+    context: Inside,
     trees: dict[str, TreeEntry],
     jobs: int,
     deadline_seconds: int,
@@ -1285,10 +1309,18 @@ class LocalBackend:
         tmp = invocation / "tmp"
         out.mkdir(parents=True)
         tmp.mkdir(parents=True)
+        # The container's own view of the same three directories. It is
+        # the same for every build on every machine — see
+        # :mod:`mcuhome.model.containerpaths` for why, and note that from
+        # here on every path has two spellings: the backend reads results
+        # through the host one and states the container one in the
+        # request document.
+        inside = containerpaths.invocation(_INVOCATION_ID)
 
         trees, mounts = self._arrange_trees(
             profile, package, patched, context=context_dir, work=work, invocation=invocation
         )
+        mounts += self._cache_mounts()
         container = self.docker.start(
             image=profile.reference,
             mounts=mounts,
@@ -1300,11 +1332,11 @@ class LocalBackend:
             result = invocation / "result.json"
             document = self._document(
                 action=action,
-                result=result,
-                out=out,
-                work=work,
-                tmp=tmp,
-                context=context_dir,
+                result=inside / "result.json",
+                out=inside / "out",
+                work=containerpaths.WORK,
+                tmp=inside / "tmp",
+                context=containerpaths.CONTEXT,
                 trees=trees,
                 patched=patched,
                 mode=mode,
@@ -1313,7 +1345,7 @@ class LocalBackend:
             completed = self.docker.invoke(
                 container=container,
                 action=action,
-                request=request,
+                request=inside / "request.json",
                 user=user,
                 on_line=on_line,
             )
@@ -1451,10 +1483,11 @@ class LocalBackend:
 
         The session tree is mounted **piece by piece and never wholesale**:
         ``context`` read-only, ``work`` writable, the per-invocation
-        directory writable (mounted as itself so ``out``/``tmp``/request/
-        result inside it are visible), and the SDK read-only at the path
-        ``describe`` declared for it — or at its unpack path when
-        ``describe`` declared ``null``. A wholesale root mount would expose
+        directory writable (mounted as the directory itself, so
+        ``out``/``tmp``/request/result inside it are visible), and the SDK
+        read-only at the path ``describe`` declared for it — or at this
+        backend's own choice when ``describe`` declared ``null``. A
+        wholesale root mount would expose
         the SDK writable at its unpack path and make ``writable: false`` a
         false claim, which §9.1 forbids.
 
@@ -1469,12 +1502,12 @@ class LocalBackend:
         program refuses legibly.
         """
         mounts = [
-            Mount(source=context, target=context, read_only=True),
-            Mount(source=work, target=work),
-            Mount(source=invocation, target=invocation),
+            Mount(source=context, target=containerpaths.CONTEXT, read_only=True),
+            Mount(source=work, target=containerpaths.WORK),
+            Mount(source=invocation, target=containerpaths.invocation(_INVOCATION_ID)),
         ]
         sdk_writable = "sdk" in patched
-        sdk_target = profile.tree_path("sdk") or package.tree
+        sdk_target = profile.tree_path("sdk") or containerpaths.SDK
         mounts.append(Mount(source=package.tree, target=sdk_target, read_only=not sdk_writable))
         trees: dict[str, TreeEntry] = {"sdk": TreeEntry(path=sdk_target, writable=sdk_writable)}
         for layer in patched:
@@ -1486,15 +1519,46 @@ class LocalBackend:
             trees[layer] = TreeEntry(path=declared, writable=True)
         return trees, mounts
 
+    def _cache_mounts(self) -> list[Mount]:
+        """The compiler cache, in both of ccache's roles, or neither.
+
+        The image configures ccache itself — where the writable cache is
+        and that the shared one is read-only — so there is nothing to say
+        in the request document and nothing for the program to honour.
+        Mounting *is* the whole interface: a host directory on the
+        writable path makes the cache outlive the container, and a
+        directory on the read-only one lets a build start warm from a
+        store somebody else filled. Mounted even when empty, so that a
+        build behaves the same way whatever is or is not there.
+
+        Both are created here rather than left to docker, which would
+        create a missing bind-mount source itself and own it as root.
+        """
+        root = self.config.ccache_dir
+        if root is None:
+            return []
+        mounts = []
+        for target in (containerpaths.CCACHE_LOCAL, containerpaths.CCACHE_SHARED):
+            source = root / target.name
+            source.mkdir(parents=True, exist_ok=True)
+            mounts.append(
+                Mount(
+                    source=source,
+                    target=target,
+                    read_only=target == containerpaths.CCACHE_SHARED,
+                )
+            )
+        return mounts
+
     def _document(
         self,
         *,
         action: str,
-        result: Path,
-        out: Path,
-        work: Path,
-        tmp: Path,
-        context: Path,
+        result: Inside,
+        out: Inside,
+        work: Inside,
+        tmp: Inside,
+        context: Inside,
         trees: dict[str, TreeEntry],
         patched: tuple[str, ...],
         mode: str | None,
