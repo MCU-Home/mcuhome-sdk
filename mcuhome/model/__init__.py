@@ -41,4 +41,4 @@ is that independent parties arrive at the same one.
 #: under ``packaging/`` all read it from here (``dynamic = ["version"]``),
 #: and no second copy exists to disagree with it — which is why nothing
 #: re-exports it under a name of its own either.
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0.dev1"
