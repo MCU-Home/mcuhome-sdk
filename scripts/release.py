@@ -149,7 +149,7 @@ def update_changelog(path: Path, version: str, when: date) -> None:
             "A release with nothing to say about it is a defect, not a release.",
         )
     entries = body.lstrip("\n")
-    section = f"{UNRELEASED}\n\n## [{version}] - {when.isoformat()}\n{entries}"
+    section = f"{UNRELEASED}\n\n## [{version}] - {when.isoformat()}\n\n{entries}"
     path.write_text(text[:start] + section + text[body_to:], encoding="utf-8")
 
 
