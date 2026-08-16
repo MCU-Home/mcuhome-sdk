@@ -36,6 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache lived in the session's `work` directory, which is wiped before
   each build: a real build made 1318 cacheable compiles and took 2 of
   them from the cache.
+- A device without Matter builds. Two independent stops, both in a
+  configuration the model has supported since the `matter:` block became
+  the switch and neither of which anything had ever compiled: the
+  `debug-rtt` snippet — added to every image — assigned
+  `MATTER_LOG_LEVEL_INF`, a symbol that only exists in a build carrying
+  CHIP, and Zephyr treats that as an error; and the nRF5340 board wiring
+  redirects `zephyr,entropy` to the IPC driver without stating the two
+  dependencies (`IPC_SERVICE`, `MBEDTLS_PSA_CRYPTO_C`) a Matter
+  application used to turn on by accident. The stack log levels are now
+  generated per transport and per Matter switch, and the board states
+  what its own redirection costs. The same snippet line would have
+  stopped every WiFi device the day WiFi arrives.
 
 ## [0.1.0.dev1] - 2026-08-16
 

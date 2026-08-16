@@ -919,7 +919,26 @@ BOARDS: dict[str, BoardDef] = {
     "nrf7002dk/nrf5340/cpuapp": BoardDef(
         name="nrf7002dk/nrf5340/cpuapp",
         transports=frozenset({"thread"}),
-        kconfig=("CONFIG_BT=n", "CONFIG_ENTROPY_GENERATOR=y"),
+        # The last four are what the entropy redirection in the overlay
+        # costs. MCUHOME_ENTROPY_IPC cannot select them itself — its own
+        # Kconfig explains why MBEDTLS_PSA_CRYPTO_C in particular would
+        # close a recursive ring — so the wiring that creates the need
+        # states the need, next to the redirect that creates it. A Matter
+        # application happened to turn all four on for its own reasons,
+        # which is why this list was complete enough for every image ever
+        # built here and stopped a Matter-less device at CMake configure
+        # time, with drivers/CMakeLists.txt naming the symbols to check.
+        # MBEDTLS comes with PSA and not instead of it: PSA crypto lives
+        # inside `if MBEDTLS`, so stating only the inner symbol is stating
+        # nothing — Kconfig drops it without an error.
+        kconfig=(
+            "CONFIG_BT=n",
+            "CONFIG_ENTROPY_GENERATOR=y",
+            "CONFIG_IPC_SERVICE=y",
+            "CONFIG_MBOX=y",
+            "CONFIG_MBEDTLS=y",
+            "CONFIG_MBEDTLS_PSA_CRYPTO_C=y",
+        ),
         overlay=_NRF5340_BOARD_OVERLAY,
         overlay_note=_NRF5340_BOARD_NOTE,
         update_scheme=_CLASS_A_EXTERNAL_STAGING,
