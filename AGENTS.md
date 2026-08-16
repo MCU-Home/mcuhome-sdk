@@ -321,6 +321,10 @@ workflow. `workflow_dispatch` runs it on demand.
   drive SemVer release automation.
 - Every commit is DCO-signed-off: `git commit -s`.
 - Default branch is `main`; short-lived `feat/…`, `fix/…` branches.
+- Cutting a release is [RELEASING.md](RELEASING.md): one local command
+  (`scripts/release.py`), then a push, then one click at the package
+  host. Never bump a version by hand — the number lives in more than
+  one place and the tag has to agree with it.
 - Non-trivial design decisions require an ADR **draft** in
   `docs/adr/draft/` (numbered, MADR-style: Context / Decision /
   Consequences). While the component is being built the draft is a

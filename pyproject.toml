@@ -27,6 +27,29 @@
 # replacing one, for nothing. The project files under `packaging/` carry
 # no `[tool.ruff]` section, so ruff keeps resolving this one from there.
 
+# Where `scripts/release.py` finds this repository's release-relevant
+# parts. The script itself is repository-agnostic — what differs between
+# MCUHome's repositories is this block, so the same file serves all of
+# them.
+[tool.mcuhome-release]
+version_files = ["mcuhome/model/__init__.py"]
+changelog = "CHANGELOG.md"
+tag_prefix = "v"
+branch = "main"
+gates = [
+  "{python} -m ruff check .",
+  "{python} -m ruff format --check .",
+  "{python} -m pytest -q tests_py",
+]
+next_steps = [
+  "git push && git push origin {tag}",
+  "",
+  "Then, once the Release workflow has attached the package:",
+  "  github.com/mcu-home/packages.mcuhome.org -> Actions",
+  "  -> \"Publish a package\" -> Run workflow",
+  "     source = sdk, tag = {tag}",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

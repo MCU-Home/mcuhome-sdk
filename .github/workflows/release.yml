@@ -47,6 +47,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: The tag must name the version the commit declares
+        # The archive is named after `__version__` as the tagged commit
+        # carries it, never after the tag — so a tag on an unbumped
+        # commit would silently produce a package whose name contradicts
+        # the release it hangs on. Checked before anything is built, and
+        # with no third-party import, so it runs on a bare python.
+        run: python scripts/release.py --check-tag "${{ inputs.tag || github.ref_name }}"
+
       - name: Install the pinned compressor
         run: pip install "zstandard==${ZSTANDARD_VERSION}"
 
