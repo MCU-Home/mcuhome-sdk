@@ -868,6 +868,16 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
         "CONFIG_MCUHOME_CRASH_BREADCRUMB=y",
         f"CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S={WATCHDOG_TIMEOUT_S}",
     ]
+    if model.network.transport == "thread":
+        out += [
+            "",
+            "# OpenThread stack logging (SRP client / mesh forwarder visibility).",
+            "# Part of the debug-rtt snippet until it turned out that a snippet",
+            "# cannot state a symbol the build may not have: OPENTHREAD_DEBUG lives",
+            "# inside `if OPENTHREAD`, so the line aborted every WiFi build.",
+            "CONFIG_OPENTHREAD_DEBUG=y",
+            "CONFIG_OPENTHREAD_LOG_LEVEL_INFO=y",
+        ]
     if model.network.pairing is not None:
         credentials = model.network.pairing
         out += [
@@ -898,6 +908,12 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
             "# Framework-owned CHIP settings, reached through the wrapper stage 4",
             f"# writes next to this file ({CHIP_PROJECT_CONFIG_PATH}).",
             f'CONFIG_CHIP_PROJECT_CONFIG="{CHIP_PROJECT_CONFIG_PATH}"',
+            "",
+            "# CHIP at info: errors/progress without the per-report [DMG] debug",
+            "# flood. Here rather than in the debug-rtt snippet for the reason the",
+            "# OpenThread block above states — the symbol comes from CHIP's Kconfig",
+            "# tree and does not exist in a build without Matter.",
+            "CONFIG_MATTER_LOG_LEVEL_INF=y",
         ]
     return "\n".join(out) + "\n"
 

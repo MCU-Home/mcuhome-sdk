@@ -82,6 +82,14 @@ HEALTH_KCONFIG = [
     "CONFIG_MCUHOME_CRASH_BREADCRUMB=y",
     f"CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S={WATCHDOG_TIMEOUT_S}",
 ]
+#: The two stack log levels the debug-rtt snippet used to carry. They are
+#: generated rather than snippet-borne because their symbols exist only in
+#: a build that has the stack: OPENTHREAD_DEBUG sits inside `if OPENTHREAD`
+#: and MATTER_LOG_LEVEL_INF comes from CHIP's Kconfig tree, and Zephyr
+#: aborts on an assignment to a symbol it does not know. In the snippet —
+#: which every image gets — they made a Matter-less device unbuildable.
+THREAD_LOG_KCONFIG = ["CONFIG_OPENTHREAD_DEBUG=y", "CONFIG_OPENTHREAD_LOG_LEVEL_INFO=y"]
+MATTER_LOG_KCONFIG = "CONFIG_MATTER_LOG_LEVEL_INF=y"
 MCUBOOT_OVERLAY_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.overlay"
 
 
@@ -517,14 +525,17 @@ def test_the_overlay_can_render_flags_frequencies_and_text() -> None:
 def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> None:
     """Everything about the *device* comes from the model, in model order.
 
-    Three blocks are appended rather than interleaved, and none of them
+    Five blocks are appended rather than interleaved, and none of them
     is carried in the model: the health foundation, which is a property
     of every MCUHome application image rather than of this device
-    (ADR 0015 health amendment); the commissioning identity, which
-    :mod:`mcuhome.model.pairing` computes from the model's pairing tuple in one
-    call; and ``CONFIG_CHIP_PROJECT_CONFIG``, which names a file inside
-    the generated tree and is therefore stage 4's fact. A remote build
-    server derives all three from what it received rather than being told.
+    (ADR 0015 health amendment); the two stack log levels, which belong
+    to whichever stack the transport and the Matter switch put in the
+    build (see :data:`STACK_LOG_KCONFIG`); the commissioning identity,
+    which :mod:`mcuhome.model.pairing` computes from the model's pairing
+    tuple in one call; and ``CONFIG_CHIP_PROJECT_CONFIG``, which names a
+    file inside the generated tree and is therefore stage 4's fact. A
+    remote build server derives all of them from what it received rather
+    than being told.
     """
     model = resolve_file(EXAMPLE)
     assert model.network.pairing is not None
@@ -533,6 +544,7 @@ def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> N
     assert body[: len(model.build.kconfig)] == model.build.kconfig
     assert body[len(model.build.kconfig) :] == [
         *HEALTH_KCONFIG,
+        *THREAD_LOG_KCONFIG,
         *pairing.kconfig_lines(
             pairing.Pairing(
                 discriminator=model.network.pairing.discriminator,
@@ -542,11 +554,74 @@ def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> N
             )
         ),
         f'CONFIG_CHIP_PROJECT_CONFIG="{CHIP_PROJECT_CONFIG_PATH}"',
+        MATTER_LOG_KCONFIG,
     ]
     assert not any(line.startswith("CONFIG_CHIP_PROJECT_CONFIG") for line in model.build.kconfig)
+    _assert_stack_logs(fragment, thread=True, matter=True)
     # The snippets the app has to be built with, the board's included and
     # the always-on RTT log transport in front (AGENTS.md, debug output).
     assert "debug-rtt, matter, boot-mode" in fragment
+
+
+def _assert_stack_logs(fragment: str, *, thread: bool, matter: bool) -> None:
+    lines = fragment.splitlines()
+    for line in THREAD_LOG_KCONFIG:
+        assert (line in lines) is thread, line
+    assert (MATTER_LOG_KCONFIG in lines) is matter
+
+
+def _bare_model(*, transport: str | None, matter: bool) -> DeviceModel:
+    return DeviceModel(
+        device=DeviceMeta(
+            name="log-levels",
+            friendly_name="Log Levels",
+            board="nrf7002dk/nrf5340/cpuapp",
+            power_source="mains",
+        ),
+        network=NetworkModel(transport=transport, matter_enabled=matter),
+        toolchain=ToolchainModel(zephyr_line="4.4", blob_usage="auto"),
+        hardware=HardwareModel(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("transport", "matter"),
+    [("thread", True), ("thread", False), ("wifi", True), ("wifi", False), (None, False)],
+)
+def test_a_stack_log_level_is_stated_only_where_the_stack_is(
+    transport: str | None, matter: bool
+) -> None:
+    """The defect a Matter-less device found: an undefined symbol is fatal.
+
+    Zephyr aborts on an assignment to a Kconfig symbol it does not know,
+    and both stack log levels are guarded upstream —
+    ``CONFIG_OPENTHREAD_DEBUG`` by ``if OPENTHREAD`` in Zephyr's module
+    Kconfig, ``CONFIG_MATTER_LOG_LEVEL_INF`` by living in CHIP's tree at
+    all. While the debug-rtt snippet carried them, every device without
+    Matter failed to configure, and a WiFi device would have failed the
+    same way. Generated, they follow the two facts that decide them.
+    """
+    fragment = generate(_bare_model(transport=transport, matter=matter), config_name="main.yaml")[
+        f"{APP_DIR}/prj.conf"
+    ]
+    _assert_stack_logs(fragment, thread=transport == "thread", matter=matter)
+
+
+def test_the_debug_snippet_states_nothing_a_build_might_not_have() -> None:
+    """The other half of the same rule, checked where it was broken.
+
+    debug-rtt goes into EVERY image (the debug-output directive), so it
+    may only name symbols that exist in every image. Anything
+    stack-specific belongs in the generated fragment next to the fact
+    that switches the stack on.
+    """
+    text = (REPO_ROOT / "snippets" / "debug-rtt" / "debug-rtt.conf").read_text(encoding="utf-8")
+    assignments = [line for line in text.splitlines() if line.startswith("CONFIG_")]
+    assert assignments
+    for line in assignments:
+        assert "OPENTHREAD" not in line, line
+        assert "MATTER" not in line, line
+        assert "CHIP" not in line, line
 
 
 def test_the_chip_project_config_wrapper_only_forwards_to_the_framework() -> None:
