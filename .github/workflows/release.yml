@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# The SDK package as a release artifact: `scripts/build_sdk_archive.py`
+# builds it from the tagged *commit* — never a working tree — and it is
+# attached to the GitHub release of that tag. The package host
+# (mcu-home/packages.mcuhome.org) then pulls it from here and records it
+# in a signed index; nothing in this repository pushes anywhere, and no
+# cross-repository credential exists.
+#
+# Why zstandard is pinned: two parties building the same tag must reach
+# the same sha256, because that hash is a hashed input of the build
+# context ID. Everything else the script does is deterministic by
+# construction; the compressor library is the one residual variable, so
+# it is fixed here and a bump is a deliberate change with a new release.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to package (must exist)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  ZSTANDARD_VERSION: "0.25.0"
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # git archive reads the commit, so the tag has to be here.
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install the pinned compressor
+        run: pip install "zstandard==${ZSTANDARD_VERSION}"
+
+      - name: Build the SDK package
+        id: build
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          python scripts/build_sdk_archive.py --output-dir dist --revision "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Show what was built
+        run: |
+          ls -l dist/
+          cd dist && sha256sum -c ./*.sha256
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.build.outputs.tag }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          # index.json is the host's to write, not ours: it belongs to a
+          # source, and a source is signed. Only the package and its
+          # sidecar travel.
+          gh release upload "$tag" dist/mcuhome-sdk-*.tar.zst dist/mcuhome-sdk-*.tar.zst.sha256 --clobber
