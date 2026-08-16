@@ -150,12 +150,29 @@ def test_version_files_that_disagree_are_refused(release, tmp_path):
 
 @pytest.mark.parametrize(
     ("version", "reason"),
-    [("0.1.0", "does not come after"), ("0.0.1", "does not come after"), ("nope", "not a PEP 440")],
+    [("0.0.1", "comes before"), ("nope", "not a PEP 440")],
 )
-def test_a_version_only_moves_forward(release, tmp_path, version, reason):
+def test_a_version_never_moves_backwards(release, tmp_path, version, reason):
     root = make_repo(tmp_path)
     with pytest.raises(SystemExit, match=reason):
         release.main([version, "--repo", str(root)])
+
+
+def test_the_declared_version_may_be_released_as_it_stands(release, tmp_path):
+    """The first release of all: the number exists in the tree, nowhere else.
+
+    Refusing it would make a repository unable to release the version it
+    already declares. What must never happen twice is *publishing* one —
+    the tag check here and the duplicate refusal at the package host.
+    """
+    root = make_repo(tmp_path, version="0.1.0.dev0")
+    assert release.main(["0.1.0.dev0", "--repo", str(root)]) == 0
+    assert git(root, "tag", "--list") == "v0.1.0.dev0"
+    assert "## [0.1.0.dev0] - " in (root / "CHANGELOG.md").read_text()
+
+    git(root, "push", "--quiet", "origin", "main")
+    with pytest.raises(SystemExit, match="never replaced"):
+        release.main(["0.1.0.dev0", "--repo", str(root)])
 
 
 def test_a_dirty_tree_is_refused(release, tmp_path):

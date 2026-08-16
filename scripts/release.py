@@ -196,11 +196,16 @@ def check_version(new: str, old: str) -> None:
         candidate = Version(new)
     except InvalidVersion as broken:
         raise Refused(f"{new!r} is not a PEP 440 version") from broken
-    if candidate <= Version(old):
+    if candidate < Version(old):
         raise Refused(
-            f"{new} does not come after the current {old}.",
+            f"{new} comes before the declared {old}.",
             "Versions only move forward: what is published is permanent.",
         )
+    # Equal is allowed on purpose: a version the tree declares but that
+    # was never released — the first release of all, or a number bumped
+    # in an earlier commit — is a legitimate thing to cut. What must
+    # never happen twice is *publishing* one, and that is what the tag
+    # check below and the package host's duplicate refusal are for.
 
 
 def run_gates(config: Config, root: Path) -> None:
