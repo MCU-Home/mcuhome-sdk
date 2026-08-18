@@ -62,7 +62,8 @@ workbench's modules — see
 | `model/model.py` | — | the canonical device model and its JSON form |
 | `model/registry.py` | — | static tables: clusters, device types, drivers, boards, per-board update scheme and flash layout |
 | `model/hashes.py` | — | the one file hash both sides of the build-container contract compute |
-| `model/toolchain.py` | — | Zephyr line and blob resolution — the ADR 0013 seam |
+| `model/toolchain.py` | — | Zephyr line and blob resolution — the ADR 0013 seam, and the constraint this SDK release states over a build environment |
+| `model/imageref.py` | — | how an external input is named: `[registry/]path[:tag][@sha256:…]`, for the SDK package and the build environment alike |
 | `model/errors.py` | — | the error type and its plain-language rendering |
 
 ## The build directory
