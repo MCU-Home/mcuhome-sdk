@@ -22,10 +22,13 @@ interpreted as described in RFC 2119.
 - **The program**: the executable a backend invokes to do one unit of
   work. In the container profile it lives at the fixed absolute path
   `/mcuhome/run` (§2.2).
-- **Backend**: the software driving the build — either the workbench
-  package driving a container runtime directly, or a build server. The
-  backend owns everything outside the program: paths, trees, views,
-  network isolation, resource limits, artifact egress.
+- **Backend**: the software driving the build. It owns everything
+  outside the program: paths, trees, views, network isolation, resource
+  limits, artifact egress. In the `container` profile there is **one**
+  implementation of it — `mcuhome.workbench`'s orchestrator — and a
+  build server is a caller of it rather than a second one: what a build
+  server adds is a protocol in front, not a way of driving a container.
+  The `subprocess` profile is still a build server's own (§1.2).
 - **Backend profile**: which of the two shapes of §1.2 serves a
   session. Declared in the `open-session` response (ADR 0019 §2).
 - **Session**: the lifetime of one build environment. One session is
@@ -61,10 +64,21 @@ interpreted as described in RFC 2119.
 | `container` | The backend materializes one container per session and invokes the program inside it. | Every isolation guarantee of ADR 0019 §8 applies: one session = one container instance = the trust boundary, no network, per-session resource limits and disk quota. |
 | `subprocess` | The build environment runs **in the same filesystem as the build server**, but as a **separate process** (the Home Assistant App case): the backend runs the program as a subprocess in its own filesystem namespace instead of via `docker exec`. | Reduced, and named here so nobody assumes otherwise: **no network isolation, no per-session resource limits, no container trust boundary.** Cancellability and process-level isolation remain (the program is a separate process), and a third party may still implement the program in any language. |
 
+The second profile is **on its way out of this document**, and saying so
+here is more use than leaving a reader to wonder why a contract about
+containers describes something that is not one. A subprocess build
+environment is a way of *executing* a build rather than a shape of
+container, and it belongs with the other executions the builder knows
+about. It is described here for as long as it is served this way; when
+it moves, §1.2 goes with it and this contract is about containers
+alone.
+
 What is shared in the `subprocess` profile is the **filesystem**, not
-the process. A build server is an orchestrator in both profiles and is
-never itself the build environment: it materializes paths, enforces
-what it can enforce, invokes the program and reads its result. The
+the process. A build server is never itself the build environment in
+either profile: something materializes paths, enforces what it can
+enforce, invokes the program and reads its result, and in the
+`container` profile that something is the workbench's orchestrator with
+the build server calling it. The
 difference between the profiles is only how much of the environment the
 kernel keeps apart — a container namespace in one case, a process
 boundary inside one shared filesystem in the other.
@@ -77,10 +91,9 @@ the server, an out-of-memory kill or a segfault takes the queue with
 it, and only a separate process is honest about the interface — the
 build server's own code stated all three (build-server repo,
 `mcuhome_buildserver/builder.py:5-28`, read at `8b8ceb4`; the file has
-since been removed with the job protocol, and the build server imports
-nothing from this package today). The argument outlived the file: it is
-the reason this profile is a subprocess rather than the in-process
-embedding it superficially resembles.
+since been removed with the job protocol). The argument outlived the
+file: it is the reason this profile is a subprocess rather than the
+in-process embedding it superficially resembles.
 
 Because the filesystem is shared, nothing in this profile may depend on
 a fixed path: several concurrent sessions live side by side in one
