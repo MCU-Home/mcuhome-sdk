@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mcuhome.model import ota
+from mcuhome.model.buildimage import DEFAULT_ENVIRONMENT
+from mcuhome.model.sdkindex import DEFAULT_SDK
 
 __all__ = [
     "DEFAULT_SOURCE",
@@ -56,6 +58,7 @@ __all__ = [
     "PairingModel",
     "PeripheralModel",
     "SourceModel",
+    "SourcesModel",
     "ThreadModel",
     "ToolchainModel",
 ]
@@ -63,7 +66,12 @@ __all__ = [
 #: Version of the canonical model format — a published contract, see the
 #: module docstring. Exported through :mod:`mcuhome.workbench.api` and stated in
 #: every build manifest.
-MODEL_VERSION = 1
+#:
+#: Version 2 adds :class:`SourcesModel` — where the SDK and the build
+#: environment come from — and ``toolchain.zephyr_constraint``. Both are
+#: additions a build cannot do without: a build context is created from
+#: the model, and it now pins an environment the model names.
+MODEL_VERSION = 2
 
 #: Configuration file name assumed for a model that does not state one —
 #: which is what a model written before this field existed looks like. It
@@ -207,10 +215,17 @@ class ToolchainModel:
     zephyr_line: str
     blob_usage: str
     blobs: dict[str, str] = field(default_factory=dict)
+    #: What a build environment must carry, as a PEP 440 constraint
+    #: (:data:`mcuhome.model.toolchain.ZEPHYR_CONSTRAINT`, narrowed by the
+    #: device's own ``zephyr_version`` where it named one). This is the
+    #: field a build environment is *selected* by; :attr:`zephyr_line` is
+    #: the same statement in the form a person reads.
+    zephyr_constraint: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "zephyr_line": self.zephyr_line,
+            "zephyr_constraint": self.zephyr_constraint,
             "blob_usage": self.blob_usage,
             "blobs": dict(sorted(self.blobs.items())),
         }
@@ -219,8 +234,47 @@ class ToolchainModel:
     def from_dict(data: dict[str, Any]) -> ToolchainModel:
         return ToolchainModel(
             zephyr_line=data["zephyr_line"],
+            zephyr_constraint=data["zephyr_constraint"],
             blob_usage=data["blob_usage"],
             blobs=dict(data["blobs"]),
+        )
+
+
+@dataclass(frozen=True)
+class SourcesModel:
+    """Where the two things a build needs and nobody stores come from.
+
+    A device folder holds no SDK and no toolchain, and it never will: one
+    is a hash-pinned package, the other a container image, and both are
+    fetched. This says *which* — in the reference form
+    :mod:`mcuhome.model.imageref` parses, the spelling a person already
+    knows from docker.
+
+    **Both carry a default and the default is written down** rather than
+    assumed further downstream. That is the whole point of the block: the
+    value a build resolves against is a property of the device, recorded
+    in its model, so that changing what MCUHome ships as its default
+    cannot silently change what an existing device builds into. Today the
+    defaults are these constants; the step that makes them configurable
+    replaces where the values come *from* and nothing below it.
+    """
+
+    #: The SDK package: ``sdk/mcuhome-sdk``, optionally ``:version`` and
+    #: ``@sha256:…``, optionally under another registry.
+    sdk: str = DEFAULT_SDK
+    #: The build environment: a container repository, optionally with a
+    #: tag and a digest. An untagged one is resolved against
+    #: :attr:`ToolchainModel.zephyr_constraint`.
+    build_environment: str = DEFAULT_ENVIRONMENT
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"sdk": self.sdk, "build_environment": self.build_environment}
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> SourcesModel:
+        return SourcesModel(
+            sdk=data["sdk"],
+            build_environment=data["build_environment"],
         )
 
 
@@ -527,6 +581,7 @@ class DeviceModel:
     network: NetworkModel
     toolchain: ToolchainModel
     hardware: HardwareModel
+    sources: SourcesModel = field(default_factory=SourcesModel)
     endpoints: list[EndpointModel] = field(default_factory=list)
     channels: list[ChannelModel] = field(default_factory=list)
     build: BuildModel = field(default_factory=BuildModel)
@@ -538,6 +593,7 @@ class DeviceModel:
             "device": self.device.to_dict(),
             "network": self.network.to_dict(),
             "toolchain": self.toolchain.to_dict(),
+            "sources": self.sources.to_dict(),
             "hardware": self.hardware.to_dict(),
             "endpoints": [endpoint.to_dict() for endpoint in self.endpoints],
             "channels": [channel.to_dict() for channel in self.channels],
@@ -555,6 +611,7 @@ class DeviceModel:
             device=DeviceMeta.from_dict(data["device"]),
             network=NetworkModel.from_dict(data["network"]),
             toolchain=ToolchainModel.from_dict(data["toolchain"]),
+            sources=SourcesModel.from_dict(data["sources"]),
             hardware=HardwareModel.from_dict(data["hardware"]),
             endpoints=[EndpointModel.from_dict(item) for item in data["endpoints"]],
             channels=[ChannelModel.from_dict(item) for item in data["channels"]],

@@ -246,10 +246,9 @@ def test_the_image_carries_exactly_the_labels_of_section_two_one() -> None:
     no version left for an SDK release to compare.
     """
     text = _dockerfile()
-    assert 'org.mcuhome.contract="1"' in text
-    assert 'org.mcuhome.zephyr="4.4.0"' in text
-    assert 'org.mcuhome.toolchain="zephyr-sdk-1.0.1"' in text
-    assert 'org.mcuhome.model.toolchain="' not in text, "§2.1 fixes the label name"
+    assert 'org.mcuhome.build-environment.contract="1"' in text
+    assert 'org.mcuhome.build-environment.zephyr.version="4.4.0"' in text
+    assert 'org.mcuhome.build-environment.toolchain="zephyr-sdk-1.0.1"' in text
     assert "ZEPHYR_REVISION=v4.4.0" in text, "the label must match the baked pin"
     assert "ZEPHYR_SDK_VERSION=1.0.1" in text, "the label must match the baked toolchain"
 
@@ -265,11 +264,12 @@ def test_the_label_values_are_inside_the_grammar_of_section_two_one_one() -> Non
     version after its final hyphen.
     """
     text = _dockerfile()
-    values = dict(re.findall(r'org\.mcuhome\.(zephyr|toolchain)="([^"]*)"', text))
-    assert set(values) == {"zephyr", "toolchain"}
+    pattern = r'org\.mcuhome\.build-environment\.(zephyr\.version|toolchain)="([^"]*)"'
+    values = dict(re.findall(pattern, text))
+    assert set(values) == {"zephyr.version", "toolchain"}
     for value in values.values():
         assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", value), value
-    assert re.fullmatch(r"\d+(\.\d+)*", values["zephyr"])
+    assert re.fullmatch(r"\d+(\.\d+)*", values["zephyr.version"])
     identity, _, version = values["toolchain"].rpartition("-")
     assert re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)*", identity), identity
     assert re.fullmatch(r"\d+(\.\d+)*", version), version

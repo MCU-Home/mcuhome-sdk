@@ -34,6 +34,7 @@ from mcuhome.model.errors import ErrorCollector, Location
 
 __all__ = [
     "SUPPORTED_ZEPHYR_LINES",
+    "ZEPHYR_CONSTRAINT",
     "ResolvedToolchain",
     "available_blobs",
     "line_of",
@@ -50,6 +51,26 @@ SUPPORTED_ZEPHYR_LINES: tuple[str, ...] = ("4.4",)
 #: The newest supported line; what ``zephyr_version: latest`` resolves to.
 LATEST_ZEPHYR_LINE = SUPPORTED_ZEPHYR_LINES[-1]
 
+#: **What this SDK release requires of a build environment**, as a PEP 440
+#: constraint rather than a version. It is the SDK author's statement and
+#: nobody else's: he knows that CHIP v1.5.1.0 needs 4.4, and that a fix he
+#: depends on landed in a particular patch release, so he writes the range
+#: and lets whoever publishes environments decide which revision of it to
+#: recommend.
+#:
+#: A constraint rather than a version because the two failure modes are
+#: not symmetric. A pinned version means a security patch release cannot
+#: be taken without a new SDK; a range means it is taken automatically,
+#: which is what ADR 0008/0013 already decided for the *line*. And an SDK
+#: that genuinely needs one exact release says ``==4.4.2`` here, in the
+#: same grammar, with no special case anywhere downstream.
+#:
+#: It is evaluated where ``packaging`` is available — this package has no
+#: dependencies by construction (ADR 0020) — so what lives here is the
+#: string and what reads it is
+#: :mod:`mcuhome.workbench.resolve_env`.
+ZEPHYR_CONSTRAINT = "~=4.4.0"
+
 
 @dataclass(frozen=True)
 class ResolvedToolchain:
@@ -61,12 +82,18 @@ class ResolvedToolchain:
     blob_usage: str
     #: Resolved per-blob decisions. Empty until blobs are integrated.
     blobs: dict[str, str] = field(default_factory=dict)
+    #: The PEP 440 constraint a build environment has to satisfy — this
+    #: SDK's :data:`ZEPHYR_CONSTRAINT`, narrowed to the line the device
+    #: asked for when it named one. The two are the same statement seen
+    #: from two sides, and both belong in the model: the constraint is
+    #: what selects an environment, the line is what a human reads.
+    zephyr_constraint: str = ZEPHYR_CONSTRAINT
 
 
 #: A Zephyr release as an image may spell it: dotted decimal components,
 #: optionally followed by an upstream suffix after a hyphen. It is the
 #: value range build-container-contract.md §2.1.1 fixes for the
-#: ``org.mcuhome.zephyr`` coupling label, minus the label's wider
+#: ``org.mcuhome.build-environment.zephyr.version`` coupling label, minus the label's wider
 #: character class — what does not parse as a version cannot be *in* a
 #: line, which is the only question :func:`satisfies_line` asks.
 _RELEASE = re.compile(r"(?P<numbers>[0-9]+(\.[0-9]+)*)(?P<suffix>-[A-Za-z0-9._+-]+)?\Z")
@@ -121,7 +148,7 @@ def line_of(version: str) -> str | None:
     serve a context reports what it *could* serve, and both ADR 0019's
     ``version.builder-unsatisfiable`` amendment and the build server's
     own error table call those values "the lines available". They are
-    read off ``org.mcuhome.zephyr`` labels, and a label states a
+    read off ``org.mcuhome.build-environment.zephyr.version`` labels, and a label states a
     *release* (§2.1.1) — so reporting the labels verbatim reports
     releases under the name of lines, and a client that echoed one back
     as its ``zephyr`` would pin a frozen point release (which ADR 0013
@@ -147,7 +174,7 @@ def normalize_release(version: str) -> str:
     West states every pinned revision with a ``v`` no Zephyr release
     grammar carries: ``west list`` and a program's own ``describe``
     answer ``v4.4.0`` for what everywhere else — :func:`line_of`,
-    :func:`satisfies_line`, the ``org.mcuhome.zephyr`` coupling label —
+    :func:`satisfies_line`, the ``org.mcuhome.build-environment.zephyr.version`` coupling label —
     is spelled ``4.4.0`` (``containers/build-container/README.md``'s r7 repair
     fixed the label to match for the same reason this exists: "a
     container that does not carry a named label does not qualify", and a
@@ -224,4 +251,19 @@ def resolve_toolchain(
                 ),
             )
 
-    return ResolvedToolchain(zephyr_line=line, blob_usage=resolved_usage, blobs={})
+    # A device that named its line narrows the SDK's constraint rather
+    # than replacing it: "the 4.4 line" and "what this SDK needs" are two
+    # requirements, and a device may not talk its SDK out of the second.
+    # Composed as text — evaluating it needs `packaging`, which this
+    # package deliberately does not have.
+    constraint = (
+        ZEPHYR_CONSTRAINT
+        if requested in ("auto", "latest")
+        else (f"{ZEPHYR_CONSTRAINT},=={line}.*")
+    )
+    return ResolvedToolchain(
+        zephyr_line=line,
+        blob_usage=resolved_usage,
+        blobs={},
+        zephyr_constraint=constraint,
+    )

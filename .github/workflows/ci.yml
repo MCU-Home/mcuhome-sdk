@@ -143,15 +143,26 @@ jobs:
       # developer runs `mcuhome device build`. Importing it needs no
       # third-party package — that module is a handful of constants, on
       # purpose.
+      #
+      # The moving tags (aliases) are how a build environment is found:
+      # a client picks the Zephyr release it needs and the publisher says
+      # which revision of it he currently recommends through the moving tags.
       - name: Resolve the builder image reference
         id: image
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           sys.path.insert(0, "mcuhome-sdk")
-          from mcuhome.model.buildimage import IMAGE, IMAGE_REPOSITORY, ZEPHYR_RELEASE
+          from mcuhome.model.buildimage import (
+              IMAGE,
+              IMAGE_REPOSITORY,
+              ZEPHYR_RELEASE,
+              aggregate_tags,
+              latest_tag,
+          )
           print(f"reference={IMAGE}")
-          print(f"alias={IMAGE_REPOSITORY}:zephyr-{ZEPHYR_RELEASE}")
+          moving = (latest_tag(ZEPHYR_RELEASE), *aggregate_tags(ZEPHYR_RELEASE))
+          print("aliases=" + " ".join(f"{IMAGE_REPOSITORY}:{tag}" for tag in moving))
           PY
 
       - name: Log in to ghcr.io
@@ -191,10 +202,13 @@ jobs:
         if: steps.builder.outputs.built == 'true' && github.event_name == 'push'
         run: |
           reference='${{ steps.image.outputs.reference }}'
-          alias='${{ steps.image.outputs.alias }}'
+          aliases='${{ steps.image.outputs.aliases }}'
           docker push "$reference"
-          docker tag "$reference" "$alias"
-          docker push "$alias"
+          # Push each moving tag (alias) so clients can find this revision
+          for alias in $aliases; do
+            docker tag "$reference" "$alias"
+            docker push "$alias"
+          done
 
       # Keyed on west.yml alone: that file is the complete description of
       # what `west update` produces. Zephyr and the modules are fetched
@@ -569,7 +583,13 @@ jobs:
       # image, and no key of any consequence exists on a CI runner. Job
       # count is left to the builder's own CPU/RAM detection
       # (mcuhome.compiler.workspace.auto_jobs).
+      #
+      # The default MCUHOME_BUILDER_IMAGE is now a bare repository that is
+      # resolved against the registry. On a pull request, the image exists
+      # only locally, so CI has to name the tag it built.
       - name: Build the reference Matter device
+        env:
+          MCUHOME_BUILDER_IMAGE: ${{ steps.image.outputs.reference }}
         run: |
           mcuhome device build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
             --build-dir build/bmp180-node --sdk-sources dist/sdk -S debug-rtt

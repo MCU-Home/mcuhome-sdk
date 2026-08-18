@@ -43,9 +43,9 @@ from mcuhome.model import __version__
 from mcuhome.model.context import (
     CONTEXT_VERSION,
     MANIFEST_FILE,
-    ContainerResolution,
     ContextFile,
     ContextManifest,
+    EnvironmentPin,
     SdkPin,
     context_id,
 )
@@ -136,14 +136,11 @@ def backend(tmp_path: Path) -> Backend:
 #: actually pulled is the backend's duty (§9.1) — so nothing here has to
 #: name a container or an SDK package that exists.
 #:
-#: The Zephyr line and the container are the two halves E61 separates:
-#: ``ZEPHYR`` is what the context requires and ``CONTAINER`` is what some
-#: backend resolved it to. ``verify`` reads neither.
-ZEPHYR = "4.4"
-CONTAINER = ContainerResolution(
-    image="ghcr.io/mcu-home/build-container",
-    tag="zephyr-4.4.0-r4",
-    digest="sha256:" + "ab" * 32,
+#: The build environment is pinned to a specific digest. ``verify`` reads
+#: only that the reference is well-formed; it does not validate that the
+#: image actually exists.
+ENVIRONMENT_PIN = EnvironmentPin(
+    reference="ghcr.io/mcu-home/build-container:zephyr-4.4.0-r4@sha256:" + "ab" * 32,
 )
 SDK = SdkPin(
     constraint="^0.1.0",
@@ -185,12 +182,12 @@ def locked_context(root: Path, files: dict[str, str] | None = None) -> ContextMa
         entries.append(ContextFile(path=name, sha256=digest))
     manifest = ContextManifest(
         sdk=SDK,
-        zephyr=ZEPHYR,
-        container=CONTAINER,
+        build_environment=ENVIRONMENT_PIN,
         board="nrf7002dk/nrf5340/cpuapp",
         files=tuple(entries),
         id=context_id(
             sdk_sha256=SDK.sha256,
+            environment_digest=ENVIRONMENT_PIN.digest,
             board="nrf7002dk/nrf5340/cpuapp",
             files=entries,
         ),
@@ -861,8 +858,7 @@ def test_a_manifest_that_lies_about_its_own_id_does_not_verify(
     write_context_manifest(
         ContextManifest(
             sdk=SDK,
-            zephyr=ZEPHYR,
-            container=CONTAINER,
+            build_environment=ENVIRONMENT_PIN,
             board=manifest.board,
             files=manifest.files,
             id="sha256:" + "00" * 32,
@@ -917,19 +913,21 @@ def test_a_context_format_version_this_program_does_not_implement(
     ``failure`` … because the program is refusing a document written to a
     specification it does not have, which a backend can act on by choosing
     another image — nothing about this context is broken." Nothing is
-    hashed on the way out either: the rule for hashing a version 3 context
-    is written in a document this program does not have.
+    hashed on the way out either: the rule for hashing the next format is
+    written in a document this program does not have.
     """
     path = context / MANIFEST_FILE
     path.write_text(
-        path.read_text(encoding="utf-8").replace(f"context: {CONTEXT_VERSION}", "context: 3"),
+        path.read_text(encoding="utf-8").replace(
+            f"context: {CONTEXT_VERSION}", f"context: {CONTEXT_VERSION + 1}"
+        ),
         encoding="utf-8",
     )
     assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
     document = backend.document()
     assert document["status"] == "unsupported"
     assert document["reason"] == "unsupported.context"
-    assert document["error"]["details"]["context"] == 3
+    assert document["error"]["details"]["context"] == CONTEXT_VERSION + 1
     assert "context" not in document
 
 

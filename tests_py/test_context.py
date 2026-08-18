@@ -32,9 +32,14 @@ from mcuhome.model.context import (
     CONTEXT_VERSION,
     MANIFEST_FILE,
     ContextFile,
+    ContextManifest,
+    ContextRequest,
+    EnvironmentPin,
+    SdkPin,
     canonical_json,
     context_id,
-    validate_zephyr_line,
+    environment_digest,
+    validate_manifest,
     vector_id,
 )
 from mcuhome.model.errors import BuildError
@@ -42,6 +47,7 @@ from mcuhome.model.toolchain import line_of, normalize_release, satisfies_line
 
 # The fixed synthetic inputs of the golden vector.
 SDK_SHA = "cd" * 32
+ENVIRONMENT_DIGEST = "sha256:" + "4d" * 32
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 FILES = (
     ContextFile(path="model/device-model.json", sha256="11" * 32),
@@ -53,12 +59,12 @@ FILES = (
 #: constant — a change here is a change to a frozen contract, and the
 #: bug is in the code that made it necessary.
 #:
-#: It moved exactly once, with the bump to context format 2 (E61), which
-#: is the only thing that may move it: the hashed document lost its
-#: ``container`` member, so the same inputs hash to a different number
-#: under a different format version. A frozen rule is frozen per format
-#: version, and version 1 no longer exists to disagree with this.
-GOLDEN_ID = "sha256:11affc97a03519f03745793f96c02d40d8b0216b0c57772d94cec5f322f8abcf"
+#: It moved with the bump to context format 3, which is the only thing
+#: that may move it: the hashed document gained a ``build_environment``
+#: member, so the same inputs hash to a different number under a different
+#: format version. A frozen rule is frozen per format version, and version
+#: 2 no longer exists to disagree with this.
+GOLDEN_ID = "sha256:b033e1ddade6357860d87555d87c6575ec53901623b64b8452b16c954c9d3479"
 
 
 # --------------------------------------------------------------------------
@@ -89,7 +95,12 @@ def test_canonical_json_escapes_strings_the_ecmascript_way() -> None:
 
 def test_the_golden_vector_never_changes() -> None:
     """The regression anchor of the whole format. See GOLDEN_ID."""
-    computed = context_id(sdk_sha256=SDK_SHA, board=BOARD, files=FILES)
+    computed = context_id(
+        sdk_sha256=SDK_SHA,
+        environment_digest=ENVIRONMENT_DIGEST,
+        board=BOARD,
+        files=FILES,
+    )
     assert computed == GOLDEN_ID
 
 
@@ -105,7 +116,7 @@ def test_the_conformance_vectors_hold(vector) -> None:
     obligation is checkable rather than asserted, and this test is the
     Python side running it.
 
-    A failure here is never fixed in the data: version 2's vectors are
+    A failure here is never fixed in the data: version 3's vectors are
     frozen exactly as :data:`GOLDEN_ID` is.
     """
     assert vector_id(vector) == vector["id"]
@@ -162,7 +173,8 @@ def test_an_implementation_sorting_by_utf16_code_units_fails_the_suite() -> None
 def test_the_golden_vectors_canonical_form_never_changes() -> None:
     """The exact bytes under the hash, spelled out — nesting, order, all."""
     expected = (
-        '{"files":['
+        '{"build_environment":{"digest":"' + ENVIRONMENT_DIGEST + '"},'
+        '"files":['
         '{"path":"model/device-model.json","sha256":"' + "11" * 32 + '"},'
         '{"path":"patches/zephyr/0001-fix.patch","sha256":"' + "22" * 32 + '"}],'
         '"sdk":{"sha256":"' + SDK_SHA + '"},'
@@ -173,13 +185,19 @@ def test_the_golden_vectors_canonical_form_never_changes() -> None:
 
 def test_the_order_files_are_given_in_does_not_matter() -> None:
     """The sort is part of the rule: the list is a set with an encoding."""
-    computed = context_id(sdk_sha256=SDK_SHA, board=BOARD, files=reversed(FILES))
+    computed = context_id(
+        sdk_sha256=SDK_SHA,
+        environment_digest=ENVIRONMENT_DIGEST,
+        board=BOARD,
+        files=reversed(FILES),
+    )
     assert computed == GOLDEN_ID
 
 
 def test_every_hashed_field_changes_the_id() -> None:
     variants = [
         {"sdk_sha256": "dc" * 32},
+        {"environment_digest": "sha256:" + "5e" * 32},
         {"board": "nrf52840dk/nrf52840"},
         # A file's content, a file's path, one file more, one file less.
         {"files": (FILES[0], replace(FILES[1], sha256="33" * 32))},
@@ -191,6 +209,7 @@ def test_every_hashed_field_changes_the_id() -> None:
         context_id(
             **{
                 "sdk_sha256": SDK_SHA,
+                "environment_digest": ENVIRONMENT_DIGEST,
                 "board": BOARD,
                 "files": FILES,
                 **variant,
@@ -206,23 +225,18 @@ def test_a_duplicate_path_is_refused() -> None:
     with pytest.raises(BuildError) as caught:
         context_id(
             sdk_sha256=SDK_SHA,
+            environment_digest=ENVIRONMENT_DIGEST,
             board=BOARD,
             files=(FILES[0], replace(FILES[0], sha256="33" * 32)),
         )
     assert "twice" in caught.value.message
 
 
-@pytest.mark.parametrize("line", ["", "  ", "v4.4", "4.4.0-rc1", "latest", "4.x"])
-def test_a_malformed_zephyr_line_is_refused(line: str) -> None:
-    """A line is dotted decimals: no leading v, no suffix, no word."""
-    with pytest.raises(BuildError):
-        validate_zephyr_line(line)
-
-
 def test_a_malformed_file_hash_is_refused() -> None:
     with pytest.raises(BuildError):
         context_id(
             sdk_sha256=SDK_SHA,
+            environment_digest=ENVIRONMENT_DIGEST,
             board=BOARD,
             files=(replace(FILES[0], sha256="not-a-hash"),),
         )
@@ -230,7 +244,12 @@ def test_a_malformed_file_hash_is_refused() -> None:
 
 def test_a_missing_board_is_refused() -> None:
     with pytest.raises(BuildError):
-        context_id(sdk_sha256=SDK_SHA, board="  ", files=FILES)
+        context_id(
+            sdk_sha256=SDK_SHA,
+            environment_digest=ENVIRONMENT_DIGEST,
+            board="  ",
+            files=FILES,
+        )
 
 
 @pytest.mark.parametrize(
@@ -241,6 +260,7 @@ def test_an_unusable_path_is_refused(path: str) -> None:
     with pytest.raises(BuildError):
         context_id(
             sdk_sha256=SDK_SHA,
+            environment_digest=ENVIRONMENT_DIGEST,
             board=BOARD,
             files=(ContextFile(path=path, sha256="11" * 32),),
         )
@@ -252,7 +272,7 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
 
     ``context.yaml`` is the one that went unenforced for a while: §3.2
     excludes it "as a statement about the hash rather than about layout"
-    — its never-hashed fields (constraint, url, zephyr, created) would leak
+    — its never-hashed fields (constraint, url, created) would leak
     into an identity §6 computes from resolved values alone — but the
     shared vocabulary accepted it anyway, leaving the exclusion to every
     caller separately. The build server recomputes IDs from received
@@ -262,6 +282,7 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
     with pytest.raises(BuildError) as caught:
         context_id(
             sdk_sha256=SDK_SHA,
+            environment_digest=ENVIRONMENT_DIGEST,
             board=BOARD,
             files=(ContextFile(path=path, sha256="11" * 32),),
         )
@@ -269,19 +290,19 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Context format 2: the requirement, and the backend's answer to it (E61)
+# Context format 3: the pinned build environment and identity
 # --------------------------------------------------------------------------
 
 
-def test_the_format_version_is_two() -> None:
-    """Version 1 is gone rather than supported alongside this one.
+def test_the_format_version_is_three() -> None:
+    """Version 2 is gone rather than supported alongside this one.
 
     Pinned as a number because everything else in this file is written
     against it: the golden ID, the vectors, and the refusal a document of
     another version gets. Nothing is published, so the bump cost nothing
     — and this assertion is what makes the next bump a deliberate act.
     """
-    assert CONTEXT_VERSION == 2
+    assert CONTEXT_VERSION == 3
 
 
 @pytest.mark.parametrize(
@@ -383,3 +404,102 @@ def test_normalize_release_strips_one_leading_v(version: str, expected: str) -> 
     carries; this is the one place that strip happens, for every reader
     of a ``describe`` answer or a west revision alike."""
     assert normalize_release(version) == expected
+
+
+# --------------------------------------------------------------------------
+# The pin itself
+# --------------------------------------------------------------------------
+
+
+PINNED = "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10@sha256:" + "ab" * 32
+
+
+def test_a_pin_carries_its_digest_where_the_identity_reads_it() -> None:
+    """One string in the document, one place the digest is written."""
+    assert EnvironmentPin(reference=PINNED).digest == "sha256:" + "ab" * 32
+    assert environment_digest(PINNED) == "sha256:" + "ab" * 32
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10",
+        "ghcr.io/mcu-home/build-container",
+        "",
+        "   ",
+        "ghcr.io/x@sha256:short",
+        "ghcr.io/x@md5:" + "ab" * 16,
+        "ghcr.io/x@sha256:" + "AB" * 32,
+        "ghcr.io/x@" + "ab" * 32,
+    ],
+)
+def test_a_reference_that_is_not_a_pin_is_refused(reference: str) -> None:
+    """A tag alone moves, and hashing a moving name would be a lie.
+
+    Uppercase hex is refused rather than normalized for the reason every
+    other identity input is: two spellings of one value are two values as
+    far as a hash is concerned.
+    """
+    with pytest.raises(BuildError):
+        environment_digest(reference)
+
+
+def test_a_manifest_is_only_valid_when_its_environment_is_pinned() -> None:
+    """The check that used to be the Zephyr line's is the pin's now."""
+    unpinned = ContextManifest(
+        sdk=SdkPin(constraint="", version="0.1.0", url="", sha256=SDK_SHA),
+        build_environment=EnvironmentPin(reference="ghcr.io/mcu-home/build-container:x"),
+        board=BOARD,
+        files=FILES,
+        id=GOLDEN_ID,
+    )
+    with pytest.raises(BuildError):
+        validate_manifest(unpinned)
+
+
+def test_a_manifest_and_its_request_round_trip_through_their_documents() -> None:
+    """Both halves carry the pin, and both read back exactly what was written."""
+    pin = EnvironmentPin(reference=PINNED)
+    sdk = SdkPin(constraint="~=0.1", version="0.1.0", url="", sha256=SDK_SHA)
+    request = ContextRequest(
+        sdk=sdk, build_environment=pin, board=BOARD, created="2026-08-18T00:00:00Z"
+    )
+    assert ContextRequest.from_dict(request.to_dict()) == request
+    assert request.to_dict()["build_environment"] == PINNED
+
+    manifest = ContextManifest(
+        sdk=sdk,
+        build_environment=pin,
+        board=BOARD,
+        files=FILES,
+        id=context_id(
+            sdk_sha256=SDK_SHA,
+            environment_digest=pin.digest,
+            board=BOARD,
+            files=FILES,
+        ),
+    )
+    assert ContextManifest.from_dict(manifest.to_dict()) == manifest
+    assert manifest.compute_id() == manifest.id
+    validate_manifest(manifest)
+
+
+def test_two_contexts_differing_only_in_their_environment_are_two_contexts() -> None:
+    """The whole reason the pin is hashed.
+
+    Under the format this replaced, the same sources built in two
+    different containers produced one identity — which made the document
+    that names a build name two of them.
+    """
+    other = "sha256:" + "cd" * 32
+    assert context_id(
+        sdk_sha256=SDK_SHA,
+        environment_digest="sha256:" + "ab" * 32,
+        board=BOARD,
+        files=FILES,
+    ) != context_id(
+        sdk_sha256=SDK_SHA,
+        environment_digest=other,
+        board=BOARD,
+        files=FILES,
+    )

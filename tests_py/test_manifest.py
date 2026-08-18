@@ -136,7 +136,7 @@ def test_the_manifest_names_the_device_and_the_builder(tmp_path) -> None:
     data = _manifest(tmp_path).to_dict()
     assert data["manifest_version"] == manifest_module.MANIFEST_VERSION
     assert data["builder"]["version"] == __version__
-    assert data["builder"]["model_version"] == 1
+    assert data["builder"]["model_version"] == 2
     assert data["device"] == {
         "name": "bmp180-node",
         "friendly_name": "BMP180 Two-Endpoint Node",

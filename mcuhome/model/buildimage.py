@@ -18,9 +18,13 @@ lives. Those are things a host does, they belong to the orchestrator
 (``mcuhome.workbench.buildenv``), and none of them is a fact about the
 image.
 
-The default is an interim. A build states which environment it wants,
-and pinning that in a device configuration is what replaces a constant
-compiled into a tool.
+What the default *is* changed with the client-side pin: it is a bare
+repository (:data:`DEFAULT_ENVIRONMENT`), not one image. The publisher
+recommends a revision through the moving tags below, a client picks the
+Zephyr release out of what its SDK declares, and the labels decide
+whether the two agree. :data:`IMAGE` — one exact image — survives as
+what *this* repository builds and tags, which is a different question
+from what a build runs.
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ from __future__ import annotations
 __all__ = [
     "CCACHE_DIR_VAR",
     "CONTAINER_HOME",
+    "CONTRACT_LABEL",
+    "DEFAULT_ENVIRONMENT",
     "DOCKERFILE_DIR",
     "DOCKER_VAR",
     "IMAGE",
@@ -35,7 +41,14 @@ __all__ = [
     "IMAGE_REVISION",
     "IMAGE_TAG",
     "IMAGE_VAR",
+    "LABEL_PREFIX",
+    "LATEST_SUFFIX",
+    "REQUIRED_LABELS",
+    "TOOLCHAIN_LABEL",
+    "ZEPHYR_LABEL",
     "ZEPHYR_RELEASE",
+    "aggregate_tags",
+    "latest_tag",
 ]
 
 
@@ -119,20 +132,70 @@ ZEPHYR_RELEASE = "4.4.0"
 #: cacheable compiles and took 2 of them from a cache — the only cache
 #: there was lived in the session's ``work`` directory, and every build
 #: wipes that before it starts.
-IMAGE_REVISION = 9
+#:
+#: r10 = the labels are renamed to the ``org.mcuhome.build-environment.*``
+#: scheme below, and the Zephyr one states its subject (``.zephyr.version``).
+#: An image is now chosen by a *client*, which reads those labels out of a
+#: registry before it has pulled anything, so what they are called is part
+#: of how an environment is found rather than a detail of how one is
+#: checked afterwards. Images built before this carry the old names, do not
+#: qualify, and are not meant to — the names are the break.
+IMAGE_REVISION = 10
 
 #: GitHub Container Registry under the MCUHome organization. Public
 #: since 2026-08-15 — ``docker pull`` works anonymously.
 IMAGE_REPOSITORY = "ghcr.io/mcu-home/build-container"
 
-#: ``zephyr-<line>-r<revision>``, and never ``latest``: a build
-#: environment that changes under a stable name is not one. CI also
-#: publishes the moving ``zephyr-<line>`` alias for people who want the
-#: newest revision of a Zephyr line, but the builder never asks for it.
+#: ``zephyr-<release>-r<revision>`` — the immutable name of exactly these
+#: bytes, and never ``latest``: a build environment that changes under a
+#: stable name is not one.
 IMAGE_TAG = f"zephyr-{ZEPHYR_RELEASE}-r{IMAGE_REVISION}"
 
 #: The image this version of the builder compiles in.
 IMAGE = f"{IMAGE_REPOSITORY}:{IMAGE_TAG}"
+
+#: The suffix of the *moving* tags beside the immutable ones. Publishing
+#: them is the publisher's half of how an environment is found: a client
+#: knows which Zephyr it needs and asks for that, and the publisher says
+#: which revision of it he currently recommends. Nobody else can — the
+#: publisher is the party that knows his container was fixed yesterday.
+LATEST_SUFFIX = "-latest"
+
+
+def latest_tag(release: str) -> str:
+    """The moving tag for one exact Zephyr *release* — ``zephyr-4.4.0-latest``.
+
+    Required of every build environment. It is the tag a client lands on
+    when it asks for one particular release, and the only tag whose
+    existence a resolution may assume, because a publisher who has a
+    release at all can always say which of its revisions he recommends.
+    """
+    return f"zephyr-{release}{LATEST_SUFFIX}"
+
+
+def aggregate_tags(release: str) -> tuple[str, ...]:
+    """The moving tags for the *prefixes* of *release*, longest first.
+
+    ``4.4.0`` yields ``zephyr-4.4-latest`` and ``zephyr-4-latest``: the
+    names for "the newest 4.4.x you recommend" and "the newest 4.x". They
+    are **recommended, not required**. A client that asks for a range
+    rather than one release tries them first and gets its answer in two
+    requests; a publisher who does not keep them costs that client a tag
+    listing and nothing else.
+    """
+    parts = release.split(".")
+    return tuple(
+        f"zephyr-{'.'.join(parts[:count])}{LATEST_SUFFIX}" for count in range(len(parts) - 1, 0, -1)
+    )
+
+
+#: What a device is built in when nothing says otherwise: this project's
+#: build environment, named as a bare repository. **No tag on purpose** —
+#: a reference that named one would freeze every device created while it
+#: was the default onto that revision, and choosing the revision is the
+#: publisher's job (:func:`latest_tag`). What the *client* chooses is the
+#: Zephyr release, out of what its SDK declares.
+DEFAULT_ENVIRONMENT = IMAGE_REPOSITORY
 
 #: Overrides :data:`IMAGE`. For a locally built image, a mirror, or a
 #: bisect across image revisions. ``--container-image`` beats it, it beats the
@@ -156,3 +219,38 @@ CONTAINER_HOME = "/tmp/mcuhome-home"
 #: Where the Dockerfile lives, relative to the repository root — quoted
 #: in the "you have no image" message, so it has to stay true.
 DOCKERFILE_DIR = "containers/build-container"
+
+
+# --------------------------------------------------------------------------
+# What the image says about itself
+# --------------------------------------------------------------------------
+
+#: The namespace of every label a build environment declares itself with.
+#: It names the *thing* — a build environment — rather than the project,
+#: because a third party publishes one of these too, under this scheme,
+#: and reads it the same way.
+LABEL_PREFIX = "org.mcuhome.build-environment"
+
+#: The build-container contract version the image implements. A whole
+#: number as a string; the one label whose value is also stated by the
+#: program inside the image, so the two can be cross-checked.
+CONTRACT_LABEL = f"{LABEL_PREFIX}.contract"
+
+#: The **exact Zephyr release** the environment carries — ``4.4.0``, never
+#: a line and never west's leading ``v``. It is the label a constraint is
+#: evaluated against, which is why it says ``version``: what a client
+#: states is a range, and what an image states is one point in it.
+ZEPHYR_LABEL = f"{LABEL_PREFIX}.zephyr.version"
+
+#: Which toolchain the environment builds with (``zephyr-sdk-1.0.1``).
+#: Carried, not constrained: nothing selects on it today, and a build
+#: report that cannot say which compiler produced the bytes is worth less
+#: than the label costs.
+TOOLCHAIN_LABEL = f"{LABEL_PREFIX}.toolchain"
+
+#: The three together — what an image must carry to be one of these at
+#: all. **Absence is never read as compatible**: an environment that does
+#: not say what it builds against has not made the declaration a
+#: constraint is written against, so a missing label disqualifies rather
+#: than defaulting.
+REQUIRED_LABELS = (CONTRACT_LABEL, ZEPHYR_LABEL, TOOLCHAIN_LABEL)

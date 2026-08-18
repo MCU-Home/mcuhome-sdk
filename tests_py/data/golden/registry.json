@@ -1,7 +1,7 @@
 {
   "registry_version": 1,
   "builder_version": "0.1.0.dev0",
-  "model_version": 1,
+  "model_version": 2,
   "boards": [
     {
       "name": "nrf7002dk/nrf5340/cpuapp",

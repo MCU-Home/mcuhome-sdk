@@ -107,7 +107,7 @@ about r6 differs from r5.
 
 **All three actions of §7 are implemented** — `describe`, `verify` and
 `build` — which is what let the image start claiming conformance in r5.
-The claim was withheld through r4 on purpose: `org.mcuhome.contract=1`
+The claim was withheld through r4 on purpose: the contract label
 claims conformance, conformance means all three actions, and a label the
 program cannot back is a false claim to exactly the third parties the
 contract is written for.
@@ -136,9 +136,15 @@ container:
 
 | Label | r5 and r6 | since r7 |
 |---|---|---|
-| name | `org.mcuhome.model.toolchain` | `org.mcuhome.toolchain` (§2.1) |
+| name | `org.mcuhome.model.toolchain` | `org.mcuhome.toolchain` (§2.1 as it then read) |
 | `org.mcuhome.zephyr` | `v4.4.0` | `4.4.0` — §2.1.1 asks for the version *without* west's leading `v` |
 | `org.mcuhome.toolchain` | `zephyr-sdk-1.0.1/arm-zephyr-eabi` | `zephyr-sdk-1.0.1` — `<identity>-<version>`, and `/` is outside the permitted character class |
+
+The label *names* in that table are the ones r7 fixed and are not the
+current ones: r10 moved all three into `org.mcuhome.build-environment.*`
+(and gave the Zephyr one its subject, `.zephyr.version`). The row above
+is kept spelled as it was, because a repair history that renamed itself
+would stop describing the images it is about.
 
 None of the three was cosmetic. A compatibility constraint is evaluated
 against these values, and "a container that does not carry a named label
