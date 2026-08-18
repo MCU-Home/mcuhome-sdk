@@ -431,6 +431,14 @@ def test_a_pin_carries_its_digest_where_the_identity_reads_it() -> None:
         "ghcr.io/x@md5:" + "ab" * 16,
         "ghcr.io/x@sha256:" + "AB" * 32,
         "ghcr.io/x@" + "ab" * 32,
+        # No repository at all. It has to be refused *here*, because this
+        # is the only check a document's environment field goes through:
+        # a rule that looked past the `@` and no further would accept a
+        # reference nothing can run and leave it to be discovered by
+        # whoever tried.
+        "@sha256:" + "ab" * 32,
+        "ghcr.io/@sha256:" + "ab" * 32,
+        "ghcr.io/X/y@sha256:" + "ab" * 32,
     ],
 )
 def test_a_reference_that_is_not_a_pin_is_refused(reference: str) -> None:
