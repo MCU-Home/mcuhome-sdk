@@ -7,7 +7,7 @@ west workspace, the tools already on their ``PATH``, ``west build``
 straight into a build directory. :mod:`mcuhome.compiler.workspace` is the
 machinery — the workspace lookup, the environment, the command, the
 artifact and memory readers — and this module is the thin composition
-above it, the counterpart of :mod:`mcuhome.compiler.localbuild` for the
+above it, the counterpart of the workbench's container build for the
 ``local`` method.
 
 **Why it exists at all.** ADR 0020 decision 6 puts the three methods

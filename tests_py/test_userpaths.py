@@ -177,18 +177,20 @@ def _process_reads(source: str) -> list[str]:
 def test_no_module_reads_process_state() -> None:
     """One process, several sessions, one environment each (ADR 0020).
 
-    ``container.py`` is asserted to be among the modules examined because
-    it used to hold exactly this read — a search that stopped reaching it
-    would pass while checking less than it did yesterday. The other
-    module that held one, ``signing.py``, is the workbench's, so it is
-    the second test's canary rather than this one's (see the module
-    docstring).
+    A named module is asserted to be among the ones examined so that a
+    search which stopped reaching the package would fail rather than pass
+    while checking nothing. ``workspace.py`` is the canary here: it is
+    this package's largest host-facing module and the one that would feel
+    a stray ``os.environ`` first. The two modules that actually held such
+    a read are elsewhere now — ``signing.py`` always was the workbench's,
+    and ``container.py`` became ``buildenv.py`` there when the
+    orchestrator moved, where the workbench's own copy of this test
+    covers it.
     """
     modules = package_modules()
     names = {path.name for path in modules}
-    assert "container.py" in names, (
-        "the search no longer reaches the module that used to read the "
-        "process — extend conftest.PACKAGES"
+    assert "workspace.py" in names, (
+        "the search no longer reaches this package's modules — extend conftest.PACKAGES"
     )
     for module in modules:
         if module.name in EXEMPT:

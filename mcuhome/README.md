@@ -55,7 +55,6 @@ workbench's modules — see
 | Module | Stage | Role |
 |---|---|---|
 | `compiler/generate.py` | 4 | the per-device build tree: Matter/channel tables, overlay, Kconfig fragment, CMakeLists, the sysbuild half |
-| `compiler/container.py` | 5 | the builder image: which one, which mounts, the `docker run` around the build |
 | `compiler/workspace.py` | 5 | west-workspace discovery, prerequisites, the `west build --sysbuild` invocation, per-image artifacts and memory reports |
 | `compiler/abi.py` | — | the build container's invocation ABI, and the SDK-side adapter behind it |
 | `model/pairing.py` | — | commissioning credentials: SPAKE2+ verifier, QR and manual code, the atomic Kconfig group |
@@ -94,16 +93,16 @@ is left behind owned by root. `--build-mode local-dev` compiles in the
 west workspace `mcuhome.compiler` is installed in instead — the escape
 hatch for MCUHome's own contributors.
 
-The container path is `localbackend.py`, the backend half of the
-[build-container contract](../docs/design/build-container-contract.md):
-it starts one container per build, mounts what a session needs at the
-paths every build has — `/mcuhome/ctx`, `/mcuhome/work`,
-`/mcuhome/inv/<n>`, the compiler cache — and speaks the invocation ABI to
-the program inside. `container.py` is only what is decided *before* that:
-which image, which container program, and whether either is there at all.
-**The signing key never enters a container on this path**: the build
-delivers an unsigned image plus a report, and the signature is a
-host-side step afterwards (ADR 0015 decision 8).
+The party that drives that container is **not in this repository**. It
+is the workbench's orchestrator, which starts one container per build,
+mounts what a session needs at the paths every build has —
+`/mcuhome/ctx`, `/mcuhome/work`, `/mcuhome/inv/<n>`, the compiler cache —
+and speaks the invocation ABI to the program inside. This package *is*
+that program, which is exactly why the two are apart: one distribution
+playing both roles could be replaced by neither half.
+**The signing key never enters a container**: the build delivers an
+unsigned image plus a report, and the signature is a host-side step
+afterwards (ADR 0015 decision 8).
 
 ## Three rules worth knowing before changing anything here
 

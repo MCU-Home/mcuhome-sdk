@@ -154,7 +154,7 @@ old value: it is the `ZEPHYR_TOOLCHAIN` build argument at the top of the
 The Zephyr part is the `zephyr` revision pinned in
 [`west.yml`](../../west.yml); the revision counts rebuilds of the image
 for that same Zephyr release. The single source of truth for both is
-[`mcuhome/compiler/container.py`](../../mcuhome/compiler/container.py) — the builder, the CI
+[`mcuhome/model/buildimage.py`](../../mcuhome/model/buildimage.py) — the builder, the CI
 workflow and this file all read the tag from there, and `tests_py/
 test_container.py` asserts that it still agrees with `west.yml`.
 
@@ -242,7 +242,7 @@ docker run --rm ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9 \
 ## How the builder runs it
 
 `mcuhome device build` assembles the invocation in
-[`mcuhome/compiler/container.py`](../../mcuhome/compiler/container.py); `mcuhome device build …`
+[`mcuhome/model/buildimage.py`](../../mcuhome/model/buildimage.py); `mcuhome device build …`
 prints it before it runs. In short:
 
 - `--user <your uid>:<your gid>` — nothing is left behind owned by root.
@@ -322,6 +322,6 @@ docker run --rm --user "$(id -u):$(id -g)" \
 ## Bumping Zephyr
 
 The Zephyr pin, the CHIP pin and this image move together (ADR 0008). In
-one commit: `west.yml`, `ZEPHYR_RELEASE` in `mcuhome/compiler/container.py`,
+one commit: `west.yml`, `ZEPHYR_RELEASE` in `mcuhome/model/buildimage.py`,
 `IMAGE_REVISION` back to 1, and the SDK version and checksums in the
 `Dockerfile`.
