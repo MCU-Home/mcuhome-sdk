@@ -31,13 +31,11 @@ setup(
         # mcuhome.compiler.contextread parses manifest.yaml — the same
         # parser the workbench uses, declared here in its own right.
         "ruamel.yaml>=0.18",
-        # PEP 440 version equality for the backend's exact index match
-        # (mcuhome.compiler.localbackend._exact_index_entry).
-        "packaging>=23",
-        # The local build method (mcuhome.compiler.localbackend) unpacks the
-        # SDK package, and that package is a tar.zst (E41) — so it needs a
-        # zstd binding. zstandard is the one the build server already uses
-        # for the same archive family, kept the same here on purpose.
-        "zstandard>=0.22",
+        # PEP 440 version handling and a zstd binding were here for the
+        # orchestrator, which is the workbench's now: what is left of this
+        # package runs *inside* a build container, where the SDK package
+        # is mounted rather than fetched and unpacked. scripts/
+        # build_sdk_archive.py still needs zstandard and installs it in
+        # its own right.
     ]
 )

@@ -5,7 +5,7 @@
 The build-container contract states the entry once (§5.4) and every
 execution site needs it: the ``local`` method reads it out of a build
 container's result document
-(:mod:`mcuhome.compiler.localbackend`), the ``remote`` method reads it
+(the workbench's orchestrator), the ``remote`` method reads it
 off the session protocol's verdict
 (:mod:`mcuhome.workbench.sessionclient`), and whatever signs or flashes
 the image afterwards reads it from whichever of them ran. That is the

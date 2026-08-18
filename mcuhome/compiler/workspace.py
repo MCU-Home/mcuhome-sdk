@@ -7,7 +7,7 @@ This module turns it into an image, by driving ``west build`` in the west
 workspace the builder itself lives in.
 
 **The escape hatch, not the normal path (ADR 0007).** ``mcuhome device build``
-compiles inside the versioned builder image (:mod:`mcuhome.compiler.container`);
+compiles inside the versioned builder image (:mod:`mcuhome.model.buildimage`);
 ``--build-mode local-dev`` selects what is below, for people who already have
 a west workspace with a toolchain in it — MCUHome's own contributors. The two
 paths meet at :func:`plan_build` and :class:`BuildPlan`: a command plus an
@@ -400,7 +400,7 @@ def resolve_jobs(*, env: dict[str, str], cli_jobs: int | None = None) -> Resolve
     than resolving it again: the outer ``-o=-jN`` (:func:`west_build_command`),
     :data:`CHIP_JOBS_VAR` for the inner CHIP GN sub-build
     (:func:`build_environment`), and the container path
-    (:mod:`mcuhome.compiler.container`), which receives it as a plain ``jobs``
+    (:mod:`mcuhome.model.buildimage`), which receives it as a plain ``jobs``
     argument like the local-dev path does.
 
     A :data:`JOBS_VAR` that is not a positive whole number is treated as
@@ -446,7 +446,7 @@ def build_environment(
 
     **This is the one definition of a Matter build environment**, and all
     three callers reach it: :func:`plan_build` for ``local-dev``,
-    :func:`mcuhome.compiler.container.container_environment` for the ``docker
+    the workbench's orchestrator for the ``docker
     run``, and :class:`mcuhome.compiler.abi` for the build-container contract's
     ``build`` action. Each adds what only it knows — a ccache location,
     the contract's ``TMPDIR`` — and none of them restates what is here. A
@@ -466,7 +466,7 @@ def build_environment(
     process should be scribbling in (build-container-contract.md §4); and
     an inherited ``HOME`` inside a container belongs to whoever built the
     image, not to the UID the build runs as — see
-    :data:`mcuhome.compiler.container.CONTAINER_HOME` for what that costs when it
+    :data:`mcuhome.model.buildimage.CONTAINER_HOME` for what that costs when it
     is missing.
     """
     prepared = dict(env)

@@ -19,7 +19,6 @@ from pathlib import Path
 import pytest
 from ruamel.yaml import YAML
 
-from mcuhome.compiler import container
 from mcuhome.model.context import (
     BACKEND_DIR,
     CONTEXT_FILE,
@@ -148,25 +147,10 @@ def _no_real_signing_key(monkeypatch, tmp_path):
     monkeypatch.delenv("MCUHOME_SIGNING_KEY", raising=False)
 
 
-@pytest.fixture(autouse=True)
-def _no_docker(monkeypatch):
-    """Nothing in this suite is allowed to reach a container runtime.
-
-    A safety net, not a convenience: `mcuhome build` now defaults to the
-    container, so a test that forgets to stub stage 5 would otherwise
-    quietly start a real Matter build on the machine running pytest —
-    minutes of CPU and gigabytes of build directory, from a suite whose
-    whole promise is one second. Tests that want a working preflight
-    replace this with their own runner, which wins because their
-    monkeypatch is applied later.
-    """
-
-    def refuse(command, env):
-        raise AssertionError(
-            f"a test tried to run {command[0]!r}: stage 5 must be stubbed, see tests_py/README.md"
-        )
-
-    monkeypatch.setattr(container, "_run_quiet", refuse)
+# The autouse fixture that made every docker call an assertion error left
+# with the thing that made docker calls: driving a build container is the
+# workbench's now, and no module in this repository starts one. The guard
+# lives there, over the orchestrator it guards.
 
 
 # --- the example model, without the workbench -------------------------

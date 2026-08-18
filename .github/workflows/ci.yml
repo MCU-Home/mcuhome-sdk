@@ -373,7 +373,7 @@ jobs:
     env:
       # Pins the host-side ccache directory into the workspace so the
       # cache action has a path it can name. Without it
-      # mcuhome.compiler.container falls back to $XDG_CACHE_HOME/$HOME, which is
+      # the workbench's ccache lookup falls back to $XDG_CACHE_HOME/$HOME, which is
       # the runner's business and not stable across runner images.
       # `mcuhome device build` creates the two role directories under it
       # (cache-local, cache-shared) and mounts them where the image's own
@@ -523,7 +523,7 @@ jobs:
       # is configured for it: compiler_check = content survives a docker
       # pull where the default mtime check does not, and CCACHE_BASEDIR
       # normalizes the workspace path (containers/build-container/Dockerfile,
-      # mcuhome/compiler/container.py). Nothing had to be invented here.
+      # mcuhome/model/buildimage.py). Nothing had to be invented here.
       #
       # Restore always, save only from main: an entry may approach the
       # 5 GB the image allows, and a pull request saving one per run

@@ -20,7 +20,7 @@
 # context plus a pinned container digest reproduces the build. Baked, that
 # state becomes a property of the image digest, and the gap closes.
 #
-# Nothing uses the baked workspace yet: mcuhome/compiler/container.py still
+# Nothing uses the baked workspace yet: the workbench's orchestrator still
 # bind-mounts the host's workspace at its own absolute path and builds out
 # of that (which is what makes a build directory usable from inside and
 # outside the container). Switching the run-time side over is a separate
@@ -44,7 +44,7 @@
 #
 # Versioned in lockstep with the Zephyr pin in west.yml: the tag is
 # `zephyr-<zephyr version>-r<image revision>`, and the single source of
-# truth for it is mcuhome/compiler/container.py. Bump the revision whenever
+# truth for it is mcuhome/model/buildimage.py. Bump the revision whenever
 # anything below changes; bump the Zephyr part when west.yml does. Since
 # r3 the revision also has to be bumped for west.yml and patches/, which
 # are image inputs now.
@@ -450,7 +450,7 @@ COPY --from=workspace /mcuhome /mcuhome
 # 0755 rather than the mode git happens to carry, because §2.2 requires it
 # to be executable by EVERY user the backend may exec as — the backend
 # runs the program as the calling user where it can (the `--user` argument
-# in mcuhome/compiler/container.py), and that user owns nothing in this image and
+# in mcuhome/model/buildimage.py), and that user owns nothing in this image and
 # has no /etc/passwd entry here. Set with a RUN rather than with COPY
 # --chmod so the classic builder can build this image too.
 #

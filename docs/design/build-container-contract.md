@@ -217,7 +217,7 @@ The image MUST provide an executable at the fixed absolute path
 `/mcuhome/run` (script or binary) implementing the invocation ABI of
 §5. It MUST be executable by **every** user the backend may exec as —
 the backend runs the program as the calling user where it can
-(`mcuhome/compiler/container.py:424-430`).
+(`mcuhome/workbench/buildenv.py`).
 
 The path is absolute and fixed, and the program is **not** looked up on
 `PATH`. Three reasons, all of which are properties of a filesystem this
