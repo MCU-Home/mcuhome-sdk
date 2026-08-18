@@ -8,8 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A build context pins the build environment, and the pin is part of
+  its identity** — context format **3**. The client resolves which image
+  its firmware is compiled in before a context exists and writes the
+  reference, digest included; a backend runs those bytes or refuses. The
+  `zephyr:` requirement field and the backend-written `container:` block
+  are both gone, replaced by one `build_environment:` scalar, and its
+  digest joins the hashed document. It is the reverse of what format 2
+  did, and it became possible because selecting an environment turned out
+  to need nothing but a registry's tag list and an image's labels — three
+  anonymous HTTPS requests, no pull and no build server.
+- **The image labels are renamed** to `org.mcuhome.build-environment.*`,
+  and the Zephyr one states its subject
+  (`org.mcuhome.build-environment.zephyr.version`). An image is now
+  chosen by a client, which reads those labels out of a registry before
+  it has pulled anything, so what they are called is part of how an
+  environment is found. Image revision **r10**; images built before it do
+  not qualify, and are not meant to.
+- **The image publishes moving `-latest` tags** beside its immutable
+  revision tags: `zephyr-<release>-latest` per Zephyr release, plus the
+  aggregate `zephyr-<X.Y>-latest` and `zephyr-<X>-latest`. They are how a
+  client finds an environment at all — it picks the Zephyr release its
+  SDK needs, the publisher says which revision of it he recommends.
+- **Canonical device model version 2**: a `sources` block naming where
+  the SDK and the build environment come from, in the Docker reference
+  form, and `toolchain.zephyr_constraint` — what a build environment has
+  to carry, as a PEP 440 range rather than a version.
+
 ### Added
 
+- `mcuhome.model.imageref`: the reference form both external inputs are
+  named in — `[registry/]path[:tag][@sha256:…]` — parsed once, for an SDK
+  package and a build environment alike.
+- `mcuhome.model.toolchain.ZEPHYR_CONSTRAINT`: what this SDK release
+  requires of a build environment, as a constraint. An SDK that needs a
+  fix from a particular patch release says so; a security patch release
+  is taken automatically, which a pinned version could not do.
 - `mcuhome.model.containerpaths`: the paths a session's directories have
   *inside* a build container, chosen once for every session on every
   machine. Build-container contract §4 leaves mount points to the

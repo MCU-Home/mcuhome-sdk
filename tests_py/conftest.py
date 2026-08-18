@@ -23,10 +23,10 @@ from mcuhome.model.context import (
     BACKEND_DIR,
     CONTEXT_FILE,
     MANIFEST_FILE,
-    ContainerResolution,
     ContextFile,
     ContextManifest,
     ContextRequest,
+    EnvironmentPin,
     context_id,
 )
 from mcuhome.model.hashes import sha256_file
@@ -238,7 +238,7 @@ def write_context_manifest(manifest: ContextManifest, *, out_dir: Path) -> Path:
 
 
 def lock_context(
-    out_dir: Path, *, request: ContextRequest, container: ContainerResolution
+    out_dir: Path, *, request: ContextRequest, build_environment: EnvironmentPin
 ) -> ContextManifest:
     """Freeze a created context: hash its files and write ``manifest.yaml``.
 
@@ -247,18 +247,18 @@ def lock_context(
     ``lock_context``: the caller wrote the request a line earlier and a
     reader of the request is not what these tests are proving. Everything
     that reaches the manifest is the same — the request's pins restated,
-    the backend's *container* answer to the request's Zephyr requirement
-    (E61, outside the ID), and the ID over the files actually present.
+    the pinned *build_environment* from the request, and the ID over the
+    files actually present.
     """
     files = context_files(out_dir)
     manifest = ContextManifest(
         sdk=request.sdk,
-        zephyr=request.zephyr,
-        container=container,
+        build_environment=build_environment,
         board=request.board,
         files=files,
         id=context_id(
             sdk_sha256=request.sdk.sha256,
+            environment_digest=build_environment.digest,
             board=request.board,
             files=files,
         ),

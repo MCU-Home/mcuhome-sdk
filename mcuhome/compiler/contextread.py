@@ -231,6 +231,7 @@ def verify_context(root: Path) -> ContextVerification:
         manifest=manifest,
         actual_id=context_id(
             sdk_sha256=manifest.sdk.sha256,
+            environment_digest=manifest.build_environment.digest,
             board=manifest.board,
             files=present,
         ),

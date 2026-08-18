@@ -31,9 +31,9 @@
 # a thin launcher over mcuhome.compiler.abi, which is where the invocation ABI and
 # all three actions of §7 live. The abi module arrives with the SDK mount,
 # not with this image, so what the image contributes here is the launcher
-# and the fixed path. Since r5 the image also carries the org.mcuhome.*
-# labels of §2.1 — see the LABEL block in stage 3 for what that claim
-# means and what it deliberately does not.
+# and the fixed path. Since r5 the image also carries the labels of §2.1
+# — org.mcuhome.build-environment.* since r10 — see the LABEL block in
+# stage 3 for what that claim means and what it deliberately does not.
 #
 # Since r7 there is a fourth: /mcuhome/describe.json, §2.2's optional
 # static self-description, generated at image build time by running the
@@ -464,8 +464,8 @@ RUN chmod 0755 /mcuhome/run
 # pick an image before paying for a container start, and they are NOT
 # authoritative about what the program can do; `describe` is (§7.1).
 #
-# `org.mcuhome.contract=1` claims conformance with contract v1, and the
-# claim became true in three steps, none of them here: the program
+# The contract label claims conformance with contract v1, and the claim
+# became true in three steps, none of them here: the program
 # implements all three actions of §7 (`describe`, `verify`, `build` —
 # reviewed adversarially, exercised against this very image), and §4's
 # D1 erratum sanctions the one fixed path this image depends on, the
@@ -487,7 +487,7 @@ RUN chmod 0755 /mcuhome/run
 #   the NAME was org.mcuhome.model.toolchain — a casualty of ADR 0020's
 #       mcuhome.toolchain -> mcuhome.model.toolchain rename, which walked
 #       into a label the contract owns. A backend looks for
-#       org.mcuhome.toolchain (§2.1) and finds nothing, and "a container
+#       org.mcuhome.build-environment.toolchain (§2.1) and finds nothing, and "a container
 #       that does not carry a named label does not qualify": this image
 #       could satisfy no toolchain constraint at all.
 #   the ZEPHYR value was v4.4.0 — §2.1.1 asks for the version "**without**
@@ -503,9 +503,9 @@ RUN chmod 0755 /mcuhome/run
 #       leave nothing numeric to compare. The triple is not lost — it is
 #       the ZEPHYR_TOOLCHAIN ARG at the top of this file, which is where
 #       an image input belongs.
-LABEL org.mcuhome.contract="1" \
-      org.mcuhome.zephyr="4.4.0" \
-      org.mcuhome.toolchain="zephyr-sdk-1.0.1"
+LABEL org.mcuhome.build-environment.contract="1" \
+      org.mcuhome.build-environment.zephyr.version="4.4.0" \
+      org.mcuhome.build-environment.toolchain="zephyr-sdk-1.0.1"
 
 # Git refuses to operate in a repository owned by another user (the
 # CVE-2022-24765 hardening), and this is exactly that situation: the

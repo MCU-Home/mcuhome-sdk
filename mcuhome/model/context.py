@@ -9,18 +9,24 @@ build environment (a build container carrying a toolchain and Zephyr)
 and the SDK (fetched as a hash-pinned package). It travels as an
 archive, but the archive is transport: the directory is the artifact.
 
-**The client states a requirement; the backend resolves it** (E61). A
-context does not name a container — it names the **Zephyr line** its
-model was resolved against, and choosing a container that carries that
-line is the backend's job. The backend writes what it chose — image,
-tag, digest — into ``manifest.yaml``, outside the identity, and *that*
-is what reproduces the build years later. The alternative, a client
-that pins a container digest, asks the wrong party: a client knows
-which Zephyr it needs and cannot know which images a given build server
-serves, so a digest chosen by the client is either a guess or a
-round-trip that has to happen before a context can exist at all.
+**The client pins the build environment, and the pin is part of the
+identity.** A context names the exact image its firmware is compiled in,
+as a Docker reference carrying a digest, and nobody downstream chooses
+anything: a build server runs the bytes the reference names or refuses.
+That is what makes a context a complete statement of a build — the same
+context yields the same firmware on any machine that can fetch the
+image, which a context naming only a *requirement* could not promise,
+because two backends could answer one requirement with two different
+containers.
 
-**The context ID is normative — fixed with ``context`` format version 2,
+It is the reverse of what version 2 did, and the reason is that the
+client turned out to be able to do it. Selecting an environment needs a
+registry's tag list and an image's labels, both of which are three
+anonymous HTTP requests away — no pull, no container, no build server.
+Once the client can resolve, having the backend resolve buys nothing and
+costs the identity.
+
+**The context ID is normative — fixed with ``context`` format version 3,
 and it can never change afterwards.** Everything that ever names a
 context — integrity verification, artifact attribution ("built from
 *this*"), archival references — depends on computing the same ID from
@@ -29,13 +35,15 @@ the same inputs forever. The rule is stated in
 module implements it. The ID is the SHA-256 over the canonical JSON
 (RFC 8785) of exactly this document::
 
-    {"files": [{"path": ..., "sha256": ...}, ...],
+    {"build_environment": {"digest": ...},
+     "files": [{"path": ..., "sha256": ...}, ...],
      "sdk": {"sha256": ...},
      "target": {"board": ...}}
 
 — the manifest's build-relevant fields under the contract's fixed
-names (``sdk.sha256`` carries the manifest's
-``mcuhome.package.sha256``). ``files`` is sorted by ``path`` in
+names (``sdk.sha256`` carries the manifest's ``mcuhome.package.sha256``,
+``build_environment.digest`` the digest of ``build_environment``).
+``files`` is sorted by ``path`` in
 ascending byte order of its UTF-8 encoding — which UTF-8 makes equal
 to code-point order, so a plain string sort implements it — and every
 listed file contributes its own content hash; the sort only makes the
@@ -44,21 +52,18 @@ encoding deterministic.
 Explicitly excluded, so they can never influence the ID: ``created``
 (informational), ``mcuhome.constraint`` (the intent, not the
 resolution), ``mcuhome.version`` and ``mcuhome.package.url`` (names for
-the bytes ``package.sha256`` already pins), the whole ``container``
-block (the backend's resolution, not the client's statement — see
-below), and ``zephyr``.
+the bytes ``package.sha256`` already pins), and everything about the
+build environment **except its digest** — the registry it was fetched
+from and the tag it was found under are a location and a label for
+bytes the digest already identifies, exactly as ``package.url`` is for
+the SDK.
 
-``zephyr`` is excluded because hashing it would be **redundancy, not
-identity**. The line is provably inside two things the ID already
-hashes: it is a property of the SDK release that ``sdk.sha256`` pins
-(SDK and Zephyr move as one — the SDK repository *is* the west
-manifest, ADR 0006/0008), and it is a field of the canonical device
-model, whose bytes are an ordinary entry of ``files``. Two contexts
-that differ only in their required line therefore already have two
-IDs, and adding a third copy of the same fact to the hashed document
-would buy nothing while making the document larger to agree about. The
-field is carried in the two documents anyway, informationally, so a
-build server can pick a container without parsing the model file.
+The Zephyr *line* is not in the document at all, in either form. It was
+version 2's requirement field, and a pinned environment answers it: the
+image states which Zephyr it carries, the resolution checked that
+statement against the model's constraint before pinning, and the model
+itself is an ordinary hashed entry of ``files``. A separate copy would
+be a third place for the same fact to be wrong in.
 
 ``manifest.yaml`` itself and the backend-written ``.mcuhome/`` runtime
 directory are never integrity entries, so they cannot influence the ID
@@ -110,35 +115,39 @@ __all__ = [
     "MANIFEST_FILE",
     "MODEL_FILE",
     "PATCHES_DIR",
-    "ContainerResolution",
     "ContextFile",
     "ContextManifest",
     "ContextRequest",
+    "EnvironmentPin",
     "SdkPin",
     "canonical_json",
     "context_id",
+    "environment_digest",
     "validate_manifest",
-    "validate_zephyr_line",
     "vector_id",
 ]
 
 #: Format version of the context manifest. The normative hashing rule is
 #: locked to it: a field can join the hashed document only together with
-#: a bump here, and version 2's rule never changes.
+#: a bump here, and version 3's rule never changes.
 #:
-#: Version 1 pinned a container digest and hashed it. It is gone rather
-#: than supported alongside this one (E61): nothing is published, no
-#: context written to version 1 exists outside a test, and a reader that
-#: accepted both formats would have to carry two hashing rules forever
-#: to serve exactly zero documents.
-CONTEXT_VERSION = 2
+#: Versions 1 and 2 are gone rather than supported alongside this one,
+#: for the reason version 1 was dropped when 2 arrived: nothing is
+#: published, no context written to an older format exists outside a
+#: test, and a reader that accepted several would have to carry a hashing
+#: rule per format forever to serve exactly zero documents. Version 1
+#: pinned a container and hashed it; version 2 stated a Zephyr line and
+#: let the backend choose; this one pins again — and hashes the pin,
+#: which is what version 1 got right and could not deliver, because the
+#: client had no way to resolve a digest at the time.
+CONTEXT_VERSION = 3
 
 #: The one file a builder must parse first, at the top of the context.
 MANIFEST_FILE = "manifest.yaml"
 
 #: The request document with the pins, next to the manifest (§3.2). It
 #: is excluded from the integrity list **as a statement about the hash,
-#: not about layout**: its never-hashed fields (constraint, url, zephyr,
+#: not about layout**: its never-hashed fields (constraint, url,
 #: created) would otherwise leak into an identity that §6 computes from
 #: resolved values alone.
 CONTEXT_FILE = "context.yaml"
@@ -171,14 +180,6 @@ BACKEND_DIR = ".mcuhome"
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
-
-#: A Zephyr release line, as ``zephyr:`` carries it: dotted numeric
-#: components and nothing else — ``4.4``, ``4.4.0``, ``5``. A *line* is
-#: a prefix of a release, so the grammar is the release's grammar minus
-#: the upstream suffix an actual release may carry (``4.5.0-rc1``): a
-#: requirement is written against the numbered line, and a pre-release
-#: suffix is a property of one container, never of a line.
-_ZEPHYR_LINE = re.compile(r"[0-9]+(\.[0-9]+)*\Z")
 
 
 # --------------------------------------------------------------------------
@@ -221,62 +222,62 @@ class SdkPin:
 
 
 @dataclass(frozen=True)
-class ContainerResolution:
-    """Which build container a backend chose — the manifest's ``container:``.
+class EnvironmentPin:
+    """Which build environment a context is compiled in — one reference.
 
-    **Written by the backend at ``lock-context``, never by the client,
-    and never hashed** (E61). It is the answer to the context's
-    ``zephyr`` requirement: the backend picked a container of that line
-    out of the ones it serves, and this records which. That is what makes
-    a build reproducible years later — the requirement says what was
-    needed, this says what actually ran.
+    A Docker reference in its full explicit form, and it **must carry a
+    digest**: ``ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10@sha256:…``.
+    That is what "pinned" means here — the tag is documentation for
+    whoever reads the record later, the digest is what a build fetches
+    and what this context's identity is computed over.
 
-    ``digest`` is the repo digest, and it is ``None`` for an image that
-    was built locally and never pushed. Such an image names no pinnable
-    bytes, which is a fact about it rather than a defect: recording
-    ``null`` says exactly that, whereas the placeholder digest the
-    digest-pinned format needed (because a hashed field could not be
-    absent) said something untrue about bytes nobody can fetch.
+    One string rather than a block of parts, because every consumer is a
+    container runtime and this is the spelling every container runtime
+    takes. Splitting it into registry, path, tag and digest would create
+    four fields that can disagree with each other and one join to get
+    wrong in each reader; parsing it is
+    :func:`mcuhome.model.imageref.parse_reference`, for the readers that
+    care about a part.
     """
 
-    image: str
-    tag: str
-    digest: str | None
+    reference: str
 
-    @staticmethod
-    def from_reference(reference: str, *, digest: str | None) -> ContainerResolution:
-        """Record the image a backend resolved, given how docker names it.
+    @property
+    def digest(self) -> str:
+        """The hashed half — the value :func:`context_id` takes.
 
-        The split is best-effort and may be, because none of the three
-        fields is identity: a trailing ``:tag`` carrying no ``/`` is the
-        tag, and a reference with none — or one whose colon is a registry
-        port — is recorded against ``latest``, which is what docker itself
-        means by an unqualified name.
-
-        A reference that already names a digest (``repo@sha256:…``, which
-        is a perfectly ordinary thing to hand a backend) has that part
-        taken off first. Without that step the ``@`` form splits on the
-        digest's own colon and records an image called ``repo@sha256``
-        under a tag of 64 hex digits — a record that names nothing.
-
-        It lives here rather than in either backend because both do it,
-        and a manifest whose ``image``/``tag`` split depends on which
-        backend wrote it would be two spellings of one record.
+        Derived rather than stored so that the document has exactly one
+        place the digest is written, which is the one a runtime reads.
         """
-        name, at_sign, _ = reference.partition("@")
-        if at_sign:
-            # A digest reference carries no tag to recover, and inventing
-            # one would be worse than `latest`: `latest` says "nothing was
-            # said", a made-up tag would say something false.
-            return ContainerResolution(image=name, tag="latest", digest=digest)
-        name, separator, tail = reference.rpartition(":")
-        if separator and "/" not in tail:
-            return ContainerResolution(image=name, tag=tail, digest=digest)
-        return ContainerResolution(image=reference, tag="latest", digest=digest)
+        return environment_digest(self.reference)
 
-    def reference(self) -> str:
-        """How to name this image again: by digest where there is one."""
-        return f"{self.image}@{self.digest}" if self.digest else f"{self.image}:{self.tag}"
+
+def environment_digest(reference: object) -> str:
+    """The ``sha256:…`` a pinned build-environment reference ends in.
+
+    Strict, and deliberately not a parser: an identity input is checked
+    for the one spelling the format allows rather than recovered from a
+    near miss, because an ID computed over something else is silently
+    wrong forever. A reference without a digest is not a pin — it names a
+    moving tag, and hashing a moving name would make two builds of
+    different bytes claim one identity.
+    """
+    if not isinstance(reference, str) or "@" not in reference:
+        raise BuildError(
+            "The build environment is not pinned to a digest.",
+            hint=(
+                "a context names the exact image it is compiled in, as "
+                "repository:tag@sha256:… — a tag alone moves, and a build that "
+                "cannot say which bytes produced it is not reproducible"
+            ),
+        )
+    _, _, digest = reference.partition("@")
+    if not _DIGEST.fullmatch(digest):
+        raise BuildError(
+            f'The build environment names a digest that is not one: "{digest}".',
+            hint="a digest is sha256: followed by 64 lowercase hex digits",
+        )
+    return digest
 
 
 @dataclass(frozen=True)
@@ -284,14 +285,10 @@ class ContextManifest:
     """``manifest.yaml``, as an object."""
 
     sdk: SdkPin
-    #: The required Zephyr release line, repeated from the request —
-    #: informational, never hashed. It stands next to :attr:`container`
-    #: on purpose: requirement and resolution side by side, so a human
-    #: reading a manifest back sees both what was asked for and what
-    #: answered.
-    zephyr: str
-    #: What the backend resolved that requirement to.
-    container: ContainerResolution
+    #: The build environment this context is compiled in, pinned to a
+    #: digest. Repeated verbatim from the request: the locking party
+    #: records what the client stated, it does not choose.
+    build_environment: EnvironmentPin
     #: The target board — the manifest's ``target:`` section.
     board: str
     #: The integrity list: every file in the context except the manifest
@@ -306,6 +303,7 @@ class ContextManifest:
         """The ID this manifest's hashed fields yield, per the normative rule."""
         return context_id(
             sdk_sha256=self.sdk.sha256,
+            environment_digest=self.build_environment.digest,
             board=self.board,
             files=self.files,
         )
@@ -318,12 +316,7 @@ class ContextManifest:
                 "version": self.sdk.version,
                 "package": {"url": self.sdk.url, "sha256": self.sdk.sha256},
             },
-            "zephyr": self.zephyr,
-            "container": {
-                "image": self.container.image,
-                "tag": self.container.tag,
-                "digest": self.container.digest,
-            },
+            "build_environment": self.build_environment.reference,
             "target": {"board": self.board},
             "files": [entry.to_dict() for entry in self.files],
             "id": self.id,
@@ -333,8 +326,6 @@ class ContextManifest:
     def from_dict(data: dict[str, Any]) -> ContextManifest:
         mcuhome = data["mcuhome"]
         package = mcuhome["package"]
-        container = data["container"]
-        digest = container["digest"]
         # ``created`` is deliberately not read: it dates the *request* and
         # lives in context.yaml alone — "the one field that does not
         # travel" (ADR 0018). A manifest that carries one anyway is
@@ -349,15 +340,10 @@ class ContextManifest:
                 # identity, and _validate_manifest type-checks them.
                 sha256=package["sha256"],
             ),
-            zephyr=data["zephyr"],
-            container=ContainerResolution(
-                image=str(container["image"]),
-                tag=str(container["tag"]),
-                # Not coerced either, and for the opposite reason: the
-                # absence of a digest is meaningful, so `None` has to
-                # survive the round trip as `None` and not as "None".
-                digest=digest,
-            ),
+            # Not coerced: the reference carries the digest the identity
+            # is computed over, and a value that is not a string is a
+            # malformed document rather than one to str() into shape.
+            build_environment=EnvironmentPin(reference=data["build_environment"]),
             board=data["target"]["board"],
             files=tuple(
                 ContextFile(path=item["path"], sha256=item["sha256"]) for item in data["files"]
@@ -374,17 +360,17 @@ class ContextRequest:
     document became: the ``lock-context`` freeze splits the manifest into
     a *request* and a *result* (build-container-contract.md §3.2), and
     this is the request. It carries the ``context`` format version, the
-    resolved SDK pin, the Zephyr line the build environment has to carry
-    and the original intent the session is admitted on — and deliberately
-    **nothing that depends on the final file set**: no ``files`` list and
-    no ``id``. Those are the result the locking party computes and writes
-    into :class:`ContextManifest`.
+    resolved SDK pin, the pinned build environment and the original
+    intent the session is admitted on — and deliberately **nothing that
+    depends on the final file set**: no ``files`` list and no ``id``.
+    Those are the result the locking party computes and writes into
+    :class:`ContextManifest`.
 
-    It has **no ``container`` block at all** (E61). A request states what
-    it needs; which container answers is the backend's to decide and the
-    backend's to record, in :class:`ContainerResolution` on the manifest.
-    That is what makes the request writable by a client that has never
-    seen the machine it will build on.
+    It carries the **pinned build environment** — the client resolved it
+    before writing this, out of the reference and the constraint its
+    device model states. A backend therefore reads a decision here, not a
+    requirement to answer, which is what makes the manifest's copy of it
+    a restatement rather than a second opinion.
 
     It repeats :class:`SdkPin` verbatim — the same pin
     :class:`ContextManifest` later restates, so intent and resolution
@@ -395,12 +381,11 @@ class ContextRequest:
     """
 
     sdk: SdkPin
-    #: The Zephyr release line the build environment must carry — the
-    #: canonical model's ``toolchain.zephyr_line`` (ADR 0013), spelled
-    #: out here so a build server can select a container without parsing
-    #: the model file. **Informational: never hashed** (see the module
-    #: docstring on why that is redundancy rather than a hole).
-    zephyr: str
+    #: The build environment, pinned to a digest — what the client
+    #: resolved its model's reference and Zephyr constraint to. **Hashed**,
+    #: through its digest: it is a resolved value like the SDK's package
+    #: hash, not an intent like the constraint beside it.
+    build_environment: EnvironmentPin
     #: The target board — the request's ``target:`` section.
     board: str
     #: The instant the request was created, as an ISO 8601 UTC string
@@ -420,7 +405,7 @@ class ContextRequest:
                 "version": self.sdk.version,
                 "package": {"url": self.sdk.url, "sha256": self.sdk.sha256},
             },
-            "zephyr": self.zephyr,
+            "build_environment": self.build_environment.reference,
             "target": {"board": self.board},
         }
 
@@ -438,11 +423,10 @@ class ContextRequest:
                 # where it is used, not silently normalized on read.
                 sha256=package["sha256"],
             ),
-            # Not coerced, for the reason the hashes are not: an
-            # unquoted `zephyr: 4.4` is a YAML float, and str() would
-            # turn a document that says a number into one that says a
-            # line. validate_zephyr_line is what says so.
-            zephyr=data["zephyr"],
+            # Not coerced, for the reason the hashes are not: it is an
+            # identity input, checked for the one legal spelling where it
+            # is used rather than reshaped on read.
+            build_environment=EnvironmentPin(reference=data["build_environment"]),
             board=data["target"]["board"],
             created=str(data["created"]),
         )
@@ -487,31 +471,6 @@ def _require_digest(value: object, *, what: str) -> None:
         raise BuildError(
             f"{what} is not a sha256 digest: {value!r}.",
             hint='the canonical form is "sha256:" followed by 64 lowercase hex digits',
-        )
-
-
-def validate_zephyr_line(value: object) -> None:
-    """Check the ``zephyr:`` field's spelling, or refuse naming the value.
-
-    Public because two parties parse the field and only one of them can
-    build a whole manifest around it: a build server holding a freshly
-    read ``context.yaml`` needs the same check the manifest validator
-    makes, and re-spelling the grammar on that side would be a second
-    implementation of it. The rule is not part of the hash — a
-    build-container contract §3.3.1 question this field never asks —
-    but it *is* part of what a backend matches a container against, and
-    a line nobody can match is better refused where it arrives.
-    """
-    if not isinstance(value, str) or _ZEPHYR_LINE.fullmatch(value) is None:
-        raise BuildError(
-            f"{value!r} is not a Zephyr release line.",
-            hint=(
-                "a line is dotted decimal numbers and nothing else — 4.4 for the "
-                "4.4.x releases. It carries no leading v (west's spelling) and no "
-                "pre-release suffix: a suffix belongs to one release, never to a "
-                "line. Write it quoted (zephyr: '4.4'), because YAML reads an "
-                "unquoted 4.4 as a number and a number is not a line"
-            ),
         )
 
 
@@ -573,26 +532,32 @@ def _require_files(entries: Iterable[ContextFile]) -> None:
 def context_id(
     *,
     sdk_sha256: str,
+    environment_digest: str,
     board: str,
     files: Iterable[ContextFile],
 ) -> str:
     """The context ID — SHA-256 over the canonical form of the hashed fields.
 
     This function is the normative rule of the module docstring, locked
-    with ``context`` format version 2. It takes exactly the three hashed
+    with ``context`` format version 3. It takes exactly the four hashed
     inputs and nothing else, so an informational field *cannot* leak
-    into the ID by construction — which is the same discipline version 1
-    had, applied to a shorter list: the container is no longer an input
-    because the client no longer chooses it (E61). Inputs are checked
-    strictly rather than normalized: an ID computed over a mistyped hash
-    would be silently wrong forever, and normalizing (say, uppercase hex)
-    would give the same bytes two names.
+    into the ID by construction — the same discipline every version of
+    this format has had, over the list that version fixed. Inputs are
+    checked strictly rather than normalized: an ID computed over a
+    mistyped hash would be silently wrong forever, and normalizing (say,
+    uppercase hex) would give the same bytes two names.
+
+    *environment_digest* is the digest alone and not the reference it
+    came from, so that the same image fetched from a mirror is the same
+    build. :func:`environment_digest` is what takes one out of a pin.
     """
     entries = tuple(files)
     _require_sha256(sdk_sha256, what="The SDK package hash")
+    _require_digest(environment_digest, what="The build environment digest")
     _require_board(board)
     _require_files(entries)
     document = {
+        "build_environment": {"digest": environment_digest},
         "files": [entry.to_dict() for entry in sorted(entries, key=lambda entry: entry.path)],
         "sdk": {"sha256": sdk_sha256},
         "target": {"board": board},
@@ -605,42 +570,22 @@ def validate_manifest(manifest: ContextManifest) -> None:
     """Check a parsed manifest's shape and spelling, not its truth.
 
     Every hashed field, spelled the one way the format allows, plus the
-    declared ID and the two fields that are carried rather than hashed:
-    the ``zephyr`` requirement and the ``container`` resolution that
-    answered it. The unhashed pair is checked for the same reason the
-    hashed ones are — a manifest is read by build containers this
-    project does not write, and a value nobody can parse is worth
-    refusing where it is read rather than where it is used — but the
-    check is deliberately weaker where the format allows less: a
-    resolution may carry ``digest: null``, because an image that was
-    never pushed names no bytes.
+    declared ID. There is no longer an unhashed pair to check beside
+    them: the environment reference *is* a hashed field now, through its
+    digest, and the Zephyr line it used to be checked against is not in
+    the document at all.
 
     Whether the declared values match bytes on a disk is
     :func:`~mcuhome.workbench.contextdir.verify_context`'s question and needs a
     disk to answer.
     """
     _require_sha256(manifest.sdk.sha256, what="The SDK package hash")
-    validate_zephyr_line(manifest.zephyr)
-    _require_resolution(manifest.container)
+    # Raises exactly where a malformed reference matters: the property is
+    # what the ID is computed over, so checking it is checking the pin.
+    environment_digest(manifest.build_environment.reference)
     _require_board(manifest.board)
     _require_files(manifest.files)
     _require_digest(manifest.id, what="The context id")
-
-
-def _require_resolution(resolution: ContainerResolution) -> None:
-    """The backend's ``container:`` block, spelled the one legal way."""
-    for value, what in ((resolution.image, "image"), (resolution.tag, "tag")):
-        if not isinstance(value, str) or not value.strip():
-            raise BuildError(
-                f"The container resolution names no {what}.",
-                hint=(
-                    "manifest.yaml records which build container answered the "
-                    "context's zephyr requirement — image, tag and digest — and a "
-                    "record that names no image records nothing"
-                ),
-            )
-    if resolution.digest is not None:
-        _require_digest(resolution.digest, what="The container digest")
 
 
 # --------------------------------------------------------------------------
@@ -678,15 +623,18 @@ def _require_resolution(resolution: ContainerResolution) -> None:
 #: wrong. The "astral and BMP paths" vector is the one that catches it;
 #: every other vector in this table a UTF-16 sort passes.
 #:
-#: The first five were regenerated for format version 2, which is the
-#: only thing that may cause a vector's ID to change and is exactly what
-#: a version bump is for: the hashed document lost its ``container``
-#: member (E61), so every ID over the same files and pins is a different
-#: number. Their **inputs** were kept otherwise identical to version 1's
-#: on purpose — a diff of this table then shows one member gone and five
-#: hashes moved, rather than a new table nobody can compare against the
-#: old one. The sixth is new, and adding one is the only way that gap
-#: could be closed: an existing vector may not be altered.
+#: All six were regenerated for format version 3, which is the only
+#: thing that may cause a vector's ID to change and is exactly what a
+#: version bump is for: the hashed document gained a
+#: ``build_environment`` member, so every ID over the same files and
+#: pins is a different number. Their other **inputs** were kept
+#: identical to version 2's on purpose — a diff of this table then shows
+#: one member added and six hashes moved, rather than a new table nobody
+#: can compare against the old one. The seventh is new, and adding one
+#: is the only way a gap can be closed: an existing vector may not be
+#: altered. It pins the member itself, by differing from "one file" in
+#: nothing but the environment — the one thing no other pair in the
+#: table isolates.
 #:
 #: The board names below are hash inputs and nothing else: the rule never
 #: looks a board up, so a vector stays valid after the registry drops the
@@ -696,24 +644,27 @@ CONTEXT_ID_VECTORS: tuple[dict[str, Any], ...] = (
         "name": "no files",
         "inputs": {
             "sdk_sha256": "a" * 64,
+            "environment_digest": "sha256:" + "1a" * 32,
             "board": "nrf7002dk/nrf5340/cpuapp",
             "files": (),
         },
-        "id": "sha256:e4a688665db1f01eccd6b0586193428adff1fa1c7077089fcf5fe621de061028",
+        "id": "sha256:008642bbad04acba634db35a94c0435ceeb19f49bbf518838418b27682d14073",
     },
     {
         "name": "one file",
         "inputs": {
             "sdk_sha256": "b" * 64,
+            "environment_digest": "sha256:" + "2b" * 32,
             "board": "nrf52840dk/nrf52840",
             "files": (("model/device-model.json", "c" * 64),),
         },
-        "id": "sha256:63ae37786bc923be4ea4cbd5911282b3cf8ad6c5139cfdb89154512054ea1b3b",
+        "id": "sha256:7363f5f0ca2f41118493880c97681a77fedb302ce599209098b3f37b49d88bc9",
     },
     {
         "name": "given out of order",
         "inputs": {
             "sdk_sha256": "d" * 64,
+            "environment_digest": "sha256:" + "3c" * 32,
             "board": "nrf7002dk/nrf5340/cpuapp",
             "files": (
                 ("patches/zephyr/0002-b.patch", "2" * 64),
@@ -722,7 +673,7 @@ CONTEXT_ID_VECTORS: tuple[dict[str, Any], ...] = (
                 ("keys/signing.pub", "4" * 64),
             ),
         },
-        "id": "sha256:75435b832983f6ead9c57aa600cb64bfdb7ffacc8171dac13534537e206ad9c6",
+        "id": "sha256:19f02a62af58d3889d556389fd5dd79f2ad44e32a30940a40c08808a148f3300",
     },
     {
         # The vector tests_py/test_context.py has pinned since the format
@@ -730,22 +681,24 @@ CONTEXT_ID_VECTORS: tuple[dict[str, Any], ...] = (
         "name": "model and one patch",
         "inputs": {
             "sdk_sha256": "cd" * 32,
+            "environment_digest": "sha256:" + "4d" * 32,
             "board": "nrf7002dk/nrf5340/cpuapp",
             "files": (
                 ("model/device-model.json", "11" * 32),
                 ("patches/zephyr/0001-fix.patch", "22" * 32),
             ),
         },
-        "id": "sha256:11affc97a03519f03745793f96c02d40d8b0216b0c57772d94cec5f322f8abcf",
+        "id": "sha256:b033e1ddade6357860d87555d87c6575ec53901623b64b8452b16c954c9d3479",
     },
     {
         "name": "non-ascii path",
         "inputs": {
             "sdk_sha256": "e" * 64,
+            "environment_digest": "sha256:" + "5e" * 32,
             "board": "nrf7002dk/nrf5340/cpuapp",
             "files": (("model/dévice-modèl.json", "5" * 64),),
         },
-        "id": "sha256:82030ef8f50da6b415db90fc22996aeab67557896a35d806abd35130defc4989",
+        "id": "sha256:de4db67451a7da65234ae445a2b7bf19e3a2f5b2ba372a09f7180928a13c71b5",
     },
     {
         # The two paths straddle the BMP: U+FF21 FULLWIDTH LATIN CAPITAL
@@ -766,13 +719,30 @@ CONTEXT_ID_VECTORS: tuple[dict[str, Any], ...] = (
         "name": "astral and BMP paths",
         "inputs": {
             "sdk_sha256": "f" * 64,
+            "environment_digest": "sha256:" + "6f" * 32,
             "board": "nrf7002dk/nrf5340/cpuapp",
             "files": (
                 ("model/\U0001f600.json", "7" * 64),
                 ("model/\uff21.json", "6" * 64),
             ),
         },
-        "id": "sha256:9b87cd6b9766d50fead4bd7b37b9f9fc503f92f259bddcb1b653e97a16abb972",
+        "id": "sha256:07be3c49d2753c414706be109666009e84afb677a23d7c5f03afe1cb7eaaa57a",
+    },
+    {
+        # "one file", with one byte of the environment digest changed and
+        # nothing else. Two builds of the same sources in two different
+        # containers are two builds, and this is the vector that says so:
+        # an implementation that dropped the member — or hashed the whole
+        # reference instead of the digest — agrees with the table
+        # everywhere except here.
+        "name": "same file, other environment",
+        "inputs": {
+            "sdk_sha256": "b" * 64,
+            "environment_digest": "sha256:" + "2b" * 31 + "2c",
+            "board": "nrf52840dk/nrf52840",
+            "files": (("model/device-model.json", "c" * 64),),
+        },
+        "id": "sha256:c2e2e6ed19c6040a3bd0d95cd95e0685d763935255ac2b173745e4fec5ed31ee",
     },
 )
 
@@ -787,6 +757,7 @@ def vector_id(vector: dict[str, Any]) -> str:
     inputs = vector["inputs"]
     return context_id(
         sdk_sha256=inputs["sdk_sha256"],
+        environment_digest=inputs["environment_digest"],
         board=inputs["board"],
         files=[ContextFile(path=path, sha256=sha256) for path, sha256 in inputs["files"]],
     )

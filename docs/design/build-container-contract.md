@@ -106,16 +106,37 @@ from `describe` (§7.1).
 
 The image MUST carry these labels:
 
-- `org.mcuhome.contract=1` — the contract version this document
-  specifies.
-- `org.mcuhome.zephyr=<version>` — the Zephyr version the image
-  builds against.
-- `org.mcuhome.toolchain=<id>` — the toolchain identity.
+- `org.mcuhome.build-environment.contract=1` — the contract version
+  this document specifies.
+- `org.mcuhome.build-environment.zephyr.version=<version>` — the Zephyr
+  version the image builds against.
+- `org.mcuhome.build-environment.toolchain=<id>` — the toolchain
+  identity.
 
 There is no label for the action set: every conforming program
 implements `describe`, `verify` and `build` (§7), so there is nothing to
 pre-filter on, and an action beyond those three is announced by
 `program.actions` alone (§7.1.1).
+
+**Why these names changed.** An image is now chosen by a **client** before a
+container is materialized. The client reads these labels out of a registry
+using unauthenticated HTTPS requests to the repository's API — no image
+pull, no container start, no build server. What these labels are called is
+therefore part of how an environment is discovered and selected, not a
+detail of how it is checked after materialization. The old names have been
+lengthened to form a namespace `org.mcuhome.build-environment.*`, making it
+clear what the labels describe and leaving room for other image-level
+metadata under different namespaces should the need arise.
+
+**Build-environment tagging convention.** A build-environment publisher MUST
+carry, beside its immutable revision tags (e.g., `zephyr-4.4.0-r10`), a
+moving `zephyr-<X.Y.Z>-latest` tag for each Zephyr release the image supports
+(e.g., `zephyr-4.4.0-latest` for the current `zephyr-4.4.0` release series).
+The publisher SHOULD carry the aggregate tags `zephyr-<X.Y>-latest` and
+`zephyr-<X>-latest` to facilitate discovery of the latest revision for a given
+major or major.minor version. These aggregate tags are a recommendation, not a
+requirement: a client that cannot find an aggregate tag may list registry tags
+and select a revision manually.
 
 The labels are **pre-start scheduling data**: they let a backend pick
 an image before paying for a container start, and they carry the
@@ -123,15 +144,17 @@ compatibility constraint. They are **not** authoritative about what the
 program can do — `describe` (§7.1) is, and a backend MUST check the
 labels against `describe` before relying on them. Compatibility between
 an SDK release and a container is declared as a constraint over the
-coupling labels (`org.mcuhome.zephyr`, `org.mcuhome.toolchain`), never
-as an enumeration of image tags: a tag or tag suffix carries no
+coupling labels (`org.mcuhome.build-environment.zephyr.version` and
+`org.mcuhome.build-environment.toolchain`), never as an enumeration of
+image tags: a tag or tag suffix carries no
 compatibility meaning (ADR 0018 §7). Third-party containers qualify by
 satisfying the same label constraint. §2.1.1 fixes what those two label
 values may be and what a constraint over them looks like.
 
 #### 2.1.1 The coupling labels: value range and constraint syntax
 
-`org.mcuhome.zephyr` and `org.mcuhome.toolchain` are the two **coupling
+`org.mcuhome.build-environment.zephyr.version` and
+`org.mcuhome.build-environment.toolchain` are the two **coupling
 labels**. They are the only labels a compatibility constraint may be
 written over, because they are the two properties of an image that an
 SDK release is actually coupled to.
@@ -139,12 +162,12 @@ SDK release is actually coupled to.
 **Value range.** Both values are single-line, non-empty, and drawn from
 `[A-Za-z0-9][A-Za-z0-9._+-]*`. Beyond that each has a shape:
 
-- `org.mcuhome.zephyr` — the upstream Zephyr version the image builds
-  against, **without** the leading `v` west uses: `4.4.0` for the
-  `v4.4.0` this project pins (`west.yml:32`). The value is a dotted
-  numeric version, optionally followed by an upstream suffix after a
-  hyphen (`4.5.0-rc1`).
-- `org.mcuhome.toolchain` — the toolchain identity, as
+- `org.mcuhome.build-environment.zephyr.version` — the upstream Zephyr
+  version the image builds against, **without** the leading `v` west
+  uses: `4.4.0` for the `v4.4.0` this project pins (`west.yml:32`). The
+  value is a dotted numeric version, optionally followed by an upstream
+  suffix after a hyphen (`4.5.0-rc1`).
+- `org.mcuhome.build-environment.toolchain` — the toolchain identity, as
   `<identity>-<version>`: an identity part matching
   `[a-z][a-z0-9]*(-[a-z0-9]+)*` and a dotted numeric version part after
   the final hyphen. MCUHome's own image builds with the Zephyr SDK, so
@@ -173,10 +196,11 @@ fixed here is the map's shape. A constraint expression is one of:
 | `>=<version>`, `>`, `<=`, `<` | identity parts are equal **and** the label's version compares accordingly |
 | `>=<version> <<version>` | both bounds hold — the only compound form, a space-separated conjunction of exactly two comparisons |
 
-`org.mcuhome.zephyr` has no identity part, so for that label the
-identity condition is vacuously satisfied and only the version
-comparison applies; for `org.mcuhome.toolchain` the identity part must
-match before any version is compared at all.
+`org.mcuhome.build-environment.zephyr.version` has no identity part, so
+for that label the identity condition is vacuously satisfied and only
+the version comparison applies; for
+`org.mcuhome.build-environment.toolchain` the identity part must match
+before any version is compared at all.
 
 Versions compare component-wise and numerically, with a missing
 component read as zero, so `4.4` and `4.4.0` are the same version. A
@@ -192,7 +216,8 @@ Evaluation, so that no case is left to taste:
 - **All named labels must hold.** The map is a conjunction; there is no
   alternation and no precedence to get wrong.
 - **A label the constraint does not name is unconstrained.** An SDK
-  release coupled only to Zephyr names only `org.mcuhome.zephyr`.
+  release coupled only to Zephyr names only
+  `org.mcuhome.build-environment.zephyr.version`.
 - **A container that does not carry a named label does not qualify.**
   Absence is never read as "compatible" — an image that does not say
   what it builds against has not made the declaration the constraint is
@@ -355,7 +380,7 @@ requires, and the original intent — and nothing that depends on the
 final file set:
 
 ```yaml
-context: 2                          # context format version
+context: 3                          # context format version
 created: 2026-08-09T10:00:00Z       # informational — never hashed
 mcuhome:
   constraint: ~=2.3.6               # original intent — never hashed
@@ -363,12 +388,13 @@ mcuhome:
   package:                          # resolved SDK package
     url: https://…/mcuhome-sdk-2.4.0.tar.zst   # hint only — never hashed
     sha256: <hash>
-zephyr: '4.4'                       # REQUIRED Zephyr line — never hashed
+# the environment the CLIENT resolved — its digest IS hashed
+build_environment: ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10@sha256:<64 hex>
 target:
   board: nrf7002dk/nrf5340/cpuapp
 ```
 
-Both never-hashed fields of the pin are required **keys** whose value
+The never-hashed fields of the pin are required **keys** whose value
 MAY be the empty string. An empty `constraint` is PEP 440's own
 any-version specifier — no intent was stated. An empty `package.url`
 means the package was resolved from a location with no public name; a
@@ -377,25 +403,20 @@ because that would carry the creator's filesystem layout into a
 document another party stores. A reader MUST treat a *missing* key or
 a non-string as malformed, and an empty statement as a statement.
 
-**A context requires a build environment; it does not choose one.**
-`zephyr` names a Zephyr release *line* — dotted decimal numbers, no
-leading `v`, no pre-release suffix — and a build container serves it
-when its `org.mcuhome.zephyr` label (§2.1.1) is a release *within* that
-line: `4.4` is served by `4.4`, `4.4.0` and `4.4.12`, and by nothing
-else. A release carrying an upstream suffix (`4.5.0-rc1`) serves no
-line, for the reason §2.1.1 gives about ranges. A container that carries
-no `org.mcuhome.zephyr` label at all serves no line either — absence is
-never read as compatible.
+**A context names its build environment, and the client chose it.** The
+client resolves the environment **before a context exists** — against
+the Zephyr constraint its device model states — and writes the resolved
+reference, digest included, into this document. A backend runs those
+bytes or refuses; it does not select, and it MUST NOT substitute
+another image, however compatible.
 
-Selecting a container of that line is the **backend's** job, and the
-selection MUST be recorded in `manifest.yaml` (below). A backend that
-serves no container of the required line MUST refuse, typed, before the
-context is locked. The `zephyr` value is written quoted, because YAML
-reads an unquoted `4.4` as a number.
-
-The value is **informational for the hash** and load-bearing for
-everything else: §3.3 excludes it, and §3.3's own note says why that is
-redundancy rather than a hole.
+That it is the client's to do is what the format turns on, and it is
+possible because selecting an environment needs a registry's tag list
+and an image's labels (§2.1) and nothing else: a few anonymous HTTPS
+requests, with no image pulled, no container started and no build
+server asked. A client that has never seen the machine it will build on
+can therefore make the choice, which is what lets the choice be part of
+the context's identity (§3.3) instead of a property of whoever answered.
 
 A context may be extended after creation (ADR 0019 §2,
 `extend-context`), and an extension MUST NOT touch `context.yaml` — it
@@ -404,17 +425,13 @@ new session, not an extension.
 
 `manifest.yaml` is written **by the backend when the context is
 locked** (`lock-context`, ADR 0019 §2). It repeats the same pins and the
-same requirement, adds the backend's answer to that requirement, and
-adds the two things that only exist once the file set is final:
+environment that was resolved, and adds the two things that only exist
+once the file set is final:
 
 ```yaml
-context: 2
+context: 3
 mcuhome: { … }                      # as in context.yaml
-zephyr: '4.4'                       # as in context.yaml — the requirement
-container:                          # THE BACKEND'S RESOLUTION — never hashed
-  image: ghcr.io/mcu-home/build-container
-  tag: zephyr-4.4.0-r1
-  digest: sha256:<hash>             # null for an image that was never pushed
+build_environment: …                # as in context.yaml, verbatim
 target: { … }                       # as in context.yaml
 files:                              # integrity list: every content file,
   - { path: keys/signing.pub, sha256: <hash> }             # patches included
@@ -423,24 +440,29 @@ files:                              # integrity list: every content file,
 id: sha256:<hash>                   # canonical hash (identity), rule in §3.3
 ```
 
-The `container` block is **written by the party that locks the context
-and by nobody else**. It is the record of which build environment
-answered this context's requirement, and it is what reproduces the build
-years later: the requirement says what was needed, this says what
-actually ran. It is outside the identity (§3.3), so two backends
-answering one requirement with two different containers of the same line
-still compute one context ID for one set of bytes. `digest` is the repo
-digest, or `null` for an image that was built locally and never pushed —
-such an image names no fetchable bytes, and `null` says exactly that
-rather than inventing a value.
+The `build_environment` field is a **full Docker reference**, and it
+MUST carry a digest: a reference naming only a tag is a moving name,
+and a context that identified itself by one would claim one identity
+for two different sets of bytes. A reference without a digest is
+invalid input and is refused.
+
+It is **repeated verbatim from `context.yaml`**. The locking party
+records what the client stated and chooses nothing, which is what makes
+two backends handed one context write one manifest.
+
+Unlike everything else in this block, it **is** part of the identity —
+through its digest alone (§3.3). The repository and the tag are not:
+the same bytes fetched from a mirror are the same build, so two
+contexts that differ only in where the image was fetched from compute
+one ID.
 
 Every `<hash>` in the two documents above has exactly one legal
-spelling, fixed normatively in §3.3.1: `container.digest` (where it is
-not `null`) and `id` are `sha256:` followed by 64 lowercase hex digits,
-`mcuhome.package.sha256` and every `files[].sha256` are 64 lowercase
-hex digits with no prefix. Any other rendering is invalid input and is
-refused, never normalized — the ID is a hash over a text encoding, so
-the spelling *is* part of the identity.
+spelling, fixed normatively in §3.3.1: the digest of
+`build_environment` and the `id` are `sha256:` followed by 64 lowercase
+hex digits, `mcuhome.package.sha256` and every `files[].sha256` are 64
+lowercase hex digits with no prefix. Any other rendering is invalid
+input and is refused, never normalized — the ID is a hash over a text
+encoding, so the spelling *is* part of the identity.
 
 A program MUST check the `context` format version and, for a version it
 does not implement, fail the invocation with `status: "unsupported"`,
@@ -474,16 +496,15 @@ would hash differently, and the same configuration built once under the
 constraint `~=2.3.6` and once under `2.4.0` would produce two identities
 for one resolved pin. Nothing is lost by the exclusion, because
 everything build-relevant `context.yaml` carries is already hashed in
-its own right — `sdk.sha256` and `target.board` are two of the three
-inputs of §3.3, the third is the `files` list itself, and `zephyr` is
-covered by the argument §3.3 makes about it.
+its own right — `sdk.sha256` and `target.board` are two of the four
+inputs of §3.3, the third is the `files` list itself, and the fourth is
+the `build_environment` digest.
 
 ### 3.3 Context identity — normative hashing rule
 
-This rule is **locked for context format version 2 and can never
+This rule is **locked for context format version 3 and can never
 change**. New build-relevant fields enter the hash only together with
-a `context` format-version bump. `lock-context` changed *when* and
-*from what* the ID is derived; it did not change the rule.
+a `context` format-version bump.
 
 The context ID is the SHA-256 hash, rendered as `sha256:` followed by
 exactly 64 lowercase hex digits (§3.3.1), of the RFC 8785 (JSON
@@ -491,12 +512,19 @@ Canonicalization Scheme) encoding of exactly this JSON structure:
 
 ```json
 {
+  "build_environment": {"digest": "<digest>"},
   "files": [{"path": "<path>", "sha256": "<hash>"}, …],
   "sdk": {"sha256": "<hash>"},
   "target": {"board": "<board>"}
 }
 ```
 
+- `build_environment.digest` — the digest of the manifest's
+  `build_environment` reference: everything after the `@`, **including
+  the `sha256:` prefix**, spelled exactly as §3.3.1 fixes it. Only the
+  digest is hashed, never the registry or the tag: those are a location
+  and a label for bytes the digest already identifies, exactly as
+  `mcuhome.package.url` is for the SDK.
 - `sdk.sha256` — the manifest's `mcuhome.package.sha256`.
 - `target.board` — the manifest's `target.board`.
 - `files` — one entry per context file, `path` and `sha256` as in the
@@ -509,33 +537,22 @@ Canonicalization Scheme) encoding of exactly this JSON structure:
   the sort only makes the encoding deterministic.
 
 Explicitly excluded from the hash: `created`, `mcuhome.constraint`,
-`mcuhome.package.url` (any source yielding the pinned hash is
-equivalent), the whole `container` block, and `zephyr`.
+and `mcuhome.package.url` (any source yielding the pinned hash is
+equivalent).
 
-The **`container` block** is excluded because it is not the context's
-statement. It is the backend's record of which build environment
-answered the context's requirement (§3.2), and a context that identified
-itself by it would get a different identity on every server that serves
-the same Zephyr line with a different image — which would make "built
-from *this* context" a claim about a machine rather than about a set of
-bytes.
+**The Zephyr line is not in the document at all, in either form.** It
+was version 2's requirement field, excluded from the hash as redundancy
+and kept honest only by a backend duty to compare it against the device
+model. A pinned environment answers the requirement outright: the image
+states which Zephyr it carries, whoever pinned it checked that
+statement against the model's constraint, and the model itself is an
+ordinary hashed entry of `files`. A separate copy would be a third
+place for one fact to be wrong in.
 
-**`zephyr`** is excluded because hashing it would be redundancy rather
-than identity. The line is provably inside two values the hash already
-covers: it is a property of the SDK release that `sdk.sha256` pins, and
-it is a field of the canonical device model, whose bytes are an ordinary
-entry of `files`. Two contexts differing only in their required line
-already have two IDs. A third copy of the fact would enlarge the hashed
-document without narrowing what it identifies — and every field in that
-document is one more thing two implementations have to agree about.
-
-That argument holds only while the two copies agree, and `context.yaml`
-is outside the integrity list by construction, so nothing about the
-*bytes* enforces it. §9.1 therefore makes the comparison a backend duty:
-a context whose `zephyr` differs from its model's `toolchain.zephyr_line`
-is refused. Without it the exclusion is circular — two contexts with
-identical files and different required lines would share one ID and
-build in containers of two different lines.
+The consequence is the point of the format: two contexts over identical
+files, pins and boards, built in two different environments, are **two
+contexts**. Under version 2 they were one, and the document that names
+a build named two of them.
 
 The hash input is **never** the YAML file bytes and **never** the
 transport archive bytes: neither serialization is deterministic.
@@ -547,10 +564,11 @@ contract MUST compute the ID independently from the bytes they actually
 hold and MUST NOT trust a declared `id` value.
 
 Recomputing over the `files` list is **not** a complete check of the
-context, and no implementation may present it as one: two of the three
-hashed inputs — `sdk.sha256` and `target.board` — are read from
-`manifest.yaml`, which is not itself in the integrity list, so a
-self-consistently forged manifest recomputes to its own declared ID.
+context, and no implementation may present it as one: three of the four
+hashed inputs — `build_environment.digest`, `sdk.sha256` and
+`target.board` — are read from `manifest.yaml`, which is not itself in
+the integrity list, so a self-consistently forged manifest recomputes to
+its own declared ID.
 The reference implementation has exactly this shape
 (`mcuhome/workbench/contextdir.py:666-701`, pins taken from the declared
 manifest at `:695-697`, only `files` measured). Closing it is a backend
@@ -565,7 +583,7 @@ normalization step anywhere on either side of the contract:
 
 | Value | Form |
 |---|---|
-| `container.digest` (in `manifest.yaml`; the one hash value that is outside the hashed structure, and `null` where the image was never pushed) | the literal prefix `sha256:` followed by exactly 64 lowercase hex digits — `[0-9a-f]{64}` |
+| the digest of `build_environment` (in both documents, carried inside the reference after the `@`) | the literal prefix `sha256:` followed by exactly 64 lowercase hex digits — `[0-9a-f]{64}` |
 | the context `id` (in `manifest.yaml`, and `result.context` in §5.4) | the same: `sha256:` + exactly 64 lowercase hex digits |
 | `files[].sha256` (in `manifest.yaml` and in the hashed structure) | exactly 64 lowercase hex digits, **no prefix** |
 | `mcuhome.package.sha256`, which the hashed structure carries as `sdk.sha256` | exactly 64 lowercase hex digits, **no prefix** |
@@ -607,9 +625,9 @@ rule, so that no reader has to look a field up: the algorithm is named
 exactly once per value, either in the key or in the value. A value under
 a key that already names the algorithm — `artifacts[].hashes.sha256`
 (§5.4) — is bare 64 lowercase hex digits. A value that carries its own
-algorithm — `container.digest`, the context `id`, `result.context`,
-`layers[<name>].patchset` (§5.4) — is `sha256:` + 64 lowercase hex
-digits.
+algorithm — the digest of `build_environment`, the context `id`,
+`result.context`, `layers[<name>].patchset` (§5.4) — is `sha256:` + 64
+lowercase hex digits.
 
 ## 4. Paths, trees and the filesystem interface
 
@@ -1560,8 +1578,8 @@ and MUST NOT be used as discovery data; the backend asks `describe`.
   inferences.
 - **`contract`** — the contract version this program implements, as an
   integer. This document specifies version 1. In the `container` profile
-  it MUST equal the `org.mcuhome.contract` label; where the two
-  disagree, `describe` is authoritative and the disagreement is a
+  it MUST equal the `org.mcuhome.build-environment.contract` label;
+  where the two disagree, `describe` is authoritative and the disagreement is a
   contract violation against the image (§2.1). A backend that does not
   implement the value it finds here MUST NOT invoke a working action on
   this program — everything else in the result document is described by
@@ -1586,8 +1604,9 @@ and MUST NOT be used as discovery data; the backend asks `describe`.
   backend MUST NOT invoke an action absent from the list; if it does
   anyway, the legible answer is `unsupported.action`, exit 1.
   **Conformance is claimed by the declared contract version and never by
-  this list**: by the `org.mcuhome.contract` label (§2.1), and by the
-  `contract` field above it where there is no image to carry a label.
+  this list**: by the `org.mcuhome.build-environment.contract` label
+  (§2.1), and by the `contract` field above it where there is no image
+  to carry a label.
   Contract v1 requires all three actions of §7 of a conforming program,
   so a program implementing fewer is a legible non-conforming program
   rather than a broken one, and the short list is the correct thing for
@@ -1947,37 +1966,23 @@ profiles.
   version, sha256) from operator-configured sources only; the
   manifest's `package.url` is a hint, never an instruction (ADR 0019
   §8).
-- **A build environment of the required line.** The backend MUST run
-  the invocation in a build container that serves the context's `zephyr`
-  line (§3.2), and MUST record which one in `manifest.yaml`'s `container`
-  block at `lock-context`. A backend that serves no such container MUST
-  refuse, typed, and MUST NOT substitute a container of another line.
-- **Cross-checked pins.** The backend MUST check `zephyr`,
+- **The build environment the context pins, and no other.** The backend
+  MUST run the invocation in the image the `build_environment` reference
+  names — addressed by its digest, so that the name cannot come to mean
+  other bytes between the lock and the invocation — and MUST record the
+  reference verbatim in `manifest.yaml` at `lock-context`. A backend
+  that cannot provide those exact bytes MUST refuse, typed, and MUST
+  NOT substitute another image, however compatible it looks.
+- **Cross-checked pins.** The backend MUST check `build_environment`,
   `mcuhome.package.sha256` and `target.board` from the manifest against
-  what it **actually resolved, pulled and unpacked**, and against the
+  what it **actually started, fetched and unpacked**, and against the
   header the session was admitted on. This is the duty that closes the
   gap named in §3.3: recomputing the context ID over the `files` list
   does not cover the other hashed inputs, so without this check a
-  self-consistently forged manifest verifies clean — and `zephyr` is
-  covered by nothing else at all, being hashed nowhere. Every comparison
+  self-consistently forged manifest verifies clean. Every comparison
   of a hash is a comparison of the exact spelling §3.3.1 fixes; a
   manifest whose hashes are rendered any other way is rejected before it
-  is compared to anything. `container.digest` is deliberately **not** on
-  this list: it is the backend's own record rather than a value the
-  client sent, so comparing it against the pins would be comparing the
-  backend to itself.
-- **`zephyr` against the model that carries it** (erratum, 2026-08-11).
-  The backend MUST check the context's `zephyr` against
-  `toolchain.zephyr_line` in `model/device-model.json`, and MUST refuse
-  when they disagree. §3.3 leaves `zephyr` out of the hash as
-  "redundancy, not identity" *because* the line is provably inside the
-  hashed model — and nothing made it provable: `context.yaml` is outside
-  the integrity list by construction, so two contexts with identical
-  files and two different required lines have one context ID, build in
-  containers of two different lines, and both verify clean. This is the
-  one field of the device model a backend reads, it is read out of a
-  file the backend already hashes, and it is used for nothing but this
-  equality — the model stays the program's to interpret (§6.1).
+  is compared to anything.
 - **Safe context materialization.** Whatever transport delivered the
   context, the backend MUST materialize it using safe extraction:
   regular files and directories only; absolute paths, `..` after
@@ -2157,7 +2162,7 @@ convention it is.
   (`SOURCE_DATE_EPOCH`, locale, umask), liveness and timeout policy, and
   the language the program is written in.
 - An incompatible change to anything frozen above is a new contract
-  version, declared via `org.mcuhome.contract`.
+  version, declared via `org.mcuhome.build-environment.contract`.
 
 Nothing is deployed against contract v1 yet, and while that holds a
 defect in this document is corrected where it stands rather than
@@ -2167,22 +2172,24 @@ intended, and spending version 2 on one would leave every future reader
 with two documents to reconcile for no gain. That licence ends with the
 first implementation that depends on this text.
 
-**Context format 1 does not exist** (E61, product owner, 2026-08-11).
-It was the format this document was first written against: the context
-pinned a build container by digest, and the digest was one of four
-hashed inputs of §3.3. That asked the wrong party for the wrong value —
-a client knows which Zephyr its device needs and cannot know which
-images a given build server holds, so the pin was either a guess or a
-round trip that had to happen before a context could exist at all.
-Format 2 replaces it: the context states a Zephyr *line*, the backend
-resolves that to a container and records the resolution in
-`manifest.yaml`, outside the identity.
+**Context format versions 1 and 2 are no longer supported.** Format 1
+was the format this document was first written against: the context
+pinned a build container by digest, and the digest was one of the hashed
+inputs of §3.3. That asked the wrong party for the wrong value — a
+client knows which Zephyr its device needs and cannot know which images
+a given build server holds, so the pin was either a guess or a round
+trip that had to happen before a context could exist at all. Format 2
+replaced it: the context stated a Zephyr *line*, the backend resolved
+that to a container and recorded the resolution in `manifest.yaml`,
+outside the identity. Neither format 1 nor format 2 was ever published
+— no context written to either version exists outside superseded tests.
+Format 3 is the only supported version, and it is format 1's idea with
+what format 1 lacked. The **client** resolves and pins the build
+environment before the context exists — which it can do, because
+selecting one needs a registry's tag list and an image's labels and
+nothing else: a few anonymous HTTPS requests, no pull, no container and
+no build server. The reference it writes carries a digest, and that
+digest is hashed into the context ID.
 
-The replacement is **not** a migration and this document describes no
-version 1. Nothing was published against it, no context written to it
-exists outside a superseded test, and a reader that accepted both
-formats would carry two hashing rules forever to serve no documents. A
-`context` version an implementation does not know remains what §3.2 has
-always said it is — `unsupported.context`, not a guess — and a *future*
-format 3 would be an addition beside 2 rather than a replacement of it,
-because by then the window this paragraph depends on will have closed.
+A `context` version an implementation does not know remains what §3.2
+says it is — `unsupported.context`, not a guess.
