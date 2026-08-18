@@ -106,12 +106,16 @@ jobs:
       # ADR 0024 split (the workbench lives in mcu-home/mcuhome), and no
       # aggregate distribution over them (ADR 0020 decision 2 and the
       # head comment of the root pyproject.toml).
+      # zstandard is named in its own right: scripts/build_sdk_archive.py
+      # needs it and so does the test over it. It used to arrive through
+      # mcuhome-compiler, which declared it for the orchestrator — and
+      # the orchestrator is the workbench's now.
       - name: Install the two distributions
         run: |
           python -m pip install --disable-pip-version-check \
             -e ./packaging/model \
             -e ./packaging/compiler \
-            'pytest>=8.0'
+            'pytest>=8.0' zstandard
 
       - name: pytest
         run: pytest -q -rs
