@@ -265,6 +265,13 @@ from mcuhome.model import __version__, registry
 from mcuhome.model.context import MANIFEST_FILE, MODEL_FILE, PATCHES_DIR
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
+from mcuhome.model.invocation import (
+    ACTIONS,
+    CONTRACT_VERSION,
+    REQUEST_VERSIONS,
+    RESULT_VERSION,
+    RESULT_VERSIONS,
+)
 from mcuhome.model.modelfile import read_model
 
 # mcuhome.compiler.contextread is imported inside _open_context, not
@@ -309,27 +316,20 @@ __all__ = [
 # --------------------------------------------------------------------------
 # What this program is (§7.1.1)
 # --------------------------------------------------------------------------
-
-#: The contract version implemented here. This is contract v1.
-CONTRACT_VERSION = 1
-
-#: Request format versions this program can parse (§7.1.1 ``request``).
-REQUEST_VERSIONS = (1,)
-
-#: Result format versions this program can write (§7.1.1 ``result``).
-RESULT_VERSIONS = (1,)
-
-#: The one written, out of :data:`RESULT_VERSIONS`.
-RESULT_VERSION = RESULT_VERSIONS[0]
+#
+# The numbers and the action names are not this program's to state: they
+# are contract v1's, and the party driving this program has to know them
+# without importing it (:mod:`mcuhome.model.invocation`). What is stated
+# here is what *this* implementation is — its identity, and that it
+# implements all of them.
 
 #: A stable identifier of the *implementation*, reverse-DNS, opaque to a
 #: backend (§7.1.1). Not of an image, a tag, a version or a vendor.
 PROGRAM_ID = "org.mcuhome.build-container"
 
 #: Every action this program implements, and the whole of ``describe``'s
-#: ``program.actions``. Contract v1 defines exactly these three;
-#: ``generate`` is deliberately absent (§6.1).
-IMPLEMENTED_ACTIONS = ("describe", "verify", "build")
+#: ``program.actions``. This program implements all of contract v1.
+IMPLEMENTED_ACTIONS = ACTIONS
 
 #: The layer registry of contract v1 §1.1, in the order ``describe``
 #: reports them. Third-party layers carry an ``x-`` prefix and reach the

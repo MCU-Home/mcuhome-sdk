@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from mcuhome.compiler import container
+from mcuhome.model import buildimage
 from mcuhome.model.errors import BuildError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -73,7 +74,7 @@ def test_the_image_is_never_latest() -> None:
 
 
 def test_the_dockerfile_is_where_the_error_message_says_it_is() -> None:
-    assert (REPO_ROOT / container.DOCKERFILE_DIR / "Dockerfile").is_file()
+    assert (REPO_ROOT / buildimage.DOCKERFILE_DIR / "Dockerfile").is_file()
 
 
 def test_the_default_image_is_the_pinned_one() -> None:
