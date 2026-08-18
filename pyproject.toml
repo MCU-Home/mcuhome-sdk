@@ -19,7 +19,7 @@
 # was asked for. The two paths are named explicitly instead — one pip
 # invocation, and every word of it true (AGENTS.md, "Commands"):
 #
-#     pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0'
+#     pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0' zstandard
 #
 # The tool sections below stay in one file because that is what they are:
 # settings for the repository, not for any one distribution. Splitting
