@@ -133,18 +133,19 @@ jobs:
         with:
           path: mcuhome-sdk
 
-      # One source of truth for the image name, and it is the builder's:
-      # mcuhome/compiler/container.py carries the Zephyr release and the
-      # image revision, and the builder resolves the very same string when
-      # a developer runs `mcuhome device build`. Importing it needs no third-party
-      # package — that module is standard library only, on purpose.
+      # One source of truth for the image name: mcuhome/model/buildimage.py
+      # carries the Zephyr release and the image revision, this job tags
+      # what it says, and a workbench resolves the very same string when a
+      # developer runs `mcuhome device build`. Importing it needs no
+      # third-party package — that module is a handful of constants, on
+      # purpose.
       - name: Resolve the builder image reference
         id: image
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           sys.path.insert(0, "mcuhome-sdk")
-          from mcuhome.compiler.container import IMAGE, IMAGE_REPOSITORY, ZEPHYR_RELEASE
+          from mcuhome.model.buildimage import IMAGE, IMAGE_REPOSITORY, ZEPHYR_RELEASE
           print(f"reference={IMAGE}")
           print(f"alias={IMAGE_REPOSITORY}:zephyr-{ZEPHYR_RELEASE}")
           PY
@@ -467,7 +468,7 @@ jobs:
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           sys.path.insert(0, "mcuhome-sdk")
-          from mcuhome.compiler.container import IMAGE
+          from mcuhome.model.buildimage import IMAGE
           print(f"reference={IMAGE}")
           PY
 
