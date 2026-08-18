@@ -104,6 +104,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mcuhome.model.errors import BuildError
+from mcuhome.model.imageref import DOCKER_HUB, parse_reference
 
 __all__ = [
     "BACKEND_DIR",
@@ -255,12 +256,17 @@ class EnvironmentPin:
 def environment_digest(reference: object) -> str:
     """The ``sha256:…`` a pinned build-environment reference ends in.
 
-    Strict, and deliberately not a parser: an identity input is checked
-    for the one spelling the format allows rather than recovered from a
-    near miss, because an ID computed over something else is silently
-    wrong forever. A reference without a digest is not a pin — it names a
-    moving tag, and hashing a moving name would make two builds of
-    different bytes claim one identity.
+    Strict about **both halves**, because both are read by somebody. The
+    digest is the identity input: it is checked for the one spelling the
+    format allows rather than recovered from a near miss, since an ID
+    computed over something else is silently wrong forever, and a
+    reference without one is not a pin at all — it names a moving tag,
+    and hashing a moving name would let two builds of different bytes
+    claim one identity. The rest of the reference is what a container
+    runtime is handed, so it is parsed here rather than trusted: a
+    document that named no repository would be accepted by a hash rule
+    that only ever looks past the ``@``, and refused later by whoever
+    tried to run it.
     """
     if not isinstance(reference, str) or "@" not in reference:
         raise BuildError(
@@ -271,13 +277,13 @@ def environment_digest(reference: object) -> str:
                 "cannot say which bytes produced it is not reproducible"
             ),
         )
-    _, _, digest = reference.partition("@")
-    if not _DIGEST.fullmatch(digest):
+    parsed = parse_reference(reference, default_registry=DOCKER_HUB, what="build environment")
+    if parsed.digest is None or not _DIGEST.fullmatch(parsed.digest):
         raise BuildError(
-            f'The build environment names a digest that is not one: "{digest}".',
+            f'The build environment names a digest that is not one: "{parsed.digest}".',
             hint="a digest is sha256: followed by 64 lowercase hex digits",
         )
-    return digest
+    return parsed.digest
 
 
 @dataclass(frozen=True)
