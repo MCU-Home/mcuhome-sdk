@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The build environment is published for two architectures** — image
+  revision **r11**, an OCI index over `linux/amd64` and `linux/arm64`. A
+  Home Assistant box is a `rpi4-64`, so an amd64-only build environment
+  was one no HA user could ever run; this is the prerequisite for every
+  ARM deployment, and nothing else was blocking it. Every
+  architecture-dependent download is pinned per architecture (two SHA-256
+  each for the Zephyr SDK bundle, its `arm-zephyr-eabi` toolchain, gn and
+  zap — all four aarch64 assets exist upstream at the versions already
+  pinned, verified against the bytes). An architecture the image is not
+  built for fails the build by name rather than fetching x86 binaries for
+  it.
+- CI builds each architecture **natively** (`ubuntu-latest` and
+  `ubuntu-24.04-arm`, free for public repositories, same 4 vCPU / 16 GB
+  machine), publishes it as `<revision tag>-<arch>`, and composes the
+  index with `docker manifest`. The Matter firmware build runs on both.
+  Nothing is emulated: a QEMU build of this image would be hours.
+- **A report on whether the host architecture changes the firmware.** The
+  two Matter builds cross-compile the same ARM firmware with the same
+  pinned toolchain; only the machine the compiler runs on differs, so
+  byte-identical output is the expected answer. Deliberately a report and
+  not a gate — a difference has innocent causes, and turning those red
+  would teach the wrong lesson.
+
+### Fixed
+
+- **The architecture is read from the stage, not only from `TARGETARCH`.**
+  Docker's classic builder leaves that variable empty — measured on a
+  Docker 29 daemon without buildx, where the new refusal fired with an
+  empty value — so it falls back to `dpkg --print-architecture`, which is
+  the truth about the platform the build step is running on and needs no
+  builder feature.
+
 ### Removed
 
 - **The host-compile path (`--build-mode local-dev`) is gone**, and with

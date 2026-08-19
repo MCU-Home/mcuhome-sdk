@@ -81,7 +81,13 @@
 #
 # Not used as a base: ghcr.io/zephyrproject-rtos/ci. It carries every
 # toolchain Zephyr supports plus vendor tooling (>10 GB) and its own
-# release cadence; MCUHome needs one architecture and owns its pins.
+# release cadence; MCUHome owns its pins and needs two architectures.
+#
+# The digest below is an **index** and therefore says nothing about
+# architecture — it names both, and each build takes the manifest for the
+# platform it is building. A digest that named one manifest would pin one
+# architecture and make the other unbuildable, which is worth knowing
+# before somebody "simplifies" this pin.
 ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258
 
 # Zephyr SDK: the *minimal* bundle plus exactly one target toolchain.
@@ -91,10 +97,18 @@ ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6
 # a second dtc) are deliberately not installed — Debian's dtc and gperf
 # are what the build uses, and flashing does not happen in this container
 # (ADR 0007).
+# Two hashes per download since r11, because the archive is per host
+# architecture and a hash is a statement about bytes. The host spelling
+# differs three ways across the three publishers — linux-x86_64 /
+# linux-aarch64 here, linux-amd64 / linux-arm64 for gn, linux-x64 /
+# linux-arm64 for zap — which is why each block resolves its own rather
+# than sharing one variable.
 ARG ZEPHYR_SDK_VERSION=1.0.1
-ARG ZEPHYR_SDK_SHA256=ca9bc0ff66fafca1dac9d592a36d953cf16d096a9d09b1c0357f021cf9f6a7eb
+ARG ZEPHYR_SDK_SHA256_AMD64=ca9bc0ff66fafca1dac9d592a36d953cf16d096a9d09b1c0357f021cf9f6a7eb
+ARG ZEPHYR_SDK_SHA256_ARM64=d79c5bfc68e679488659bea289a4026e52a64f03338875c8c9c850fff13cee30
 ARG ZEPHYR_TOOLCHAIN=arm-zephyr-eabi
-ARG ZEPHYR_TOOLCHAIN_SHA256=21b85981cb5a1818d9bc53d82af80f208946ec038b982ff1907287572ed3a634
+ARG ZEPHYR_TOOLCHAIN_SHA256_AMD64=21b85981cb5a1818d9bc53d82af80f208946ec038b982ff1907287572ed3a634
+ARG ZEPHYR_TOOLCHAIN_SHA256_ARM64=b9805b691f2f0a8926c92694cae378d05ba07b76abca745e216fcc52753cc4d6
 
 # gn: the Matter SDK builds its own libraries with it (ADR 0006). Taken
 # from the CIPD package Chromium infrastructure publishes, pinned by the
@@ -103,14 +117,16 @@ ARG ZEPHYR_TOOLCHAIN_SHA256=21b85981cb5a1818d9bc53d82af80f208946ec038b982ff19072
 # pin inside CHIP v1.5.1.0 is older (git_revision:97b68a0b); MCUHome
 # tracks what it tested rather than what a vendored submodule suggests.
 ARG GN_REVISION=17b0057970fa2b07a20cbb4289ab78cf93565f35
-ARG GN_SHA256=66cba1384b08f05643a31627bdec1d0fcc87ae7d40853ec24ec60b6eb02fe6c9
+ARG GN_SHA256_AMD64=66cba1384b08f05643a31627bdec1d0fcc87ae7d40853ec24ec60b6eb02fe6c9
+ARG GN_SHA256_ARM64=526535a49139b85f812ff3af3b825257896940dc6c6a7c082ceebdd7bcc63f30
 
 # zap: generates the Matter root-node data model from the framework's
 # .zap (components/matter/zap/). The version is CHIP v1.5.1.0's own pin,
 # `scripts/setup/zap.version` — reading it from anywhere else would let
 # the generated data model drift away from the SDK that consumes it.
 ARG ZAP_VERSION=v2025.10.23-nightly
-ARG ZAP_SHA256=fe327379a07f22fb91661b6a80c1e58c8f84f5af1d8dd1288b7fb69c8ef75ac0
+ARG ZAP_SHA256_AMD64=fe327379a07f22fb91661b6a80c1e58c8f84f5af1d8dd1288b7fb69c8ef75ac0
+ARG ZAP_SHA256_ARM64=9b9c41d2c0384acec6f47e7aab286166890e572219084fd6b8c5b78d66604de4
 
 # The two projects west.yml pins by TAG rather than by SHA. West resolves
 # them from the manifest — nothing here would need to know them, except
@@ -130,14 +146,33 @@ ARG CHIP_REVISION=v1.5.1.0
 # --------------------------------------------------------------------------
 FROM ${DEBIAN_IMAGE} AS fetch
 
+# The platform this stage is being built for, and the reason the stage is
+# not pinned to the *build* platform: everything it fetches is a host
+# binary for the image, so it belongs to the target. (The workspace stage
+# is the opposite kind of work — source trees, no binaries — and is left
+# alone for that reason.)
+#
+# **It is a fallback, not the source.** BuildKit fills TARGETARCH in;
+# docker's classic builder leaves it EMPTY, and this file has to build
+# under both — measured, on a Docker 29 daemon with no buildx installed,
+# where the refusal below fired with an empty value. So the architecture
+# is read from the stage itself with `dpkg --print-architecture`, which is
+# the truth about the platform this RUN is executing on and needs no
+# builder feature at all. The two never disagree: the stage runs on the
+# target, natively or emulated.
+ARG TARGETARCH
 ARG ZEPHYR_SDK_VERSION
-ARG ZEPHYR_SDK_SHA256
+ARG ZEPHYR_SDK_SHA256_AMD64
+ARG ZEPHYR_SDK_SHA256_ARM64
 ARG ZEPHYR_TOOLCHAIN
-ARG ZEPHYR_TOOLCHAIN_SHA256
+ARG ZEPHYR_TOOLCHAIN_SHA256_AMD64
+ARG ZEPHYR_TOOLCHAIN_SHA256_ARM64
 ARG GN_REVISION
-ARG GN_SHA256
+ARG GN_SHA256_AMD64
+ARG GN_SHA256_ARM64
 ARG ZAP_VERSION
-ARG ZAP_SHA256
+ARG ZAP_SHA256_AMD64
+ARG ZAP_SHA256_ARM64
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -154,23 +189,35 @@ WORKDIR /fetch
 # Zephyr SDK. The toolchain archive unpacks to `<toolchain>/`, and the SDK
 # expects it under `gnu/` — that is exactly what the SDK's own setup.sh
 # does with it, minus the interactive prompts and the host-tool installer.
-RUN sdk_base="https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${ZEPHYR_SDK_VERSION}" \
+RUN arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
+ && case "${arch}" in \
+      amd64) host=linux-x86_64;  sdk_sha="${ZEPHYR_SDK_SHA256_AMD64}"; tc_sha="${ZEPHYR_TOOLCHAIN_SHA256_AMD64}" ;; \
+      arm64) host=linux-aarch64; sdk_sha="${ZEPHYR_SDK_SHA256_ARM64}"; tc_sha="${ZEPHYR_TOOLCHAIN_SHA256_ARM64}" ;; \
+      *) echo "this image is built for amd64 and arm64, not for '${arch}'" >&2; exit 1 ;; \
+    esac \
+ && sdk_base="https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${ZEPHYR_SDK_VERSION}" \
  && curl -fsSL -o sdk.tar.xz \
-        "${sdk_base}/zephyr-sdk-${ZEPHYR_SDK_VERSION}_linux-x86_64_minimal.tar.xz" \
- && echo "${ZEPHYR_SDK_SHA256}  sdk.tar.xz" | sha256sum -c - \
+        "${sdk_base}/zephyr-sdk-${ZEPHYR_SDK_VERSION}_${host}_minimal.tar.xz" \
+ && echo "${sdk_sha}  sdk.tar.xz" | sha256sum -c - \
  && mkdir -p /opt \
  && tar -xJf sdk.tar.xz -C /opt \
  && curl -fsSL -o toolchain.tar.xz \
-        "${sdk_base}/toolchain_gnu_linux-x86_64_${ZEPHYR_TOOLCHAIN}.tar.xz" \
- && echo "${ZEPHYR_TOOLCHAIN_SHA256}  toolchain.tar.xz" | sha256sum -c - \
+        "${sdk_base}/toolchain_gnu_${host}_${ZEPHYR_TOOLCHAIN}.tar.xz" \
+ && echo "${tc_sha}  toolchain.tar.xz" | sha256sum -c - \
  && mkdir -p "/opt/zephyr-sdk-${ZEPHYR_SDK_VERSION}/gnu" \
  && tar -xJf toolchain.tar.xz -C "/opt/zephyr-sdk-${ZEPHYR_SDK_VERSION}/gnu" \
  && rm -rf /opt/zephyr-sdk-${ZEPHYR_SDK_VERSION}/hosttools sdk.tar.xz toolchain.tar.xz
 
 # gn — one static binary.
-RUN curl -fsSL -o gn.zip \
-        "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/git_revision:${GN_REVISION}" \
- && echo "${GN_SHA256}  gn.zip" | sha256sum -c - \
+RUN arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
+ && case "${arch}" in \
+      amd64) host=linux-amd64; gn_sha="${GN_SHA256_AMD64}" ;; \
+      arm64) host=linux-arm64; gn_sha="${GN_SHA256_ARM64}" ;; \
+      *) echo "this image is built for amd64 and arm64, not for '${arch}'" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o gn.zip \
+        "https://chrome-infra-packages.appspot.com/dl/gn/gn/${host}/+/git_revision:${GN_REVISION}" \
+ && echo "${gn_sha}  gn.zip" | sha256sum -c - \
  && mkdir -p /opt/gn \
  && unzip -q gn.zip -d /opt/gn \
  && chmod +x /opt/gn/gn \
@@ -179,9 +226,15 @@ RUN curl -fsSL -o gn.zip \
 # zap — a packaged Electron application; the zip is flat, so it unpacks
 # straight into its own directory. The .deb of the same release is not
 # used: it ships only the GUI binary, not the zap-cli the build calls.
-RUN curl -fsSL -o zap.zip \
-        "https://github.com/project-chip/zap/releases/download/${ZAP_VERSION}/zap-linux-x64.zip" \
- && echo "${ZAP_SHA256}  zap.zip" | sha256sum -c - \
+RUN arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
+ && case "${arch}" in \
+      amd64) host=linux-x64;   zap_sha="${ZAP_SHA256_AMD64}" ;; \
+      arm64) host=linux-arm64; zap_sha="${ZAP_SHA256_ARM64}" ;; \
+      *) echo "this image is built for amd64 and arm64, not for '${arch}'" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o zap.zip \
+        "https://github.com/project-chip/zap/releases/download/${ZAP_VERSION}/zap-${host}.zip" \
+ && echo "${zap_sha}  zap.zip" | sha256sum -c - \
  && mkdir -p /opt/zap \
  && unzip -q zap.zip -d /opt/zap \
  && chmod +x /opt/zap/zap /opt/zap/zap-cli \

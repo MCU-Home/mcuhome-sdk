@@ -140,7 +140,20 @@ ZEPHYR_RELEASE = "4.4.0"
 #: of how an environment is found rather than a detail of how one is
 #: checked afterwards. Images built before this carry the old names, do not
 #: qualify, and are not meant to — the names are the break.
-IMAGE_REVISION = 10
+#:
+#: r11 = **two architectures**. The image is published as an OCI *index*
+#: over ``linux/amd64`` and ``linux/arm64``, built natively on each rather
+#: than one emulated; every architecture-dependent download the image
+#: makes (the Zephyr SDK bundle and its toolchain, gn, zap) is pinned with
+#: its own SHA-256 per architecture, and an unknown ``TARGETARCH`` fails
+#: the build rather than quietly fetching an x86 binary. What this unlocks
+#: is the whole ARM half of the product: a Home Assistant box is a
+#: ``rpi4-64``, and no build environment existed for it. The bytes differ
+#: per architecture, so the *tag* names the index and the index names the
+#: two manifests — which is also what makes the index-digest pin
+#: (``resolve_env``) something that can be checked rather than only
+#: written down.
+IMAGE_REVISION = 11
 
 #: GitHub Container Registry under the MCUHome organization. Public
 #: since 2026-08-15 — ``docker pull`` works anonymously.

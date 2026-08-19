@@ -125,9 +125,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # For pushing the builder image to ghcr.io. The package inherits the
-      # repository's visibility, so it is private while the repository is.
-      packages: write
+      # Pull only. Publishing is the `image` job's business since r11:
+      # a multi-architecture image is published as an index over two
+      # per-architecture manifests, and neither of the jobs that *use* an
+      # image is in a position to compose one.
+      packages: read
     steps:
       # The checkout goes one level down: this repository is the west
       # manifest repository of a T2 workspace, and the workspace top
@@ -196,20 +198,6 @@ jobs:
             echo "built=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Only from main: a pull request that changes the Dockerfile is built
-      # and tested with its own image, but does not get to publish one.
-      - name: Publish the builder image
-        if: steps.builder.outputs.built == 'true' && github.event_name == 'push'
-        run: |
-          reference='${{ steps.image.outputs.reference }}'
-          aliases='${{ steps.image.outputs.aliases }}'
-          docker push "$reference"
-          # Push each moving tag (alias) so clients can find this revision
-          for alias in $aliases; do
-            docker tag "$reference" "$alias"
-            docker push "$alias"
-          done
-
       # Keyed on west.yml alone: that file is the complete description of
       # what `west update` produces. Zephyr and the modules are fetched
       # shallow and narrow, which is what keeps this cache small enough to
@@ -258,6 +246,200 @@ jobs:
             --volume "$PWD:$PWD" --workdir "$PWD" \
             '${{ steps.image.outputs.reference }}' \
             west twister -T mcuhome-sdk/tests --integration --inline-logs -v -j 2
+
+  # ------------------------------------------------------------------
+  # Publishing the build environment. Since r11 it is a MULTI-ARCHITECTURE
+  # image: an OCI index over one manifest per architecture, built natively
+  # on each rather than one of them emulated. A Home Assistant box is a
+  # `rpi4-64`, so an amd64-only build environment is one no HA user can
+  # ever run — that is what this job exists for.
+  #
+  # Three steps and they cannot be fewer:
+  #
+  #   1. each architecture is built on its own runner and pushed under its
+  #      own tag, `<revision-tag>-<arch>`. That tag is an ordinary content
+  #      identity — exactly these bytes for exactly this architecture — and
+  #      it is what somebody pulls who wants one architecture on purpose.
+  #   2. the index is composed from those two and pushed under the plain
+  #      revision tag, which is what every client resolves and pins.
+  #   3. the moving tags (`zephyr-<X.Y.Z>-latest` and the aggregates) are
+  #      the same index under the names a client searches by.
+  #
+  # `docker manifest` rather than buildx: it is the tool this workflow
+  # already has, needs no builder setup step, and composes an index from
+  # references that are already in the registry — which these are, by
+  # step 1. The two per-architecture tags are the price and they are worth
+  # paying: they name real bytes and nothing else in the registry does.
+  #
+  # Push events only. A pull request that changes the image builds its own
+  # copy in the jobs that use one (twister, matter) and publishes nothing
+  # — the same rule as before r11, and the reason a fork cannot publish.
+  image:
+    name: Build environment (${{ matrix.arch }})
+    if: github.event_name == 'push'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Both architectures are reported even when one fails: "arm64 broke"
+      # and "the image broke" are different news and the second one is
+      # what a cancelled sibling would tell.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            # Free for public repositories and generally available since
+            # 2025-08-07; 4 vCPU / 16 GB / 14 GB SSD, the same machine the
+            # x64 standard runner is. Native, so nothing here is emulated
+            # — a QEMU build of this image would be hours.
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      # The package inherits the repository's visibility, which is public.
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: mcuhome-sdk
+
+      - name: Resolve the builder image reference
+        id: image
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import sys
+
+          sys.path.insert(0, "mcuhome-sdk")
+          from mcuhome.model.buildimage import IMAGE
+
+          print(f"reference={IMAGE}")
+          PY
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Same freshness rule as everywhere else in this workflow: the tag
+      # IS the content identity, so a tag that does not exist yet means an
+      # image input changed and its revision was bumped. Per architecture,
+      # because that is what this tag names.
+      - name: Build and publish this architecture
+        run: |
+          arch_reference='${{ steps.image.outputs.reference }}-${{ matrix.arch }}'
+          if docker pull --quiet "$arch_reference"; then
+            echo "::notice::$arch_reference is already published."
+            exit 0
+          fi
+          echo "::notice::building $arch_reference"
+          # The context is the repository, not containers/build-container/:
+          # since r3 the image bakes a west workspace, so west.yml and
+          # patches/ are image inputs too.
+          docker build --tag "$arch_reference" \
+            --file mcuhome-sdk/containers/build-container/Dockerfile mcuhome-sdk
+          docker push "$arch_reference"
+
+      # The architecture this runner really is, asserted rather than
+      # assumed: a matrix entry is a label and a label is a promise
+      # somebody else keeps. An image built on the wrong runner would be
+      # published under a name that lies, and the index would then serve
+      # amd64 bytes to an arm64 host.
+      - name: The image is the architecture its tag claims
+        run: |
+          arch_reference='${{ steps.image.outputs.reference }}-${{ matrix.arch }}'
+          built="$(docker image inspect "$arch_reference" --format '{{.Architecture}}')"
+          test "$built" = '${{ matrix.arch }}' || {
+            echo "$arch_reference is $built, not ${{ matrix.arch }}" >&2
+            exit 1
+          }
+
+  # The index over the two, under the names clients actually use. Split
+  # from the job above because it needs BOTH architectures to exist, which
+  # is what `needs` says and a matrix cannot.
+  image-index:
+    name: Build environment (the index over both)
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: mcuhome-sdk
+
+      - name: Resolve the builder image reference
+        id: image
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import sys
+
+          sys.path.insert(0, "mcuhome-sdk")
+          from mcuhome.model.buildimage import (
+              IMAGE,
+              IMAGE_REPOSITORY,
+              ZEPHYR_RELEASE,
+              aggregate_tags,
+              latest_tag,
+          )
+
+          print(f"reference={IMAGE}")
+          moving = (latest_tag(ZEPHYR_RELEASE), *aggregate_tags(ZEPHYR_RELEASE))
+          print("aliases=" + " ".join(f"{IMAGE_REPOSITORY}:{tag}" for tag in moving))
+          PY
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `docker manifest rm` first, ignoring its failure: the local
+      # manifest list is state on the runner, a re-run of this job finds
+      # its own leftover, and `create` refuses to overwrite one. Nothing
+      # in the registry is touched by it.
+      - name: Compose and push the index
+        run: |
+          reference='${{ steps.image.outputs.reference }}'
+          aliases='${{ steps.image.outputs.aliases }}'
+          for target in "$reference" $aliases; do
+            docker manifest rm "$target" >/dev/null 2>&1 || true
+            docker manifest create "$target" \
+              "${reference}-amd64" \
+              "${reference}-arm64"
+            docker manifest push "$target"
+            echo "::notice::published $target"
+          done
+
+      # What a client will actually do with it, done here once: resolve
+      # the tag to a digest and check that the digest names an index over
+      # the two architectures. A tag that resolved to one manifest would
+      # be an image half this project's users cannot run, published under
+      # a name that says otherwise.
+      - name: The tag names an index over both architectures
+        run: |
+          reference='${{ steps.image.outputs.reference }}'
+          docker manifest inspect "$reference" > index.json
+          python3 - <<'PY'
+          import json
+          import sys
+
+          index = json.load(open("index.json"))
+          if "manifests" not in index:
+              sys.exit(f"the tag resolves to a single manifest: {index.get('mediaType')}")
+          found = sorted(
+              entry["platform"]["architecture"]
+              for entry in index["manifests"]
+              if entry.get("platform", {}).get("architecture") not in (None, "unknown")
+          )
+          print("architectures:", found)
+          if found != ["amd64", "arm64"]:
+              sys.exit(f"expected amd64 and arm64, the index names {found}")
+          PY
 
   # ------------------------------------------------------------------
   # The trigger for the `matter` job below.
@@ -379,10 +561,24 @@ jobs:
   # together on the example the node on the bench was commissioned from.
   # Delete it and those three classes of failure become invisible again.
   matter:
-    name: Matter firmware build (nRF7002-DK, in the builder image)
+    name: Matter firmware build (nRF7002-DK, ${{ matrix.arch }})
     needs: matter-gate
     if: needs.matter-gate.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    # Both architectures, every time the gate opens (PO 2026-08-19). The
+    # firmware is the same cross-compiled ARM binary either way — what
+    # differs is the *host* the toolchain runs on, and that is exactly
+    # what a build environment is. Noted as a later optimisation: once
+    # there are timings, whichever architecture turns out slower is the
+    # one that goes behind the gate, and it may well be amd64.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       # Pull only. Publishing the builder image is the twister job's
@@ -551,9 +747,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ccache
-          key: ccache-matter-1-${{ runner.os }}-${{ github.run_id }}
+          key: ccache-matter-1-${{ runner.os }}-${{ matrix.arch }}-${{ github.run_id }}
           restore-keys: |
-            ccache-matter-1-${{ runner.os }}-
+            ccache-matter-1-${{ runner.os }}-${{ matrix.arch }}-
 
       # The default `mcuhome device build` resolves the device's SDK pin against
       # the source directories `--sdk-sources` names (build-container
@@ -605,12 +801,105 @@ jobs:
       - name: Check the artifact set
         run: python3 mcuhome-sdk/scripts/check_build_artifacts.py build/bmp180-node
 
+      # What this architecture produced, as hashes — the input to the
+      # cross-architecture comparison below. Only the UNSIGNED artifacts:
+      # a signature is not reproducible by construction (ECDSA draws a
+      # random nonce per signature, tests_py asserts exactly that), so
+      # comparing signed images would compare the randomness.
+      - name: Record what this architecture produced
+        run: |
+          python3 - <<'PY' > firmware-${{ matrix.arch }}.json
+          import hashlib
+          import json
+          import pathlib
+
+          out = pathlib.Path("build/bmp180-node")
+          print(
+              json.dumps(
+                  {
+                      path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                      for path in sorted(out.iterdir())
+                      if path.is_file() and path.name in
+                      ("firmware.bin", "firmware.hex", "bootloader.hex")
+                  },
+                  indent=1,
+              )
+          )
+          PY
+          cat firmware-${{ matrix.arch }}.json
+
+      - name: Upload what this architecture produced
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firmware-${{ matrix.arch }}
+          path: firmware-${{ matrix.arch }}.json
+          retention-days: 7
+
       - name: Save the compiler cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ccache
-          key: ccache-matter-1-${{ runner.os }}-${{ github.run_id }}
+          key: ccache-matter-1-${{ runner.os }}-${{ matrix.arch }}-${{ github.run_id }}
+
+  # ------------------------------------------------------------------
+  # Does the host architecture change the firmware? A report, not a gate
+  # (PO 2026-08-19).
+  #
+  # The two `matter` legs cross-compile the same ARM firmware with the
+  # same pinned toolchain, from the same sources, in the same build
+  # environment — only the machine the compiler itself runs on differs.
+  # Byte-identical output is therefore the *expected* answer and a
+  # genuinely useful one: it says the environment, and not the host,
+  # decides what a device gets.
+  #
+  # It is deliberately not a gate. A difference here has a long list of
+  # innocent causes — a path baked into a build id, a timestamp a tool
+  # embeds, a linker that orders a hash table by pointer — and turning a
+  # red mark on those into "the arm64 build environment is broken" would
+  # be the wrong lesson. What the report gives is the diff, named file by
+  # file, for somebody to look at.
+  matter-compare:
+    name: Does the host architecture change the firmware?
+    needs: matter
+    if: always() && needs.matter.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download what each architecture produced
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: firmware-*
+          path: produced
+
+      - name: Compare them
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          found = {
+              path.parent.name.removeprefix("firmware-"): json.loads(path.read_text())
+              for path in sorted(pathlib.Path("produced").glob("*/firmware-*.json"))
+          }
+          if len(found) != 2:
+              print(f"::notice::only {sorted(found)} reported; nothing to compare")
+              raise SystemExit(0)
+          (left, one), (right, other) = sorted(found.items())
+          same = [name for name in sorted(one) if one.get(name) == other.get(name)]
+          differ = [name for name in sorted(set(one) | set(other)) if name not in same]
+          for name in same:
+              print(f"  identical  {name}")
+          for name in differ:
+              print(f"  DIFFERS    {name}")
+              print(f"             {left}:  {one.get(name, '<absent>')}")
+              print(f"             {right}: {other.get(name, '<absent>')}")
+          verdict = (
+              f"the host architecture does not change the firmware ({len(same)} files)"
+              if not differ
+              else f"{len(differ)} of {len(same) + len(differ)} files differ between {left} and {right}"
+          )
+          print(f"::notice::{verdict}")
+          PY
 
   # ------------------------------------------------------------------
   # The SDK package (B2)

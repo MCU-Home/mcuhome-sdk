@@ -108,7 +108,7 @@ clear what the labels describe and leaving room for other image-level
 metadata under different namespaces should the need arise.
 
 **Build-environment tagging convention.** A build-environment publisher MUST
-carry, beside its immutable revision tags (e.g., `zephyr-4.4.0-r10`), a
+carry, beside its immutable revision tags (e.g., `zephyr-4.4.0-r11`), a
 moving `zephyr-<X.Y.Z>-latest` tag for each Zephyr release the image supports
 (e.g., `zephyr-4.4.0-latest` for the current `zephyr-4.4.0` release series).
 The publisher SHOULD carry the aggregate tags `zephyr-<X.Y>-latest` and
@@ -361,7 +361,7 @@ mcuhome:
     url: https://…/mcuhome-sdk-2.4.0.tar.zst   # hint only — never hashed
     sha256: <hash>
 # the environment the CLIENT resolved — its digest IS hashed
-build_environment: ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10@sha256:<64 hex>
+build_environment: ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11@sha256:<64 hex>
 target:
   board: nrf7002dk/nrf5340/cpuapp
 ```
