@@ -315,6 +315,20 @@ jobs:
           print(f"reference={IMAGE}")
           PY
 
+      # The image is 5.28 GB on disk and building it wants several times
+      # that in layers and cache. The amd64 runner has been measured at
+      # 72 GB total and 34 GB free after this step; what an arm64 runner
+      # has is not something this project has measured yet — the
+      # documentation quotes the same 14 GB SSD for both, which is a
+      # floor rather than the number. So: free what nothing here uses,
+      # and print the result, which is how the first run tells us.
+      # `rm -rf` on an absent path is not an error, so the same list
+      # serves both runner images.
+      - name: Make room, and say how much there is
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+
       - name: Log in to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
