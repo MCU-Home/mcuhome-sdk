@@ -6,7 +6,7 @@ CI and the Home Assistant add-on all compile in this image, which is what
 makes "works on my machine" and "passes in CI" the same statement.
 
 ```sh
-docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9   # or build it, below
+docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11   # or build it, below
 mcuhome device build <device>                                 # uses it by default
 ```
 
@@ -168,6 +168,14 @@ There is no `latest`: a build environment that changes under a stable
 name is not a build environment. CI additionally publishes the moving
 `:zephyr-<zephyr version>` alias, which the builder never asks for.
 
+Since r11 each of those tags names an **index** over the two
+architectures, and beside them CI publishes
+`<revision tag>-amd64` and `<revision tag>-arm64`. Those two are not a
+second naming scheme: they are the same kind of content identity one
+step down — exactly these bytes for exactly this architecture — and the
+index is composed from them. Pull one on purpose when you want one
+architecture on a machine that could run either.
+
 **Changing anything in this directory means bumping `IMAGE_REVISION` in
 the same commit — and since r3 that rule covers [`west.yml`](../../west.yml)
 and [`patches/`](../../patches/) too**, because they are image inputs now.
@@ -184,12 +192,44 @@ because the body arrives with the SDK mount. The version half needs no
 discipline of its own: one tag cuts the wheels, the SDK archive and this
 image (ADR 0020 decision 8).
 
+## Two architectures (r11)
+
+The published image is an **OCI index** over `linux/amd64` and
+`linux/arm64`. A Home Assistant box is a `rpi4-64`, so an amd64-only
+build environment is one no HA user can run — which is the whole reason
+this exists.
+
+Everything architecture-dependent is downloaded per architecture and
+pinned per architecture: **two SHA-256 for each of the four archives**
+(the Zephyr SDK bundle, its `arm-zephyr-eabi` toolchain, gn, zap). The
+three publishers spell the host three different ways —
+`linux-x86_64`/`linux-aarch64`, `linux-amd64`/`linux-arm64`,
+`linux-x64`/`linux-arm64` — which is why each block resolves its own
+rather than sharing one variable. The *target* toolchain is the same
+cross-compiler either way; only the machine it runs on differs.
+
+The architecture is read from `TARGETARCH` where the builder supplies it
+and from `dpkg --print-architecture` otherwise. **The fallback is not
+belt-and-braces**: docker's classic builder leaves `TARGETARCH` empty,
+which was measured on a Docker 29 daemon without buildx, and the
+alternative to reading it from the stage itself is an image that quietly
+fetches x86 binaries for an arm64 build. An architecture that is neither
+fails the build by name.
+
+CI builds each architecture **natively** — `ubuntu-latest` and
+`ubuntu-24.04-arm`, free for public repositories and the same 4 vCPU /
+16 GB machine — pushes each under `<revision tag>-<arch>`, and composes
+the index from the two with `docker manifest`. Emulation is not used
+anywhere: a QEMU build of this image would be hours.
+
 ## Building it
 
 ```sh
 # from the repository ROOT — the context is the repository, not this
-# directory, because west.yml and patches/ are image inputs
-docker build -t ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9 \
+# directory, because west.yml and patches/ are image inputs.
+# This builds for the machine you are on; CI builds both and publishes
+# the index.
+docker build -t ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11 \
     -f containers/build-container/Dockerfile .
 ```
 
@@ -241,7 +281,7 @@ build with `--build-mode local --container-image …`, for a whole shell with
 Inspecting what a given image actually carries needs no build:
 
 ```sh
-docker run --rm ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9 \
+docker run --rm ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11 \
     cat /mcuhome/workspace.json
 ```
 
@@ -322,7 +362,7 @@ hash is safe.
 docker run --rm --user "$(id -u):$(id -g)" \
     --volume ~/.cache/mcuhome/ccache/cache-local:/ccache/cache-local \
     --volume ~/.cache/mcuhome/ccache/cache-shared:/ccache/cache-shared:ro \
-    ghcr.io/mcu-home/build-container:zephyr-4.4.0-r9 ccache -s
+    ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11 ccache -s
 ```
 
 ## Bumping Zephyr
