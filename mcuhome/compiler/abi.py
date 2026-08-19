@@ -2230,9 +2230,9 @@ class _Build:
         "It exists for one consumer and one purpose: the client that signs
         detached, which is the only party holding the private key." So it
         carries the ``report`` version, the mandatory ``signing`` block and
-        the optional ``memory`` list, and none of what
-        ``build-manifest.json`` carries: the contract strikes ``signed``,
-        ``signed_by_the_build``, ``inputs`` and ``outputs`` by name,
+        the optional ``memory`` list, and nothing else: the contract
+        strikes ``signed``, ``signed_by_the_build``, ``inputs`` and
+        ``outputs`` by name,
         because "a build container never signs, the input is the
         ``firmware`` artifact, and where the signed output goes is the
         signer's business".

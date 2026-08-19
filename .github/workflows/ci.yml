@@ -592,12 +592,11 @@ jobs:
           MCUHOME_BUILDER_IMAGE: ${{ steps.image.outputs.reference }}
         run: |
           mcuhome device build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
-            --build-dir build/bmp180-node --sdk-sources dist/sdk -S debug-rtt
+            --build-dir build/bmp180-node --sdk-sources dist/sdk
 
-      # A green build that produced nothing is worse than a red one. This
-      # is the default (container) path, so the build directory holds a
-      # build-report.json rather than a build-manifest.json: the checker
-      # picks the shape by which file is present and here verifies that
+      # A green build that produced nothing is worse than a red one. The
+      # build directory holds a build-report.json, and the checker
+      # verifies that
       # the report is a well-formed §7.2.1 document, and that the unsigned
       # firmware, the host-signed firmware in both formats and the one
       # .ota image are present and non-empty. The container already
