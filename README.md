@@ -108,10 +108,9 @@ MCUboot and the application signed for it — with their flash/RAM
 footprints and the flash layout they were built against. The first build
 also draws your own ECDSA P-256 signing key into
 `~/.config/mcuhome/signing.key` and says so: every device you flash
-verifies its firmware against it, so it is worth keeping (ADR 0015). `--generate-only` stops after the
-generating half, which needs nothing but Python; `--build-mode local-dev`
-compiles on a host toolchain instead, for people working on MCUHome itself. Details,
-including how to build the image yourself, are in
+verifies its firmware against it, so it is worth keeping (ADR 0015).
+`--generate-only` stops after the generating half, which needs nothing
+but Python. Details, including how to build the image yourself, are in
 [containers/build-container/README.md](containers/build-container/README.md).
 
 Build parallelism is auto-detected from CPU count and available RAM (a
@@ -121,7 +120,7 @@ the auto-detection, `--jobs N` overrides both, and it applies inside the
 builder container too, resolved on the host before `docker run`.
 
 The default builder is configured through the project or user configuration (ADR 0023);
-the fully manual form is `--build-mode local-dev|local|remote` with mode-specific flags.
+the fully manual form is `--build-mode local|remote` with mode-specific flags.
 
 ### Starting a device from nothing
 
@@ -152,7 +151,7 @@ mcuhome device sign-firmware build/<device>                # where the private k
 ```
 
 The unsigned build compiles the bootloader with the public key in it and
-leaves the application unsigned, and writes `build-manifest.json` stating
+leaves the application unsigned, and writes `build-report.json` stating
 the exact `imgtool` parameters (`--version`, `--header-size`,
 `--slot-size`, `--align`). `mcuhome device sign-firmware` reads them back and runs the
 same tool with the same arguments — the result is the same image, and

@@ -30,17 +30,24 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from mcuhome.model import pairing, registry
 from mcuhome.model.errors import BuildError
+
+if TYPE_CHECKING:  # `model` imports this module for its default version
+    from mcuhome.model.model import DeviceModel
 
 __all__ = [
     "DEFAULT_VERSION",
     "VERSION_FIELD_MAX",
     "VERSION_PATTERN",
+    "OtaIdentity",
     "OtaImage",
     "describe_version_problem",
     "imgtool_version",
     "kconfig_lines",
+    "ota_parameters",
     "parse_version",
     "software_version",
 ]
@@ -149,10 +156,9 @@ def kconfig_lines(version: str, *, matter: bool) -> list[str]:
 class OtaImage:
     """What :func:`mcuhome.workbench.otafile.write_ota_image` produced.
 
-    Vocabulary rather than output: the writer fills it in and
-    :mod:`mcuhome.model.manifest` records it, which is why it lives with the
-    version and not with the writer — a manifest is written on machines
-    that never wrap an image.
+    Vocabulary rather than output: the writer fills it in and a renderer
+    reports it, which is why it lives with the version and not with the
+    writer.
     """
 
     path: Path
@@ -165,3 +171,40 @@ class OtaImage:
     version: str
     #: The Matter SoftwareVersion derived from it.
     software_version: int
+
+
+@dataclass(frozen=True)
+class OtaIdentity:
+    """The Matter OTA identity of a build: what the header will say.
+
+    Known the moment a build is planned, i.e. before any image exists —
+    which is what lets ``mcuhome device sign-firmware`` write the ``.ota``
+    on a machine that has the signed image and no compiler at all (ADR
+    0015 decision 8 puts signing where the key is).
+    """
+
+    version: str
+    software_version: int
+    vendor_id: int
+    product_id: int
+
+
+def ota_parameters(model: DeviceModel) -> OtaIdentity | None:
+    """The OTA identity of a device, or None when it cannot take one.
+
+    "Cannot" is two different facts and both are checked here: the board's
+    update scheme has to allow Matter OTA (ADR 0015 decision 5 — a board
+    with nowhere to stage an image cannot), and the device has to have a
+    Matter stack to receive it with.
+    """
+    board = registry.BOARDS.get(model.device.board)
+    scheme = None if board is None else board.update_scheme
+
+    if scheme is None or not scheme.matter_ota or not model.network.matter_enabled:
+        return None
+    return OtaIdentity(
+        version=model.device.version,
+        software_version=software_version(model.device.version),
+        vendor_id=pairing.VENDOR_ID,
+        product_id=pairing.PRODUCT_ID,
+    )

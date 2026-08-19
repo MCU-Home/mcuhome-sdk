@@ -20,7 +20,7 @@ canonical device model), and `mcuhome device build` goes all the way to a
 flashable image — stage 4 generates the per-device Zephyr application
 (tables, overlay, Kconfig fragment, CMakeLists) and stage 5 compiles it
 with `west build` inside the builder image (ADR 0007;
-`containers/build-container/`), or on the host with `--build-mode local-dev`. Note the
+`containers/build-container/`). Note the
 consequence of ADR 0014:
 `samples/matter-node/src/mcuhome_config.{c,h}` **is generator output**
 and the pytest suite compares it byte for byte — never hand-edit it,
@@ -177,7 +177,7 @@ pip install -e ../mcuhome -e ../cli
 # … or, working on this repository alone, straight from git — pip
 # clones internally, you keep exactly one checkout:
 pip install "mcuhome @ git+https://github.com/mcu-home/cli" \
-  "mcuhome-workbench[remote,local] @ git+https://github.com/mcu-home/mcuhome"
+  "mcuhome-workbench[remote,generate] @ git+https://github.com/mcu-home/mcuhome"
 
 # scripts/build_sdk_archive.py runs from this venv too — that is what
 # the zstandard above is for; there is no system-python path.
@@ -195,8 +195,7 @@ mcuhome device new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
 
 # Detached signing (ADR 0015 decision 8): compile without the private key,
 # sign where the key is. build-report.json carries the imgtool parameters
-# (the default `local` method's §7.2.1 delivery; `--build-mode local-dev`
-# writes build-manifest.json instead, and the signer reads either).
+# — the §7.2.1 delivery every build makes, and the one shape there is.
 mcuhome public-key > signing.pub
 mcuhome device build <device> --no-sign --public-key signing.pub
 mcuhome device sign-firmware build/<device>
@@ -213,12 +212,8 @@ mcuhome device build docs/design/examples/00-bmp180-two-endpoints.yaml \
 # mcuboot + the signed application) — and reports both with their
 # footprints. The first build generates the per-user signing key in
 # ~/.config/mcuhome/; --signing-key points somewhere else.
-# -S adds a snippet on top of the ones the configuration needs.
 mcuhome device build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
-  --build-dir build/bmp180-node -S debug-rtt
-
-# The same, on the host toolchain instead of in the container
-mcuhome device build … --build-mode local-dev
+  --build-dir build/bmp180-node
 
 # Build the builder image from source (containers/build-container/README.md).
 # The context is the repository root, not containers/build-container/: since r3
@@ -256,15 +251,18 @@ A missing docker, a stopped daemon and a missing image are three
 different refusals with three different fixes, all raised before the
 build starts.
 
-`--build-mode local-dev` compiles on the host instead, which is what MCUHome's
-own contributors do in this workspace. That path needs a west workspace plus
-three things a Zephyr installation does not bring:
+**There is no host-compile mode.** A development change reaches a build
+as a *patch* in the build context, which is what keeps it compiled
+against the declared environment instead of against whatever a
+developer's checkout happens to be. What a build environment has to
+carry, and what the program checks for before it starts, is three things
+a Zephyr installation does not bring:
 
-| Requirement | Why | Provided by the builder? |
+| Requirement | Why | In the build container? |
 |---|---|---|
-| `gn` on `PATH` | the Matter SDK builds its own libraries with GN | no — install it (the image has it) |
-| `zap`/`zap-cli` on `PATH`, or `ZAP_INSTALL_PATH` | generates the root-node data model from `components/matter/zap/` | no — install it (the image has it) |
-| `PYTHONPATH=<repo>/scripts/pyshim` | CHIP v1.5.1.0 ships without the `python_path` helper its codegen imports (upstream candidate C1) | **yes**, automatically |
+| `gn` on `PATH` | the Matter SDK builds its own libraries with GN | yes |
+| `zap`/`zap-cli` on `PATH`, or `ZAP_INSTALL_PATH` | generates the root-node data model from `components/matter/zap/` | yes |
+| `PYTHONPATH=<repo>/scripts/pyshim` | CHIP v1.5.1.0 ships without the `python_path` helper its codegen imports (upstream candidate C1) | yes, set by the program |
 
 Missing tools are reported by name before the build starts, never as a
 compiler error ten minutes in. `ZEPHYR_BASE` is also filled in for the
@@ -281,12 +279,11 @@ materialises a west workspace **with** the `matter` group, applies both
 files in `patches/` with `git apply` (a patch that has drifted from its
 pinned upstream fails the job — there is no `--3way`, no fallback), and
 runs `mcuhome device build` on
-`docs/design/examples/00-bmp180-two-endpoints.yaml` in the builder image,
-i.e. the container path rather than `--build-mode local-dev`.
-`scripts/check_build_artifacts.py` then asserts the artifact set —
-MCUboot image, signed application, merged
-hex, `build-manifest.json`, every file checked against the size and
-SHA-256 the manifest recorded. It exists because three build inputs went
+`docs/design/examples/00-bmp180-two-endpoints.yaml` in the builder image.
+`scripts/check_build_artifacts.py` then asserts the artifact set — the
+unsigned firmware in both encodings, the bootloader, the host-signed
+images, one `.ota`, and a well-formed §7.2.1 `build-report.json`. It
+exists because three build inputs went
 missing at once without CI noticing (`compat/mbedtls/` outside every
 repository, the `pigweed_environment.gni` stub in no patch, `cryptography`
 absent from the image); the job's head comment in the workflow tells that

@@ -39,7 +39,7 @@ import pytest
 from conftest import EXAMPLES_DIR, resolve_file, write_context_manifest
 
 from mcuhome.compiler import abi
-from mcuhome.model import __version__
+from mcuhome.model import __version__, jobs
 from mcuhome.model.context import (
     CONTEXT_VERSION,
     MANIFEST_FILE,
@@ -1595,16 +1595,13 @@ def test_limits_jobs_is_authoritative_and_nothing_re_detects_it(
     """§5.2: "It is not a hint … a foreign program would fall back to
     ``nproc``, which is exactly the case the field exists against."
 
-    In the ``subprocess`` profile the program shares a host with other
-    sessions, so ``nproc`` jobs each is an out-of-memory kill. The number
-    reaches all three channels that do not inherit it, and
-    :func:`~mcuhome.compiler.workspace.resolve_jobs` — the host-side resolver with
-    the auto-detection in it — is made to explode so that calling it would
-    fail this test rather than pass it quietly.
+    The host resolves the number once, against the RAM *it* can see, and
+    it reaches all three channels that do not inherit it. The auto-detection
+    behind that resolution (:func:`mcuhome.model.jobs.detect_jobs`) is made
+    to explode, so a program that fell back to guessing would fail this test
+    rather than pass it quietly.
     """
-    monkeypatch.setattr(
-        abi.workspace, "resolve_jobs", lambda **kwargs: pytest.fail("jobs were re-detected")
-    )
+    monkeypatch.setattr(jobs, "detect_jobs", lambda: pytest.fail("jobs were re-detected"))
     assert build.run(limits={"jobs": 3}) == abi.EXIT_SUCCESS
     plan = build.plans[0]
     assert "-o=-j3" in plan.command

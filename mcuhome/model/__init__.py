@@ -21,8 +21,9 @@ is that independent parties arrive at the same one.
 :mod:`mcuhome.model.registry`        the static tables everything validates against
 :mod:`mcuhome.model.context`         the remote-build context format (ADR 0018)
 :mod:`mcuhome.model.artifacts`       one declared artifact, as every method reports it
-:mod:`mcuhome.model.manifest`        ``build-manifest.json``, as a format
 :mod:`mcuhome.model.ota`             the device version, and what derives from it
+:mod:`mcuhome.model.jobs`            how many compile jobs this machine sustains
+:mod:`mcuhome.model.signing`         the imgtool arguments an image is signed with
 :mod:`mcuhome.model.pairing`         commissioning credentials, as one atomic group
 :mod:`mcuhome.model.p256`            the curve arithmetic pairing and signing share
 :mod:`mcuhome.model.export`          the registry, as data

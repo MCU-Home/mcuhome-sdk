@@ -1777,7 +1777,7 @@ class _Build:
         mandatory for working actions … An optional field would be
         worthless here: a foreign program would fall back to ``nproc``,
         which is exactly the case the field exists against" — so
-        :func:`~mcuhome.compiler.workspace.resolve_jobs` and its auto-detection stay
+        :func:`~mcuhome.model.jobs.resolve_jobs` and its auto-detection stay
         on the host side of the contract and are never called here.
 
         The cache follows §10 exactly **when the request names one**. A
