@@ -43,7 +43,6 @@ second — they are the fast half of the strategy in
 | `test_workspace.py` | stage 5 on the host: workspace discovery, prerequisites, the sysbuild command, per-image artifacts and memory reports |
 | `test_container.py` | stage 5 in the image: image tag, mounts, environment, the three refusals |
 | `test_api.py` | the supported programmatic surface (`mcuhome.workbench.api`) and the serialized shape of an error |
-| `test_manifest.py` | `build-manifest.json`: its fields, its determinism, and the signing parameters it states |
 | `test_imgtool.py` | detached signing: the command is Zephyr's own, and two signings of one image differ only in the signature |
 | `test_export.py` | the registry and the `main.yaml` JSON Schema, golden and against the parser |
 | `test_scaffold.py` | `mcuhome new`: what it writes, what it refuses, and that matter-pairing then validate works on it |

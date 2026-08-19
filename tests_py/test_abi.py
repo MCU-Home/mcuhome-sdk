@@ -1464,9 +1464,9 @@ def test_the_build_report_is_the_document_seven_two_one_describes(build: BuildSe
     configured to verify with plus "the **four ``imgtool sign``
     arguments**, under imgtool's own option names". ``memory`` is
     "optional, one entry per memory region of a linked image, with exactly
-    the fields of the ``build.memory.region`` event". Nothing of
-    ``build-manifest.json``'s ``signed``, ``signed_by_the_build``,
-    ``inputs`` or ``outputs`` is here: the contract strikes all four.
+    the fields of the ``build.memory.region`` event". None of
+    ``signed``, ``signed_by_the_build``, ``inputs`` or ``outputs`` is
+    here: the contract strikes all four by name.
     """
     assert build.run() == abi.EXIT_SUCCESS
     report = json.loads((build.out / "build-report.json").read_text(encoding="utf-8"))

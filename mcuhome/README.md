@@ -15,7 +15,6 @@ mcuhome device matter-pairing --new <device>    # draw this device's commissioni
 mcuhome device validate <device>        # stages 1-3, prints the resolved device
 mcuhome device build <device> --generate-only   # + stage 4, writes the application
 mcuhome device build <device>           # + stage 5, compiles it in the builder image
-mcuhome device build <device> --build-mode local-dev   # … or on this machine's own toolchain
 pytest                           # the suite in ../tests_py/
 ```
 
@@ -90,9 +89,10 @@ is a per-user secret and is passed on the command line
 Stage 5 runs in the **build-container image** (ADR 0007,
 [../containers/build-container/](../containers/build-container/README.md)): the host
 needs git and docker, and the build runs as the calling user so nothing
-is left behind owned by root. `--build-mode local-dev` compiles in the
-west workspace `mcuhome.compiler` is installed in instead — the escape
-hatch for MCUHome's own contributors.
+is left behind owned by root. There is no host-compile mode: a change to
+the build environment reaches a build as a **patch in the build
+context**, so what it is compiled against is the environment the context
+declares.
 
 The party that drives that container is **not in this repository**. It
 is the workbench's orchestrator, which starts one container per build,
