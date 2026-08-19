@@ -6,9 +6,9 @@
 toolchain the test suite has no business requiring — the pytest half of
 the strategy (builder-pipeline.md §9) is the fast half and stays that way.
 What is tested is everything stage 5 decides before the compiler starts:
-where the workspace is, what the command line says, which prerequisite is
-missing, and what the build log meant. The subprocess itself is mocked in
-the one test that needs it.
+what the command line says, which prerequisite is missing, and what the
+build log meant. The subprocess itself is mocked in the one test that
+needs it.
 """
 
 from __future__ import annotations
@@ -21,184 +21,6 @@ import pytest
 
 from mcuhome.compiler import generate, workspace
 from mcuhome.model.errors import BuildError
-
-_GIB = 1024**3
-
-
-def _fake_workspace(root: Path) -> Path:
-    (root / ".west").mkdir(parents=True)
-    (root / ".west" / "config").write_text("[manifest]\npath = mcuhome\n", "utf-8")
-    return root
-
-
-# --------------------------------------------------------------------------
-# Finding the workspace
-# --------------------------------------------------------------------------
-
-
-def test_the_topdir_is_found_from_anywhere_below_it(tmp_path) -> None:
-    top = _fake_workspace(tmp_path / "ws")
-    deep = top / "build" / "node" / "app" / "src"
-    deep.mkdir(parents=True)
-    assert workspace.find_topdir(deep) == top
-
-
-def test_a_file_is_as_good_a_starting_point_as_its_directory(tmp_path) -> None:
-    top = _fake_workspace(tmp_path / "ws")
-    entry = top / "main.yaml"
-    entry.write_text("", "utf-8")
-    assert workspace.find_topdir(entry) == top
-
-
-def test_the_first_candidate_wins(tmp_path) -> None:
-    """The builder offers its own location first, the cwd second."""
-    first = _fake_workspace(tmp_path / "one")
-    second = _fake_workspace(tmp_path / "two")
-    assert workspace.find_topdir(first, second) == first
-    assert workspace.find_topdir(tmp_path / "nowhere", second) == second
-
-
-def test_a_directory_that_is_not_a_workspace_is_not_one(tmp_path) -> None:
-    assert workspace.find_topdir(tmp_path) is None
-
-
-def test_the_installed_module_dir_is_the_repository_it_says_it_is() -> None:
-    """A precondition of every local-dev build; wrong, and nothing compiles.
-
-    ``installed_module_dir()`` claims to answer "where is the MCUHome
-    Zephyr module" for a local-dev install, and this test suite runs from
-    exactly such an install — so it is the one place the claim can be
-    checked. Two markers, because the two consumers are different: the
-    west manifest is what makes workspace discovery start here, and the
-    pyshim is what goes on ``PYTHONPATH``.
-
-    The third assertion is the answer's *derivation*: the function counts
-    directory levels up from its own file, and the ADR 0020 split moved
-    that file one level deeper. A miscount lands on the namespace
-    directory, which has neither marker — but it would also pass silently
-    the day somebody moves the module again and fixes only the markers,
-    so the relationship between the two is stated as well.
-    """
-    module_dir = workspace.installed_module_dir()
-    assert (module_dir / "west.yml").is_file()
-    assert (module_dir / workspace.PYSHIM_SUBDIR / "python_path.py").is_file()
-    here = module_dir / "mcuhome" / "compiler" / "workspace.py"
-    assert Path(workspace.__file__).resolve() == here
-
-
-def test_no_workspace_is_refused_with_both_ways_out(tmp_path) -> None:
-    with pytest.raises(BuildError) as caught:
-        workspace.require_topdir(tmp_path)
-    assert caught.value.message == "MCUHome cannot compile here: this is not a west workspace."
-    assert "west init -l mcuhome" in (caught.value.hint or "")
-    assert "--generate-only" in (caught.value.hint or "")
-
-
-# --------------------------------------------------------------------------
-# How many jobs to run in parallel
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("cpu_count", "available_gib", "expected"),
-    [
-        # This development machine: 4 cores, 15 GiB.
-        (4, 15, 4),
-        # A 24-thread/24-GiB WSL machine.
-        (24, 24, 12),
-        # Plenty of RAM, few cores: the CPU count is the ceiling.
-        (2, 64, 2),
-        # Plenty of cores, little RAM: the RAM budget is the ceiling.
-        (16, 6, 3),
-        # A single core: never ask for more than one job, however much RAM
-        # the max(2, ...) floor would otherwise suggest.
-        (1, 15, 1),
-        # A RAM-starved multi-core machine still gets the floor of 2, not 0
-        # or 1: max(2, ...) always wins over a floor-dividing-to-zero RAM
-        # budget.
-        (8, 1, 2),
-    ],
-)
-def test_auto_jobs_boundary_cases(cpu_count: int, available_gib: int, expected: int) -> None:
-    assert workspace.auto_jobs(cpu_count, available_gib * _GIB) == expected
-
-
-def test_available_ram_reads_memavailable(tmp_path) -> None:
-    meminfo = tmp_path / "meminfo"
-    meminfo.write_text(
-        "MemTotal:       16384000 kB\nMemAvailable:    8192000 kB\nSwapTotal:             0 kB\n",
-        "utf-8",
-    )
-    assert workspace.available_ram_bytes(meminfo) == 8192000 * 1024
-
-
-def test_available_ram_falls_back_to_half_of_memtotal_without_memavailable(tmp_path) -> None:
-    """An old kernel's /proc/meminfo has MemTotal but not MemAvailable."""
-    meminfo = tmp_path / "meminfo"
-    meminfo.write_text("MemTotal:       16384000 kB\n", "utf-8")
-    assert workspace.available_ram_bytes(meminfo) == (16384000 * 1024) // 2
-
-
-def test_available_ram_is_zero_when_meminfo_has_neither_key(tmp_path) -> None:
-    meminfo = tmp_path / "meminfo"
-    meminfo.write_text("VmallocTotal:   34359738367 kB\n", "utf-8")
-    assert workspace.available_ram_bytes(meminfo) == 0
-
-
-def test_available_ram_is_zero_without_proc_meminfo_at_all(tmp_path) -> None:
-    """Non-Linux, or any other reason the file just is not there."""
-    assert workspace.available_ram_bytes(tmp_path / "does-not-exist") == 0
-
-
-def test_detect_jobs_wires_cpu_count_and_available_ram_together(monkeypatch) -> None:
-    monkeypatch.setattr(os, "cpu_count", lambda: 8)
-    monkeypatch.setattr(workspace, "available_ram_bytes", lambda: 12 * _GIB)
-    assert workspace.detect_jobs() == 6
-
-
-def test_detect_jobs_survives_an_unknown_cpu_count(monkeypatch) -> None:
-    """`os.cpu_count()` returns None where the count is indeterminable."""
-    monkeypatch.setattr(os, "cpu_count", lambda: None)
-    monkeypatch.setattr(workspace, "available_ram_bytes", lambda: 64 * _GIB)
-    assert workspace.detect_jobs() == 1
-
-
-def test_a_command_line_flag_beats_everything() -> None:
-    """The environment is passed in, so it has to be passed in here too.
-
-    This test used to `monkeypatch.setenv` and hand `resolve_jobs` an
-    empty environment, which stopped meaning anything once `env` became
-    a required argument: it proved "flag beats auto-detection", which the
-    next test over already covers, under a name promising more.
-    """
-    resolved = workspace.resolve_jobs(env={workspace.JOBS_VAR: "6"}, cli_jobs=3)
-    assert (resolved.value, resolved.source) == (3, "flag")
-
-
-def test_the_environment_variable_beats_auto_detection(monkeypatch) -> None:
-    monkeypatch.setattr(workspace, "detect_jobs", lambda: pytest.fail("auto-detection ran"))
-    resolved = workspace.resolve_jobs(env={workspace.JOBS_VAR: "6"})
-    assert (resolved.value, resolved.source) == (6, "env")
-
-
-def test_neither_flag_nor_environment_falls_back_to_auto_detection(monkeypatch) -> None:
-    monkeypatch.setattr(workspace, "detect_jobs", lambda: 5)
-    resolved = workspace.resolve_jobs(env={})
-    assert (resolved.value, resolved.source) == (5, "auto")
-
-
-def test_a_nonsense_environment_value_is_treated_as_unset(monkeypatch) -> None:
-    """A typo in a shell rc file falls back to auto rather than breaking every build."""
-    monkeypatch.setattr(workspace, "detect_jobs", lambda: 5)
-    resolved = workspace.resolve_jobs(env={workspace.JOBS_VAR: "not-a-number"})
-    assert (resolved.value, resolved.source) == (5, "auto")
-
-
-def test_a_zero_environment_value_is_also_treated_as_unset(monkeypatch) -> None:
-    monkeypatch.setattr(workspace, "detect_jobs", lambda: 5)
-    resolved = workspace.resolve_jobs(env={workspace.JOBS_VAR: "0"})
-    assert (resolved.value, resolved.source) == (5, "auto")
-
 
 # --------------------------------------------------------------------------
 # The environment
@@ -265,20 +87,22 @@ def test_every_missing_tool_is_named_at_once(tmp_path) -> None:
     with pytest.raises(BuildError) as caught:
         workspace.require_tools(env)
     assert caught.value.message == (
-        "MCUHome cannot compile without west, gn, zap, which are not on your PATH."
+        "This build environment has no west, gn, zap on its PATH, and MCUHome "
+        "cannot compile without them."
     )
     hint = caught.value.hint or ""
     for tool in workspace.TOOLS:
         assert tool.why in hint
         assert tool.source in hint
-    assert "--generate-only" in hint
 
 
 def test_a_single_missing_tool_reads_as_one_thing(tmp_path) -> None:
     env = {"PATH": _tool_dir(tmp_path, "west", "zap")}
     with pytest.raises(BuildError) as caught:
         workspace.require_tools(env)
-    assert caught.value.message == ("MCUHome cannot compile without gn, which is not on your PATH.")
+    assert caught.value.message == (
+        "This build environment has no gn on its PATH, and MCUHome cannot compile without it."
+    )
 
 
 def test_an_environment_without_a_path_has_no_tools(tmp_path, monkeypatch) -> None:
@@ -442,80 +266,6 @@ def test_a_device_without_snippets_gets_none() -> None:
     assert not any("SNIPPET" in item for item in command)
 
 
-def test_the_plan_puts_the_build_tree_next_to_the_application(tmp_path, monkeypatch) -> None:
-    top = _fake_workspace(tmp_path / "ws")
-    module_dir = top / "mcuhome"
-    monkeypatch.setattr(workspace, "require_tools", lambda env: None)
-    out_dir = top / "build" / "node"
-
-    plan = workspace.plan_build(
-        out_dir=out_dir,
-        app_subdir="app",
-        board="x",
-        env={},
-        module_dir=module_dir,
-        cwd=top,
-        jobs=2,
-    )
-
-    assert plan.topdir == top
-    assert plan.app_dir == out_dir / "app"
-    assert plan.build_dir == out_dir / "build"
-    assert plan.env["PYTHONPATH"] == str(module_dir / workspace.PYSHIM_SUBDIR)
-    assert plan.env[workspace.CHIP_JOBS_VAR] == "2"
-
-
-def test_zephyr_base_is_filled_in_because_west_does_not_export_it(tmp_path, monkeypatch) -> None:
-    top = _fake_workspace(tmp_path / "ws")
-    (top / "zephyr").mkdir()
-    monkeypatch.setattr(workspace, "require_tools", lambda env: None)
-
-    plan = workspace.plan_build(
-        out_dir=top / "out",
-        app_subdir="app",
-        board="x",
-        env={},
-        module_dir=top / "mcuhome",
-        cwd=top,
-        jobs=2,
-    )
-    assert plan.env["ZEPHYR_BASE"] == str(top / "zephyr")
-
-
-def test_a_zephyr_base_someone_set_on_purpose_is_left_alone(tmp_path, monkeypatch) -> None:
-    """West follows it too; disagreeing with the tool we drive helps nobody."""
-    top = _fake_workspace(tmp_path / "ws")
-    (top / "zephyr").mkdir()
-    monkeypatch.setattr(workspace, "require_tools", lambda env: None)
-
-    plan = workspace.plan_build(
-        out_dir=top / "out",
-        app_subdir="app",
-        board="x",
-        env={"ZEPHYR_BASE": "/elsewhere/zephyr"},
-        module_dir=top / "mcuhome",
-        cwd=top,
-        jobs=2,
-    )
-    assert plan.env["ZEPHYR_BASE"] == "/elsewhere/zephyr"
-
-
-def test_the_plan_refuses_before_it_decides_anything_else(tmp_path) -> None:
-    """A missing prerequisite is reported, not discovered by the compiler."""
-    top = _fake_workspace(tmp_path / "ws")
-    with pytest.raises(BuildError) as caught:
-        workspace.plan_build(
-            out_dir=tmp_path / "out",
-            app_subdir="app",
-            board="x",
-            env={"PATH": ""},
-            module_dir=top,
-            cwd=top,
-            jobs=2,
-        )
-    assert "cannot compile without" in caught.value.message
-
-
 # --------------------------------------------------------------------------
 # Running it
 # --------------------------------------------------------------------------
@@ -585,19 +335,6 @@ Memory region         Used Size  Region Size  %age Used
 """
 
 
-def test_the_memory_report_is_read_out_of_the_build_log() -> None:
-    regions = workspace.parse_memory_report(_LOG)
-    assert [region.name for region in regions] == ["FLASH", "RAM", "IDT_LIST"]
-    flash, ram, _ = regions
-    assert (flash.used, flash.total, flash.percent) == (859672, 1024 * 1024, 81.99)
-    assert (ram.used, ram.total, ram.percent) == (196296, 448 * 1024, 42.79)
-    assert flash.describe() == "FLASH 839.5 KiB of 1024.0 KiB (82.0%)"
-
-
-def test_a_log_without_a_link_reports_nothing_rather_than_failing() -> None:
-    assert workspace.parse_memory_report("ninja: no work to do.\n") == []
-
-
 def test_only_the_images_that_exist_are_reported(tmp_path) -> None:
     output = tmp_path / "zephyr"
     output.mkdir()
@@ -642,21 +379,6 @@ def test_both_images_are_reported_bootloader_first(tmp_path) -> None:
 def test_an_image_that_produced_nothing_is_simply_absent(tmp_path) -> None:
     _image(tmp_path, "app", flash=16)
     assert [image.name for image in workspace.build_images(tmp_path, app_image="app")] == ["app"]
-
-
-def test_the_merged_image_is_reported_only_when_sysbuild_wrote_one(tmp_path) -> None:
-    """Named after the board target, so it is found by pattern."""
-    assert workspace.merged_image(tmp_path) is None
-    merged = tmp_path / "merged_nrf7002dk_nrf5340_cpuapp.hex"
-    merged.write_text("", "utf-8")
-    assert workspace.merged_image(tmp_path) == merged
-
-
-def test_more_than_one_merged_image_is_reported_as_none(tmp_path) -> None:
-    """One board target per device; two means an upstream change to look at."""
-    (tmp_path / "merged_one.hex").write_text("", "utf-8")
-    (tmp_path / "merged_two.hex").write_text("", "utf-8")
-    assert workspace.merged_image(tmp_path) is None
 
 
 _SYSBUILD_LOG = """\

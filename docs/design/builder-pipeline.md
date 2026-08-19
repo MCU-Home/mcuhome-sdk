@@ -36,14 +36,14 @@
 >   is what lets a build server drive **any** conforming build
 >   container, not only ours.
 > - **§5's "the add-on container *is* the builder image plus
->   dashboard".** The Home Assistant case is the `subprocess` backend
->   profile: the build environment runs in the same filesystem as the
->   build server, but as a separate process, with the same ABI and the
->   reduced guarantees named there (contract §1.2). What is shared is
->   the filesystem, not the process — a build server orchestrates and is
->   never itself the build environment, in either profile. The dashboard
->   carries no toolchain (ADR 0017 §2) and never compiles (dashboard
->   ADR 0003 decision 2, the part of that ADR that carries forward).
+>   dashboard".** The dashboard carries no toolchain (ADR 0017 §2) and
+>   never compiles (dashboard ADR 0003 decision 2, the part of that ADR
+>   that carries forward). How an App builds without a container runtime
+>   is **open**: the build environment would have to be unpacked and the
+>   program run in it directly, which is a property of the machine that
+>   builds and never a client's to ask for. The `subprocess` backend
+>   profile this note used to name was one answer; it is gone
+>   (2026-08-19), and the contract is about containers alone.
 > - **§5's persistent volume carrying ccache plus the west workspace
 >   across runs.** The west workspace is baked into the build-container
 >   image, and the program assembles its build environment from the
@@ -64,7 +64,9 @@
 > artifact set of §7's table stays, and so does the memory report. What
 > no longer holds as written:
 >
-> - **The document is called `build-report.json`.** The build-side
+> - **The document is called `build-report.json`, and it is the only one
+>   there is** (2026-08-19: `build-manifest.json` had one writer, the
+>   host-compile mode, and both are gone). The build-side
 >   report is `build-report.json`, artifact role `report`, and it
 >   carries the `signing` block §7 describes — the `imgtool` parameters
 >   the client needs for detached signing (contract §7.2, §5.4;
@@ -229,9 +231,10 @@ set ([../../patches/](../../patches/)).
   route it through ccache (compiler-launcher wiring in the GN args).
 - Inside the Home Assistant add-on the same code path runs natively —
   the add-on container *is* the builder image plus dashboard.
-- `--method local-dev` escape hatch: developers with a local west workspace
-  (contributors to MCUHome itself) can run stage 5 on the host. CI and
-  end users always use the container.
+- ~~`--method local-dev` escape hatch~~ — superseded (2026-08-19): a
+  development change reaches a build as a *patch* in the build context,
+  so it is compiled against the declared environment. Everyone uses the
+  container.
 
 ## 6. Build service boundary — local and remote
 

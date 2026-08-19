@@ -1,42 +1,42 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Pipeline stage 5, local-dev path: compiling the generated application.
+"""Pipeline stage 5: turning the generated application into an image.
 
-Stage 4 (:mod:`mcuhome.compiler.generate`) writes a standalone Zephyr application.
-This module turns it into an image, by driving ``west build`` in the west
-workspace the builder itself lives in.
+Stage 4 (:mod:`mcuhome.compiler.generate`) writes a standalone Zephyr
+application. This module is everything it takes to compile one with
+``west``: the environment two Matter build tools need, the command,
+running it, and reading what came out of it — the artifact set and the
+memory report.
 
-**The escape hatch, not the normal path (ADR 0007).** ``mcuhome device build``
-compiles inside the versioned builder image (:mod:`mcuhome.model.buildimage`);
-``--build-mode local-dev`` selects what is below, for people who already have
-a west workspace with a toolchain in it — MCUHome's own contributors. The two
-paths meet at :func:`plan_build` and :class:`BuildPlan`: a command plus an
-environment. The container path assembles a different command in a
-different environment — using :func:`west_build_command` for the inner
-half — and reuses everything after that, :func:`run_build`,
-:func:`build_images` and :func:`parse_image_memory_report` included.
+**One caller, and it is inside a build container** (ADR 0007).
+:mod:`mcuhome.compiler.abi` composes a :class:`BuildPlan` from the
+invocation request and runs it in the frozen west workspace the image
+carries. Nothing here goes looking for a workspace or decides where one
+is: that used to be the host-side ``local-dev`` path, which is gone —
+a development change reaches a build as a *patch* in the build context,
+so the environment it is compiled against is the declared one rather
+than whatever a developer's checkout happens to be.
 
 **Two images, since ADR 0015.** Every MCUHome device boots through
 MCUboot, and vanilla Zephyr builds a bootloader only under sysbuild, so
 what this module drives is ``west build --sysbuild``: one build directory
-with one sub-directory per image, a signed application, and a bootloader
-that verifies it against the user's own key (:mod:`mcuhome.workbench.signing`).
+with one sub-directory per image, an application, and a bootloader that
+verifies it against the user's own key (:mod:`mcuhome.workbench.signing`).
 
 **Nothing here knows the device model.** The inputs are a board name, a
 snippet list and two directories; whatever produced them is somebody
-else's problem. That keeps the interesting parts — workspace discovery,
-command assembly, prerequisite checking, memory-report parsing — pure
-functions that the test suite exercises without ever running west.
+else's problem. That keeps the interesting parts — command assembly,
+prerequisite checking, memory-report parsing — pure functions that the
+test suite exercises without ever running west.
 
-**Why the builder has to set the environment at all.** Two build-time
-tools of the Matter SDK are not part of a Zephyr installation: ``gn``
-(CHIP builds its own libraries with it) and ``zap`` (it generates the
-root-node data model from the framework's ``.zap``). And CHIP v1.5.1.0's
-release tarball is missing the ``python_path`` helper its codegen scripts
-import, which ``scripts/pyshim/`` stands in for — that one the builder can
-fix on its own, by putting the shim on ``PYTHONPATH``; the other two it
-can only check for and explain. The builder image provides all three,
-which is why this checking only happens on the ``local-dev`` path.
+**Why the environment has to be set at all.** Two build-time tools of the
+Matter SDK are not part of a Zephyr installation: ``gn`` (CHIP builds its
+own libraries with it) and ``zap`` (it generates the root-node data model
+from the framework's ``.zap``). And CHIP v1.5.1.0's release tarball is
+missing the ``python_path`` helper its codegen scripts import, which
+``scripts/pyshim/`` stands in for — that one can be fixed here, by putting
+the shim on ``PYTHONPATH``; the other two can only be checked for and
+explained. The build environment provides all three.
 """
 
 from __future__ import annotations
@@ -57,40 +57,25 @@ from mcuhome.model.errors import BuildError
 __all__ = [
     "BIN_ARTIFACT",
     "BOOTLOADER_IMAGE",
-    "BUILD_SUBDIR",
     "CHIP_JOBS_VAR",
     "CMAKE_JOBS_VAR",
     "HEX_ARTIFACT",
     "IMAGE_OUTPUT_DIR",
-    "JOBS_VAR",
-    "MERGED_IMAGE_GLOB",
     "PYSHIM_SUBDIR",
     "SIGNING_KEY_OPTION",
     "TOOLS",
     "BuildPlan",
     "ImageArtifacts",
     "MemoryRegion",
-    "ResolvedJobs",
     "ToolNeed",
     "artifacts",
-    "auto_jobs",
-    "available_ram_bytes",
     "build_environment",
     "build_images",
-    "detect_jobs",
-    "find_topdir",
     "image_output",
-    "installed_module_dir",
-    "merged_image",
     "missing_tools",
     "parse_image_memory_report",
-    "parse_memory_report",
-    "plan_build",
     "pristine_mode",
-    "refuse_failed_build",
     "require_tools",
-    "require_topdir",
-    "resolve_jobs",
     "run_build",
     "west_build_command",
 ]
@@ -101,39 +86,6 @@ __all__ = [
 #: is an argument every time (:func:`plan_build`).
 PYSHIM_SUBDIR = Path("scripts") / "pyshim"
 
-
-def installed_module_dir() -> Path:
-    """The MCUHome Zephyr module directory of a source checkout.
-
-    The Zephyr module that carries the generic application main and the
-    framework ZAP the generated application refers to, derived from where
-    this package is installed:
-    ``mcuhome/mcuhome/compiler/workspace.py`` -> ``mcuhome/``. Three
-    levels, not two, since the ADR 0020 split put this module inside
-    ``mcuhome.compiler``; ``test_workspace.py`` checks the answer against
-    two markers of the real module directory, which is what makes the
-    count something a test can be wrong about rather than a comment.
-
-    **This answer is only correct for a local-dev install** — the git
-    checkout that is also the west manifest repository of a workspace.
-    Installed as an ordinary pip package, or mounted into a build
-    container as an SDK, the Python package and the Zephyr module are not
-    in that relationship, and the caller knows where the module is while
-    this function can only guess. That is why the module directory is a
-    parameter of :func:`plan_build` rather than a constant here, and why
-    this function is called (by the command line, which *is* the
-    local-dev case) rather than evaluated at import time.
-    """
-    return Path(__file__).resolve().parent.parent.parent
-
-
-#: Sub-directory of the build directory that holds the CMake/ninja tree.
-#: It is a sibling of the generated ``app/`` rather than the same
-#: directory, so the two stay tellable apart: everything outside this
-#: directory is builder output a human is meant to read
-#: (builder-pipeline.md §1.3), everything inside it is machine spoil that
-#: can be deleted at any time.
-BUILD_SUBDIR = "build"
 
 #: Sysbuild's output layout, stated once. Every image of a sysbuild build
 #: gets a directory named after the image, and Zephyr leaves that image's
@@ -156,13 +108,6 @@ def image_output(build_dir: Path, image: str) -> Path:
     """Where sysbuild leaves *image*'s artifacts inside *build_dir*."""
     return build_dir / image / IMAGE_OUTPUT_DIR
 
-
-#: Environment variable that overrides job-count auto-detection outright
-#: (see :func:`resolve_jobs`) — the escape hatch for a machine
-#: :func:`auto_jobs` still guesses wrong for, e.g. a container with a
-#: cgroup memory limit ``/proc/meminfo`` does not reflect. ``--jobs`` on
-#: the command line beats it; it beats auto-detection.
-JOBS_VAR = "MCUHOME_JOBS"
 
 #: Environment variable the vendored CHIP GN sub-build reads to cap its own
 #: inner ``ninja`` invocation (patch hunk in
@@ -189,18 +134,9 @@ CMAKE_JOBS_VAR = "CMAKE_BUILD_PARALLEL_LEVEL"
 #: of a per-user secret (ADR 0015 decision 8, :mod:`mcuhome.workbench.signing`).
 SIGNING_KEY_OPTION = "SB_CONFIG_BOOT_SIGNATURE_KEY_FILE"
 
-#: Sysbuild's combined image, at the top of the build directory: every
-#: image at its own offset in one file, which is what a full-chip flash
-#: over a debug probe wants. Sysbuild writes one per board target and
-#: names it after that target, hence a pattern rather than a name.
-MERGED_IMAGE_GLOB = "merged_*.hex"
-
 #: Written by sysbuild and by nothing else. Its presence is how a build
 #: directory says which kind of build made it (see :func:`pristine_mode`).
 _DOMAINS_FILE = "domains.yaml"
-
-#: What the west workspace top directory is recognized by.
-_WEST_MARKER = Path(".west") / "config"
 
 
 @dataclass(frozen=True)
@@ -262,170 +198,6 @@ TOOLS: tuple[ToolNeed, ...] = (
 
 
 # --------------------------------------------------------------------------
-# Finding the workspace
-# --------------------------------------------------------------------------
-
-
-def find_topdir(*starts: Path) -> Path | None:
-    """First west workspace top directory at or above any of *starts*.
-
-    The order of *starts* is the order of preference. The caller offers
-    the builder's own location first: a west workspace containing this
-    package is by construction one that also contains the MCUHome Zephyr
-    module the generated application consumes, which the working directory
-    is not guaranteed to be.
-    """
-    for start in starts:
-        current = start.resolve()
-        if current.is_file():
-            current = current.parent
-        for candidate in [current, *current.parents]:
-            if (candidate / _WEST_MARKER).is_file():
-                return candidate
-    return None
-
-
-def require_topdir(*starts: Path) -> Path:
-    """:func:`find_topdir`, or a plain-language refusal."""
-    topdir = find_topdir(*starts)
-    if topdir is not None:
-        return topdir
-    raise BuildError(
-        "MCUHome cannot compile here: this is not a west workspace.",
-        hint=(
-            "compiling needs Zephyr and the Matter SDK, which live in a west "
-            "workspace next to the MCUHome sources. Either create one\n"
-            "    mkdir mcuhome-workspace && cd mcuhome-workspace\n"
-            "    git clone https://github.com/mcu-home/mcuhome-sdk\n"
-            "    west init -l mcuhome-sdk && west update\n"
-            "or stop after code generation and build the application yourself:\n"
-            "    mcuhome device build <device> --generate-only"
-        ),
-    )
-
-
-# --------------------------------------------------------------------------
-# How many jobs to run in parallel
-# --------------------------------------------------------------------------
-
-#: Bytes in a gibibyte, for the RAM half of :func:`auto_jobs`.
-_GIB = 1024**3
-
-#: Where Linux publishes live memory figures. A parameter on
-#: :func:`available_ram_bytes` rather than a hardcoded path only inside
-#: it, so the test suite can point it at a fixture file instead of
-#: monkeypatching the standard library.
-_MEMINFO_PATH = Path("/proc/meminfo")
-
-
-def available_ram_bytes(path: Path | None = None) -> int:
-    """Best-effort available RAM right now, without a psutil dependency.
-
-    Reads ``MemAvailable`` from ``/proc/meminfo`` — Linux (kernel >= 3.14)
-    already discounts reclaimable page cache from it, which is closer to
-    "usable before swapping starts" than ``MemFree``. Where that key is
-    missing — an old kernel, or *path* pointing nowhere, which is every
-    non-Linux platform — this falls back to half of ``MemTotal``, a rough
-    "assume something else already claimed half of it" heuristic that
-    needs no new dependency. Where neither key is readable at all, this
-    assumes nothing is available, which drives :func:`auto_jobs` to its
-    floor of 2 rather than guessing high on a machine it cannot see.
-    """
-    meminfo = _MEMINFO_PATH if path is None else path
-    try:
-        text = meminfo.read_text("utf-8")
-    except OSError:
-        text = ""
-    values: dict[str, int] = {}
-    for line in text.splitlines():
-        name, _, rest = line.partition(":")
-        if name not in ("MemAvailable", "MemTotal"):
-            continue
-        fields = rest.strip().split()
-        if fields and fields[0].isdigit():
-            values[name] = int(fields[0])  # kB, per proc(5)
-    if "MemAvailable" in values:
-        return values["MemAvailable"] * 1024
-    if "MemTotal" in values:
-        return (values["MemTotal"] * 1024) // 2
-    return 0
-
-
-def auto_jobs(cpu_count: int, available_ram_bytes: int) -> int:
-    """Parallelism this hardware can sustain without swapping.
-
-    ``min(cpu_count, max(2, available_ram_gb // 2))``. Measured CHIP C++
-    compiles peak around 1-1.5 GiB per job; the final link spikes higher,
-    but only one link runs at a time (ninja serializes it), so it does not
-    change the per-job budget. Budgeting 2 GiB per job keeps a no-swap
-    machine safe with headroom, and ``cpu_count`` remains the hard ceiling
-    underneath that — more jobs than cores never builds faster. This
-    development machine (4 cores / 15 GiB) resolves to 4; a 24-thread /
-    24 GiB WSL machine resolves to 12. The floor of 2 matches the
-    previous static default, so even a RAM-starved machine can still
-    overlap one compile with the next.
-
-    :param cpu_count: usually ``os.cpu_count()``.
-    :param available_ram_bytes: usually :func:`available_ram_bytes`.
-    """
-    ram_gb = available_ram_bytes // _GIB
-    return min(cpu_count, max(2, ram_gb // 2))
-
-
-def detect_jobs() -> int:
-    """:func:`auto_jobs`, fed this machine's live CPU count and free RAM."""
-    return auto_jobs(os.cpu_count() or 1, available_ram_bytes())
-
-
-@dataclass(frozen=True)
-class ResolvedJobs:
-    """A job count together with why it was chosen — for the build summary."""
-
-    value: int
-    #: ``"flag"`` (``--jobs``), ``"env"`` (:data:`JOBS_VAR`), or ``"auto"``
-    #: (:func:`detect_jobs`).
-    source: str
-
-
-def resolve_jobs(*, env: dict[str, str], cli_jobs: int | None = None) -> ResolvedJobs:
-    """The parallelism this build uses, and why — the single resolution point.
-
-    Precedence, most specific wins: ``--jobs`` on the command line, then
-    :data:`JOBS_VAR` in the environment, then :func:`detect_jobs`. This
-    runs once, on the host, before a container build even starts docker —
-    the container would see the host's CPU count either way, but its RAM
-    budget is the host's (or the WSL VM's), not a figure guessed at from
-    inside a container that may itself be memory-limited by a cgroup.
-    Everything downstream then takes the resulting number as given rather
-    than resolving it again: the outer ``-o=-jN`` (:func:`west_build_command`),
-    :data:`CHIP_JOBS_VAR` for the inner CHIP GN sub-build
-    (:func:`build_environment`), and the container path
-    (:mod:`mcuhome.model.buildimage`), which receives it as a plain ``jobs``
-    argument like the local-dev path does.
-
-    A :data:`JOBS_VAR` that is not a positive whole number is treated as
-    unset rather than refused: a typo in a shell rc file should not be
-    able to break every build until someone finds it, and auto-detection
-    is always a reasonable answer.
-
-    *env* is stated, never read from the process: one process serves
-    several sessions, and "the environment" of a server is the operator's
-    rather than any requesting user's. The command line passes its own.
-    """
-    if cli_jobs is not None:
-        return ResolvedJobs(cli_jobs, "flag")
-    raw = env.get(JOBS_VAR)
-    if raw:
-        try:
-            parsed = int(raw)
-        except ValueError:
-            parsed = 0
-        if parsed >= 1:
-            return ResolvedJobs(parsed, "env")
-    return ResolvedJobs(detect_jobs(), "auto")
-
-
-# --------------------------------------------------------------------------
 # Environment and prerequisites
 # --------------------------------------------------------------------------
 
@@ -442,14 +214,13 @@ def build_environment(
     """*env* plus what the Matter build needs, without mutating the input.
 
     *env* is stated rather than read from the process, for the reason
-    :func:`resolve_jobs` gives.
+    :func:`mcuhome.model.jobs.resolve_jobs` gives.
 
-    **This is the one definition of a Matter build environment**, and all
-    three callers reach it: :func:`plan_build` for ``local-dev``,
-    the workbench's orchestrator for the ``docker
-    run``, and :class:`mcuhome.compiler.abi` for the build-container contract's
+    **This is the one definition of a Matter build environment**, and both
+    callers reach it: the workbench's orchestrator for the ``docker run``,
+    and :class:`mcuhome.compiler.abi` for the build-container contract's
     ``build`` action. Each adds what only it knows — a ccache location,
-    the contract's ``TMPDIR`` — and none of them restates what is here. A
+    the contract's ``TMPDIR`` — and neither restates what is here. A
     second copy is how one of them silently lost ``HOME``.
 
     ``ZEPHYR_BASE`` is filled in only when it is not already set: west
@@ -457,8 +228,7 @@ def build_environment(
     silently disagrees with the tool it drives is worse than one that
     leaves the choice alone. Whether the directory is really there is the
     *caller's* question, because only the caller knows what it is looking
-    at — :func:`plan_build` probes a host workspace it was pointed at, an
-    image states the workspace it baked.
+    at — a build environment states the workspace it baked.
 
     ``TMPDIR`` and ``HOME`` are set unconditionally when given, and both
     override an inherited value on purpose. The contract's ``tmp`` is per
@@ -501,20 +271,18 @@ def missing_tools(env: dict[str, str]) -> list[ToolNeed]:
 def _refuse_missing(tools: list[ToolNeed]) -> BuildError:
     names = ", ".join(tool.name for tool in tools)
     noun = "tool" if len(tools) == 1 else "tools"
-    lines = [f"install the {noun}, then run the same command again:"]
+    lines = [f"the {noun} the build needs, and where each comes from:"]
     for tool in tools:
         lines.append(f"    {tool.name} — {tool.why}")
         lines.append(f"      from: {tool.source}")
     lines.append(
-        "None of this is needed with --generate-only, and none of it is needed "
-        "in the MCUHome builder container — which is what the default builder "
-        "compiles in, and what mcuhome device build does when no builder or "
-        "--build-mode is named."
+        "A build environment that MCUHome compiles in carries all of them; one "
+        "that does not cannot build Matter firmware, whatever else it can do."
     )
+    pronoun = "it" if len(tools) == 1 else "them"
     return BuildError(
-        f"MCUHome cannot compile without {names}, which is not on your PATH."
-        if len(tools) == 1
-        else f"MCUHome cannot compile without {names}, which are not on your PATH.",
+        f"This build environment has no {names} on its PATH, and MCUHome "
+        f"cannot compile without {pronoun}.",
         hint="\n".join(lines),
     )
 
@@ -635,11 +403,10 @@ def west_build_command(
 class BuildPlan:
     """Everything stage 5 needs, decided before anything is executed.
 
-    Shared by both paths: *command* is a ``west build`` invocation on the
-    local-dev path and a ``docker run`` wrapped around one in the container,
-    and everything downstream treats it the same way. *image* is the one
-    thing that differs enough to be worth naming — ``None`` means the
-    build runs on this machine's own toolchain.
+    *command* is the ``west build`` invocation, and *image* names the
+    build environment it runs in when the plan was composed for one —
+    ``None`` means the toolchain of the machine this runs on, which is
+    what the program inside a build container sees.
     """
 
     topdir: Path
@@ -648,70 +415,6 @@ class BuildPlan:
     command: list[str]
     env: dict[str, str]
     image: str | None = None
-
-
-def plan_build(
-    *,
-    out_dir: Path,
-    app_subdir: str,
-    board: str,
-    snippets: tuple[str, ...] = (),
-    bootloader_snippets: tuple[str, ...] = (),
-    signing_key: Path | None = None,
-    detached_signing: bool = False,
-    env: dict[str, str],
-    module_dir: Path,
-    cwd: Path,
-    jobs: int,
-) -> BuildPlan:
-    """Resolve workspace, environment and command, or refuse with a reason.
-
-    Executes nothing. Every refusal a user can hit before the compiler
-    starts is raised here, which is also what makes stage 5 testable
-    without a toolchain.
-
-    *module_dir* is where the MCUHome Zephyr module is — the first place
-    the west workspace is looked for, and the source of the pyshim on
-    ``PYTHONPATH``. It is required because only the caller knows: see
-    :func:`installed_module_dir`. *cwd* is the second place to look, and
-    is required for the same reason the configuration tree's is
-    (:func:`mcuhome.workbench.tree.open_tree`).
-    """
-    topdir = require_topdir(module_dir, cwd)
-    # ``west build`` does not export ZEPHYR_BASE (it resolves Zephyr through
-    # the manifest and the CMake package registry), yet CMake code outside
-    # Zephyr's own — the generated application's search for the Matter SDK,
-    # among others — reasonably expects it. build_environment fills it in
-    # and states the "never overwrite" rule; whether the directory is
-    # really there is this caller's question, because a host workspace is
-    # something this function was pointed at rather than something it made.
-    zephyr = topdir / "zephyr"
-    prepared = build_environment(
-        env,
-        jobs=jobs,
-        pyshim_dir=module_dir / PYSHIM_SUBDIR,
-        zephyr_base=zephyr if zephyr.is_dir() else None,
-    )
-    require_tools(prepared)
-    app_dir = out_dir / app_subdir
-    build_dir = out_dir / BUILD_SUBDIR
-    return BuildPlan(
-        topdir=topdir,
-        app_dir=app_dir,
-        build_dir=build_dir,
-        command=west_build_command(
-            app_dir=app_dir,
-            build_dir=build_dir,
-            board=board,
-            snippets=snippets,
-            bootloader_snippets=bootloader_snippets,
-            signing_key=signing_key,
-            detached_signing=detached_signing,
-            jobs=jobs,
-            pristine=pristine_mode(build_dir),
-        ),
-        env=prepared,
-    )
 
 
 # --------------------------------------------------------------------------
@@ -751,19 +454,6 @@ def run_build(plan: BuildPlan, *, stream: TextIO | None = None) -> tuple[int, st
         stream.write(line)
         stream.flush()
     return process.wait(), "".join(captured)
-
-
-def refuse_failed_build(code: int, *, build_dir: Path) -> BuildError:
-    """The error for a compiler that stopped, pointing at the log."""
-    return BuildError(
-        f"The firmware did not compile (west build exited with {code}).",
-        hint=(
-            "the build log above says what went wrong; the full CMake output "
-            f"is in {build_dir}, one sub-directory per image. If the failure is "
-            "in generated code rather than in your configuration, that is a "
-            "builder bug worth reporting."
-        ),
-    )
 
 
 # --------------------------------------------------------------------------
@@ -846,17 +536,6 @@ def build_images(build_dir: Path, *, app_image: str) -> list[ImageArtifacts]:
     return found
 
 
-def merged_image(build_dir: Path) -> Path | None:
-    """Sysbuild's every-image-in-one-file hex, when it wrote one.
-
-    One per board target, and MCUHome builds one board target per device,
-    so more than one match means something changed upstream — reported as
-    none rather than as an arbitrary pick.
-    """
-    merged = sorted(build_dir.glob(MERGED_IMAGE_GLOB))
-    return merged[0] if len(merged) == 1 else None
-
-
 @dataclass(frozen=True)
 class MemoryRegion:
     """One line of Zephyr's ``Memory region`` table."""
@@ -882,31 +561,6 @@ _REGION = re.compile(
     r"(?P<total>\d+)\s*(?P<total_unit>[KMG]?B)\s+"
     r"(?P<percent>[\d.]+)%"
 )
-
-
-def parse_memory_report(log: str) -> list[MemoryRegion]:
-    """The footprint table Zephyr prints at the end of a link.
-
-    Read out of the build log rather than recomputed: it is the number the
-    linker script actually enforced, and tracking it per build is what
-    builder-pipeline.md §1 asks for. A log without the table (an
-    incremental build that relinked nothing) yields an empty list, which is
-    not an error — it is simply nothing to report.
-    """
-    regions: list[MemoryRegion] = []
-    for line in log.splitlines():
-        match = _REGION.match(line)
-        if match is None:
-            continue
-        regions.append(
-            MemoryRegion(
-                name=match["name"],
-                used=int(match["used"]) * _UNITS[match["used_unit"]],
-                total=int(match["total"]) * _UNITS[match["total_unit"]],
-                percent=float(match["percent"]),
-            )
-        )
-    return regions
 
 
 #: ``[1/2] Performing build step for 'mcuboot'`` — what the outer ninja

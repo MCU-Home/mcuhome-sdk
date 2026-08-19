@@ -1,25 +1,20 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Describing a finished build: ``build-manifest.json``, measured.
+"""The imgtool parameters a finished build has to be signed with.
 
-The other half of :mod:`mcuhome.model.manifest`. That module is the format —
-what the document looks like, how it round-trips, what a signer may edit
-in one. This one *produces* one, and everything it needs to do so is a
-property of the machine that compiled: a build directory to walk, the
-artifact lists stage 5 collected (:mod:`mcuhome.compiler.workspace`), and the
-board layout the builder itself rendered into the overlay.
+Three of the four ``imgtool sign`` arguments come from the registry —
+ADR 0015 decision 2 makes the partition table per-board data, and the
+generator is what wrote it into the overlay — and the fourth from the
+application image's own Kconfig, because imgtool's ``--version`` is the
+one parameter the generator does not itself decide.
 
-That is the whole reason for the cut (ADR 0020): a dashboard reads
-manifests and must never carry a toolchain, and the build server shares
-the vocabulary without the build logic. Both get the format; only the
-compiler gets this.
+That is a *contract* rather than a report: the host signs afterwards
+(ADR 0015 decision 8) and it must sign against the offsets the image was
+actually linked with, so the header offset is cross-checked here and a
+mismatch is a refusal instead of firmware that builds and does not boot.
 
-**The signing block is a contract, not a report.** Three of its four
-``imgtool sign`` arguments come from the registry — ADR 0015 decision 2
-makes the partition table per-board data, and the builder is what wrote
-it into the overlay — and the fourth from the application image's own
-Kconfig, because imgtool's ``--version`` is the one parameter the builder
-does not itself decide.
+:mod:`mcuhome.compiler.abi` puts what comes out of here into the §7.2.1
+build report, which is the one description of a finished build there is.
 """
 
 from __future__ import annotations
@@ -27,30 +22,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from mcuhome.compiler import workspace
-from mcuhome.model import __version__, ota, registry
+from mcuhome.model import registry
 from mcuhome.model.errors import BuildError
-from mcuhome.model.manifest import (
-    MANIFEST_FILE,
-    BuildManifest,
-    FileEntry,
-    ImageEntry,
-    SigningBlock,
-    SigningParameters,
-    ota_entry,
-    ota_parameters,
-)
-from mcuhome.model.model import DeviceModel
+from mcuhome.model.signing import SigningParameters
 
 __all__ = [
     "HEADER_SIZE_SYMBOL",
     "KCONFIG_FILE",
     "SIGN_VERSION_DEFAULT",
     "SIGN_VERSION_SYMBOL",
-    "build_manifest",
     "kconfig_path",
     "read_kconfig",
     "signing_parameters",
-    "write_manifest",
 ]
 
 #: Kconfig symbol carrying imgtool's ``--version`` on the application
@@ -142,97 +125,3 @@ def signing_parameters(
         slot_size=scheme.imgtool_slot.size,
         version=values.get(SIGN_VERSION_SYMBOL) or SIGN_VERSION_DEFAULT,
     )
-
-
-def _signing_block(
-    *,
-    out_dir: Path,
-    build_dir: Path,
-    app_image: str,
-    scheme: registry.UpdateSchemeDef,
-    signed_by_the_build: bool,
-) -> SigningBlock:
-    output = workspace.image_output(build_dir, app_image)
-    relative = (output.resolve().relative_to(out_dir.resolve())).as_posix()
-    return SigningBlock(
-        image=app_image,
-        signed_by_the_build=signed_by_the_build,
-        signature_type=registry.SIGNATURE_TYPE,
-        parameters=signing_parameters(
-            scheme, kconfig=read_kconfig(kconfig_path(build_dir, app_image))
-        ),
-        inputs={
-            "bin": f"{relative}/{workspace.BIN_ARTIFACT}",
-            "hex": f"{relative}/{workspace.HEX_ARTIFACT}",
-        },
-        outputs={
-            "bin": f"{relative}/zephyr.signed.bin",
-            "hex": f"{relative}/zephyr.signed.hex",
-        },
-    )
-
-
-def build_manifest(
-    model: DeviceModel,
-    *,
-    out_dir: Path,
-    build_dir: Path,
-    app_image: str,
-    images: list[workspace.ImageArtifacts],
-    snippets: tuple[str, ...] = (),
-    bootloader_snippets: tuple[str, ...] = (),
-    jobs: int,
-    signed_by_the_build: bool,
-    merged: Path | None = None,
-    ota_image: ota.OtaImage | None = None,
-) -> BuildManifest:
-    """Describe what came out of stage 5, hashing every file it names."""
-    board = registry.BOARDS.get(model.device.board)
-    scheme = None if board is None else board.update_scheme
-    return BuildManifest(
-        device=model.device.name,
-        friendly_name=model.device.friendly_name,
-        board=model.device.board,
-        version=model.device.version,
-        model_version=model.model_version,
-        builder_version=__version__,
-        snippets=tuple(snippets),
-        bootloader_snippets=tuple(bootloader_snippets),
-        jobs=jobs,
-        images=tuple(
-            ImageEntry(
-                name=image.name,
-                role=image.role,
-                flash_bytes=image.flash_bytes,
-                files=tuple(FileEntry.measure(path, out_dir=out_dir) for path in image.files),
-            )
-            for image in images
-        ),
-        signing=(
-            None
-            if scheme is None
-            else _signing_block(
-                out_dir=out_dir,
-                build_dir=build_dir,
-                app_image=app_image,
-                scheme=scheme,
-                signed_by_the_build=signed_by_the_build,
-            )
-        ),
-        merged=None if merged is None else FileEntry.measure(merged, out_dir=out_dir),
-        ota=(ota_parameters(model) if ota_image is None else ota_entry(ota_image, out_dir=out_dir)),
-    )
-
-
-def write_manifest(manifest: BuildManifest, *, out_dir: Path) -> Path:
-    """Write the manifest into the build directory and return its path."""
-    path = out_dir / MANIFEST_FILE
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(manifest.to_json(), encoding="utf-8")
-    except OSError as error:
-        raise BuildError(
-            f"The build manifest {path} cannot be written: {error.strerror}.",
-            hint="pick a writable location with --build-dir",
-        ) from error
-    return path

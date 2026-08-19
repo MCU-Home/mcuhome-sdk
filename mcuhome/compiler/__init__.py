@@ -4,9 +4,9 @@
 
 Code generation, west orchestration, artifact collection and the build
 report — plus the adapter that turns a build container's invocation into
-a ``local-dev`` build of this same code (ADR 0020 decision 7). It is an
-adapter and only an adapter: it implements no build step of its own, so
-it cannot drift from the build a developer runs on their own machine.
+a build of this same code. It is an adapter and only an adapter: it
+implements no build step of its own, so what an invocation runs and what
+the modules below do cannot drift apart.
 
 Where it runs is what defines it. This package **ships inside the SDK
 package** and executes in the build container out of the mounted SDK,
@@ -18,7 +18,7 @@ only ever drives builds through a container never installs it at all.
 =====================================  ======================================
 :mod:`mcuhome.compiler.generate`       stage 4: the per-device build tree
 :mod:`mcuhome.compiler.workspace`      stage 5: compile in a west workspace
-:mod:`mcuhome.compiler.report`         stage 5: measure the build directory
+:mod:`mcuhome.compiler.report`         stage 5: what to sign the result with
 :mod:`mcuhome.compiler.abi`            the invocation ABI of the build container
 :mod:`mcuhome.compiler.sdkentry`       the SDK package's ``generate`` entry point
 =====================================  ======================================

@@ -47,8 +47,8 @@
 #
 # CHIP's build requirements also list `python-path`. It is deliberately
 # absent: scripts/pyshim/ stands in for it and goes first on PYTHONPATH
-# (upstream candidate C1), and the container must not quietly behave
-# differently from a local-dev build there.
+# (upstream candidate C1), and a container that quietly used a different
+# shim would be a build environment nobody could reproduce.
 #
 # Deliberately NOT here: pyocd, opencv-python, numpy, spdx-tools
 # (Zephyr's requirements-run-test.txt) — hardware runners and reporting

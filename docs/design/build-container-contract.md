@@ -12,7 +12,7 @@
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are to be
 interpreted as described in RFC 2119.
 
-## 1. Terms and backend profiles
+## 1. Terms, and what a backend guarantees
 
 ### 1.1 Terms
 
@@ -20,17 +20,13 @@ interpreted as described in RFC 2119.
   (toolchain, Zephyr, and any other source trees it builds against)
   plus **the program** (§2.2).
 - **The program**: the executable a backend invokes to do one unit of
-  work. In the container profile it lives at the fixed absolute path
-  `/mcuhome/run` (§2.2).
+  work. It lives at the fixed absolute path `/mcuhome/run` (§2.2).
 - **Backend**: the software driving the build. It owns everything
   outside the program: paths, trees, views, network isolation, resource
-  limits, artifact egress. In the `container` profile there is **one**
-  implementation of it — `mcuhome.workbench`'s orchestrator — and a
-  build server is a caller of it rather than a second one: what a build
-  server adds is a protocol in front, not a way of driving a container.
-  The `subprocess` profile is still a build server's own (§1.2).
-- **Backend profile**: which of the two shapes of §1.2 serves a
-  session. Declared in the `open-session` response (ADR 0019 §2).
+  limits, artifact egress. There is **one** implementation of it —
+  `mcuhome.workbench`'s orchestrator — and a build server is a caller of
+  it rather than a second one: what a build server adds is a protocol in
+  front, not a way of driving a container.
 - **Session**: the lifetime of one build environment. One session is
   bound to one build context; invocations within a session share state.
 - **Build context** ("the context"): the self-contained input directory
@@ -57,63 +53,33 @@ interpreted as described in RFC 2119.
   the whole third-party namespace: a layer name is a field name, and the
   grammar of §5.2 admits no dots.
 
-### 1.2 The two backend profiles
+### 1.2 What a backend guarantees
 
-| Profile | What it is | Guarantees |
-|---|---|---|
-| `container` | The backend materializes one container per session and invokes the program inside it. | Every isolation guarantee of ADR 0019 §8 applies: one session = one container instance = the trust boundary, no network, per-session resource limits and disk quota. |
-| `subprocess` | The build environment runs **in the same filesystem as the build server**, but as a **separate process** (the Home Assistant App case): the backend runs the program as a subprocess in its own filesystem namespace instead of via `docker exec`. | Reduced, and named here so nobody assumes otherwise: **no network isolation, no per-session resource limits, no container trust boundary.** Cancellability and process-level isolation remain (the program is a separate process), and a third party may still implement the program in any language. |
+The backend materializes one container per session and invokes the
+program inside it. Every isolation guarantee of ADR 0019 §8 applies: one
+session = one container instance = the trust boundary, no network,
+per-session resource limits and disk quota.
 
-The second profile is **on its way out of this document**, and saying so
-here is more use than leaving a reader to wonder why a contract about
-containers describes something that is not one. A subprocess build
-environment is a way of *executing* a build rather than a shape of
-container, and it belongs with the other executions the builder knows
-about. It is described here for as long as it is served this way; when
-it moves, §1.2 goes with it and this contract is about containers
-alone.
+**A backend is never itself the build environment.** It materializes
+paths, enforces what it can enforce, invokes the program and reads its
+result; what it drives is a container, and the container is somebody
+else's program.
 
-What is shared in the `subprocess` profile is the **filesystem**, not
-the process. A build server is never itself the build environment in
-either profile: something materializes paths, enforces what it can
-enforce, invokes the program and reads its result, and in the
-`container` profile that something is the workbench's orchestrator with
-the build server calling it. The
-difference between the profiles is only how much of the environment the
-kernel keeps apart — a container namespace in one case, a process
-boundary inside one shared filesystem in the other.
+The program is invoked as a **process** and never loaded as a library.
+That is on purpose and outlives any particular way of starting one: a
+build running inside the caller's process cannot be cancelled without
+killing the caller, an out-of-memory kill or a segfault takes the queue
+with it, and only a separate process is honest about the interface — a
+third party may implement the program in any language.
 
-The ABI is identical in both profiles: same invocation (§5.1), same
-request document, same result document, same exit codes. The second
-profile is a subprocess and not a library call on purpose: a build
-running inside the server process cannot be cancelled without killing
-the server, an out-of-memory kill or a segfault takes the queue with
-it, and only a separate process is honest about the interface — the
-build server's own code stated all three (build-server repo,
-`mcuhome_buildserver/builder.py:5-28`, read at `8b8ceb4`; the file has
-since been removed with the job protocol). The argument outlived the
-file: it is the reason this profile is a subprocess rather than the
-in-process embedding it superficially resembles.
-
-Because the filesystem is shared, nothing in this profile may depend on
-a fixed path: several concurrent sessions live side by side in one
-namespace and cannot all have the same context, work or output
-directory. That is the reason contract v1 defines no mount points at
-all (§4).
-
-A `subprocess`-profile backend serves **exactly one build environment —
-the one it runs in**. It MUST reject, typed, any session whose context
-requires a Zephyr line that build environment does not carry.
-
-Everything else in this document applies to both profiles unless a
-paragraph says otherwise.
+**Nothing here may depend on a fixed path.** Several sessions live side
+by side, and they cannot all have the same context, work or output
+directory. That is why this contract defines no mount points at all
+(§4): where a session's directories land is a backend convention, and a
+backend that keeps them at one path per session does so because *its*
+isolation makes that safe — never because this document said so.
 
 ## 2. Build-container image requirements
-
-These requirements apply to the `container` profile. In the
-`subprocess` profile there is no image; the backend knows its own
-program's path and its own identity, and answers the same questions
-from `describe` (§7.1).
 
 ### 2.1 Labels
 
@@ -294,10 +260,6 @@ between invocations, is not part of this contract.
 Apart from the labels of §2.1, `/mcuhome/run` and a POSIX shell at
 `/bin/sh`, this contract makes no demand on the image's contents.
 
-In the `subprocess` profile the backend invokes its own program by a
-path it configures. The argv shape, the request document, the result
-document and the exit codes are identical; only the path is the
-backend's business.
 
 #### 2.2.1 `/mcuhome/describe.json` — the optional static self-description
 
@@ -341,9 +303,6 @@ is undiscoverable before the mount point is known, and the mount point is
 what discovery would have supplied. That circle is what the static file
 cuts, and it cuts it without weakening §7.1: the image answers a question
 about itself with the answer its own program computed.
-
-The file has no meaning in the `subprocess` profile, where there is no
-image to carry it and `describe` is the only discovery channel there is.
 
 ## 3. The build context
 
@@ -652,15 +611,17 @@ not conforming: `context`, `out`, `work`, `tmp`, `ccache`, `result`,
 `events` and `cancel` are the backend's to place, and MCUHome's
 conformance suite deliberately moves every one of them.
 
-The reason is the `subprocess` profile: several concurrent sessions
-live in one filesystem namespace and cannot all have `/ctx`. Fixed
-paths are also wrong in the `container` profile, for the smaller reason
-that a fixed path is a promise about a filesystem the contract does not
-own.
+The reason is that a fixed path in *this document* would be a promise
+about a filesystem the contract does not own. A backend is free to place
+a session's directories at paths of its own choosing and to keep those
+paths stable across sessions — and MCUHome's does, because a compiler
+cache keyed on absolute paths is worthless otherwise — but that is a
+backend convention, stated by the request document each time, and a
+program that assumed it would be reading a promise nobody made.
 
-Both MCUHome backends of the `container` profile nevertheless choose the
-same paths for every session, and state them in the request document
-like any others (`mcuhome/model/containerpaths.py`). That is the
+MCUHome's backend nevertheless chooses the same paths for every session,
+and states them in the request document like any others
+(`mcuhome/model/containerpaths.py`). That is the
 convention this paragraph permits and not an exception to it: the
 program reads them where it reads every other path, and the conformance
 suite moves them as it moves everything else. §10.1 says why they are
@@ -704,11 +665,10 @@ What the backend provides per invocation:
 | `ccache` | optional | shared compiler cache (§10) |
 | `result`, `events`, `cancel` | RW files | protocol channels (§5.2, §8) |
 
-`work` exists because "the container's own filesystem is the working
-area" is true only in the `container` profile. In the `subprocess`
-profile there is no container, and an unnamed working area resolves to
-a path collision in which two sessions destroy each other's CMake tree
-— silently, because a tree overwritten mid-build produces a confusing
+`work` is named rather than left to "the container's own filesystem",
+because an unnamed working area is one every session resolves to the
+same way — and two sessions in one tree destroy each other's CMake
+state silently, since a tree overwritten mid-build produces a confusing
 compiler error rather than an obvious one.
 
 ### 4.1 Trees
@@ -727,8 +687,8 @@ compiler error rather than an obvious one.
 - `writable` is **asserted by the backend, never probed by the
   program.** A program cannot reliably distinguish a read-only bind
   mount from a permission problem or a full disk by trying to write,
-  and in the `subprocess` profile a tree may be writable to the
-  filesystem and forbidden by policy at the same time.
+  and a tree may be writable to the filesystem and forbidden by policy
+  at the same time.
 
 This resolves an internal contradiction of contract v1 as first
 drafted, where §4 mounted `/sdk` read-only while §6 required a writable
@@ -776,7 +736,7 @@ link at the start, and it is resolved in one jump.
 | # | Step | Why it closes |
 |---|---|---|
 | 1 | The backend creates a **backend-owned per-invocation directory** and writes the request document into it atomically. | It is not inside the context, so `context` can be a kernel-enforced read-only mount. It also removes the data race the fixed path `/ctx/.mcuhome/command.json` had, where two concurrent `docker exec` invocations overwrote each other's document. |
-| 2 | The backend invokes `/mcuhome/run <action> <request-path>` — via `docker exec` in the `container` profile, as a subprocess in the `subprocess` profile. | One ABI, two profiles. |
+| 2 | The backend invokes `/mcuhome/run <action> <request-path>` — via `docker exec`. | One ABI, whatever starts it. |
 | 3 | The program reads argv: exactly two operands, the second of them an absolute path. | Otherwise exit 66. |
 | 4 | The program opens and parses the request document. | This is the **only** program-caused error that cannot produce a result document — and precisely the case in which the program does not know where a result would go. |
 | 5 | The program reads `request` and `result` from the immortal preamble (§5.2). | From here on **every** error is a result document, including "I do not implement this request format version" — because the preamble guarantees `result` is a top-level string path in every future request format version. |
@@ -905,14 +865,12 @@ more field for a third party to get right for nothing.
 `limits.jobs` is **authoritative** and mandatory for working actions.
 It is not a hint: MCUHome's own implementation needs three separate
 channels to get a job count into a build because none of them inherits
-(`mcuhome/compiler/workspace.py:165`, `:175`, `:185`) and resolves the number
+(`mcuhome/compiler/workspace.py`) and resolves the number
 host-side on purpose, because the container sees the host CPU count but
-not the RAM budget (`mcuhome/compiler/workspace.py:359-394`, `:598`). In the
-`subprocess` profile the program runs directly on a shared host, so
-`nproc` reports the whole machine, and several concurrent sessions at
-`nproc` jobs each is an out-of-memory kill. An optional field would be worthless here: a
-foreign program would fall back to `nproc`, which is exactly the case
-the field exists against.
+not the RAM budget (`mcuhome/model/jobs.py`). An optional field would be
+worthless here: a foreign program would fall back to `nproc`, which
+reports the whole machine and is exactly the case the field exists
+against.
 
 `limits.memory_bytes` and `limits.deadline_seconds` are advisory —
 enforcement is the backend's (§9.1). `deadline_seconds` is relative to
@@ -1381,9 +1339,9 @@ writable source tree. The contract guarantees the **behavior**, never
 the mechanism:
 
 - The **backend** MUST provide a *writable view* of each patched layer
-  and MUST name it in `trees` with `writable: true` (§4.1). **In the
-  `container` profile the container's own copy-on-write layer is that
-  view, and it costs nothing to provide**: the image's trees are
+  and MUST name it in `trees` with `writable: true` (§4.1). **A
+  container's own copy-on-write layer is that view, and it costs nothing
+  to provide**: the image's trees are
   writable inside the container by construction, one session is one
   container (ADR 0019 §2), and the container is discarded at
   `close-session` — so a patched `zephyr` never outlives the session
@@ -1391,13 +1349,12 @@ the mechanism:
   The backend asserts `writable: true` for an in-image tree at the path
   `describe` reported, and the assertion is truthful because the layer
   makes it so. No overlay is mounted and no copy is made.
-- The `subprocess` profile has no container layer, so there the view is
-  the backend's to construct — a copy-on-write overlay on the host
-  (lowerdir = the pristine read-only source), or a copy as the
-  conforming fallback. An overlay, where used, MUST be constructed
-  outside any process that executes untrusted patch code: such a
-  process MUST NOT hold the mount privileges (CAP_SYS_ADMIN) that
-  overlay mounting requires. And because this profile's build
+- A backend without a per-session copy-on-write layer has the view to
+  construct itself — an overlay (lowerdir = the pristine read-only
+  source), or a copy as the conforming fallback. An overlay, where used,
+  MUST be constructed outside any process that executes untrusted patch
+  code: such a process MUST NOT hold the mount privileges
+  (CAP_SYS_ADMIN) that overlay mounting requires. And where the build
   environment is persistent rather than discarded, patches mutate it
   durably — which is why patch support there is opt-in, actively
   configured, at the operator's own risk (ADR 0019).
@@ -1551,10 +1508,10 @@ exactly that rule and never a replacement for this action: it exists for
 the image whose program body arrives with a mounted tree, and it is
 therefore read *before* a mount point is chosen and checked here
 afterwards.
-It is also the only discovery channel that exists in the `subprocess`
-profile, where there is no image and therefore no labels — and the only
-way a backend learns where a foreign image keeps its trees, without
-which §6.2's writable views cannot be arranged at all. It doubles as
+It is also the only way a backend learns where a foreign image keeps its
+trees, without which §6.2's writable views cannot be arranged at all,
+and the only discovery channel there is wherever an environment carries
+no image labels. It doubles as
 the first conformance test: a program that cannot answer `describe`
 cannot be trusted with a build.
 
@@ -1590,8 +1547,8 @@ and MUST NOT be used as discovery data; the backend asks `describe`.
   constraint of §2.1.1, all of which are declarations rather than
   inferences.
 - **`contract`** — the contract version this program implements, as an
-  integer. This document specifies version 1. In the `container` profile
-  it MUST equal the `org.mcuhome.build-environment.contract` label;
+  integer. This document specifies version 1. It MUST equal the
+  `org.mcuhome.build-environment.contract` label;
   where the two disagree, `describe` is authoritative and the disagreement is a
   contract violation against the image (§2.1). A backend that does not
   implement the value it finds here MUST NOT invoke a working action on
@@ -1696,7 +1653,7 @@ typed — `status: "failure"`, `reason: "error.context.incomplete"`, the
 missing path in `error.details` — and the program MUST NOT build
 anyway. There is no fallback to MCUboot's
 default key, because that default is MCUboot's demo key
-(`mcuhome/compiler/workspace.py:572-575`) and **its private half is published**:
+(`mcuhome/compiler/workspace.py`) and **its private half is published**:
 the key MCUboot's Kconfig names as the default,
 `root-ec-p256.pem` (`bootloader/mcuboot/boot/zephyr/Kconfig:471`), is a
 PEM private key checked into the MCUboot repository. Firmware built
@@ -1750,7 +1707,7 @@ the only party holding the private key.
   which MCUboot compares monotonically; `header-size` and `slot-size` are
   byte counts; `align` is the write block size. These are exactly the
   four the reference implementation carries and the four its signer
-  passes (`mcuhome/model/manifest.py:208-230`, `mcuhome/workbench/imgtool.py:155-162`),
+  passes (`mcuhome/model/signing.py`, `mcuhome/workbench/imgtool.py:155-162`),
   and three of them are board data the build already had to know
   (ADR 0015 decision 2) while `version` comes from the built
   application's own Kconfig (`mcuhome/compiler/report.py:100-135`).
@@ -1769,8 +1726,7 @@ the only party holding the private key.
   with exactly the fields of the `build.memory.region` event (§8):
   `image`, `region`, `used`, `total`, `percent`. It is the footprint
   table the linker actually enforced, parsed rather than recomputed
-  (`mcuhome/compiler/workspace.py:881-889`, parser at `:890-903`, image
-  attribution at `:913-952`). A build that relinked nothing reports none,
+  (`mcuhome/compiler/workspace.py`). A build that relinked nothing reports none,
   which is correct rather than incomplete.
 
 **The report format is versioned by `report` and is deliberately not
@@ -1782,7 +1738,7 @@ asked for is gone: the container digest and the effective context ID are
 values the backend computed itself and MUST use its own copy of anyway
 (§9.3); warnings are log text (§8); ccache statistics had no named
 reader; and the reference implementation's `signed`, `signed_by_the_build`,
-`inputs` and `outputs` (`mcuhome/model/manifest.py:273-288`) are all decided
+`inputs` and `outputs` (`mcuhome/model/signing.py`) are all decided
 elsewhere — a build container never signs (§9.2 point 6), the input is
 the `firmware` artifact, and where the signed output goes is the
 signer's business, on the signer's machine.
@@ -1900,13 +1856,13 @@ report. `build.image.started` is the only marker a sysbuild log actually
 contains that says whose output follows: the outer build prints
 `Performing build step for '<image>'`, and the reference implementation
 matches exactly that to attribute everything after it
-(`mcuhome/compiler/workspace.py:906-910`). `build.memory.region` is one row of
+(`mcuhome/compiler/workspace.py`). `build.memory.region` is one row of
 Zephyr's footprint table, which is parsed rather than recomputed because
 it is the number the linker script actually enforced
-(`mcuhome/compiler/workspace.py:854-889`), and it carries `image` because the
+(`mcuhome/compiler/workspace.py`), and it carries `image` because the
 table itself names no image and is attributed by the banner above it
 (`:913-952`). `artifact.collected` follows the collection step that
-walks each image's output directory (`mcuhome/compiler/workspace.py:762-806`).
+walks each image's output directory (`mcuhome/compiler/workspace.py`).
 `context.checked`, `patch.layer.applied` and the two `invocation.*`
 events are the contract's own phases — §3.3, §6.2 and §5.1 step 10.
 
@@ -1931,7 +1887,7 @@ a process that starts west, cmake, ninja, gn and zap — all of which
 write to stdout. A Go implementer writing the idiomatic `cmd.Stdout =
 os.Stdout` corrupts the event stream and never notices locally;
 MCUHome's own reference implementation already merges the two streams
-(`mcuhome/compiler/workspace.py:730-731`), which is the same observation from
+(`mcuhome/compiler/workspace.py`), which is the same observation from
 the other side. A named file removes the failure mode structurally,
 survives an out-of-memory kill readably, and gives a reconnecting
 client the resume-from-offset that ADR 0019 §2 requires anyway.
@@ -1943,32 +1899,25 @@ stop within `limits.cancel_grace_seconds`, and write a result with
 program stays possible; SIGTERM/SIGKILL remains the backend's hard
 path. A cooperative sentinel is used rather than a signal because
 killing a `docker exec` client does not kill the process inside the
-container, and because the same mechanism works unchanged in the
-`subprocess` profile.
+container, and because the same mechanism works unchanged wherever a
+program is started without one.
 
 ## 9. Execution environment: guarantees and prohibitions
 
 ### 9.1 What the backend MUST enforce, and the program MAY rely on
 
-These are duties of the **backend**, in both profiles. A backend
-orchestrates a build; it is never itself the build environment. In the
-`container` profile the environment is a container it starts; in the
-`subprocess` profile it is a separate process running in the same
-filesystem as the build server (§1.2). Neither shape moves a duty from
-this list onto the program.
+These are duties of the **backend**. A backend orchestrates a build; it
+is never itself the build environment (§1.2). Nothing here is ever moved
+onto the program.
 
-Two of the duties below are nevertheless enforceable only in the
-`container` profile, and §1.2 says so from the other side: a
-`subprocess`-profile backend has **no network isolation and no
-per-session resource limits**. Everything a shared filesystem still
-allows — materializing the context safely, verifying the SDK,
+Two of them — no network during an invocation, and the per-session
+resource limits — are enforceable because the environment is a container
+the backend started. Everything else on the list holds without a kernel
+namespace: materializing the context safely, verifying the SDK,
 cross-checking the pins, keeping one invocation at a time per `work`,
-hardening egress (§9.3) — is unchanged, because none of it depends on a
-kernel namespace. The prohibitions on the program are unaffected too —
-they are obligations, not observations — but a program MUST NOT infer
-from a successful network call or an unenforced limit that it was
-permitted either. Everything else in this section applies to both
-profiles.
+hardening egress (§9.3). The prohibitions on the program are obligations
+rather than observations, and a program MUST NOT infer from a successful
+network call or an unenforced limit that it was permitted either.
 
 - **No network during an invocation.** The program MUST NOT require
   network access at any point; everything a build needs is in a tree,
@@ -2024,7 +1973,7 @@ Before every invocation the backend creates the per-invocation
 directory, an empty `out`, an empty `tmp`, the session's `work`, the
 `events` file if it offers one, and writes the request document
 atomically; it write-protects `context` and every non-`writable` tree
-with the strongest means its profile has.
+with the strongest means it has.
 
 ### 9.2 What the program MUST NOT do
 
@@ -2100,8 +2049,8 @@ store.
 
 Nothing above obliges a backend to *use* the `ccache` field. A build
 environment that configures ccache itself needs no field at all, and the
-backend then steers the cache the same way it steers everything else in
-the `container` profile: by what it mounts. MCUHome's own image does
+backend then steers the cache the same way it steers everything else:
+by what it mounts. MCUHome's own image does
 exactly this — `/etc/ccache.conf` names a writable cache directory and a
 read-only secondary store, at two fixed paths in the image — and no
 MCUHome backend sends `ccache`:
@@ -2133,7 +2082,7 @@ takes effect once `hash_dir` is off, and an object then served from the
 cache carries the *first* build's directory in its debug information —
 the output of a build would depend on whether the cache was warm.
 Mounting every session at the same paths costs nothing and needs neither
-setting; it is what MCUHome's two `container`-profile backends do
+setting; it is what MCUHome's backend does
 (`mcuhome/model/containerpaths.py`), and §4 sanctions it as the backend
 convention it is.
 

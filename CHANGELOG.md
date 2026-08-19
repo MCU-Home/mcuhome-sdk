@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The host-compile path (`--build-mode local-dev`) is gone**, and with
+  it `mcuhome/compiler/devbuild.py` and everything in
+  `mcuhome/compiler/workspace.py` that only it used: finding a west
+  workspace, planning a build against one, the merged-image lookup. What
+  is left is what the program inside a build container runs. A
+  development change reaches a build as a **patch in the build context**
+  instead, which has the property the escape hatch never had: it is
+  compiled against the declared environment rather than against whatever
+  a developer's checkout happens to be.
+- **`mcuhome/model/manifest.py` and `build-manifest.json` with it.** That
+  document had exactly one writer — the host-compile path — and one
+  reader that was not the §7.2.1 build report. A build states its imgtool
+  parameters in `build-report.json`, and that is now the only shape a
+  signer reads. What survived the format moved to where it belongs:
+  `SigningParameters` to `mcuhome/model/signing.py`, and the OTA identity
+  of a device (`ota_parameters`, `OtaIdentity`) to `mcuhome/model/ota.py`.
+- **The second backend profile leaves the build-container contract.**
+  §1.2 described two shapes and one of them was not a container;
+  `subprocess` was an *execution* rather than a container profile, and it
+  is not served that way any more. The contract is about containers
+  alone — one backend, one set of guarantees — and every paragraph that
+  qualified itself with "in the `container` profile" now simply states
+  the rule.
+
+### Changed
+
+- **Job resolution moved out of the compiler**, to
+  `mcuhome/model/jobs.py`: `resolve_jobs`, `detect_jobs`, `auto_jobs`,
+  `available_ram_bytes` and `MCUHOME_JOBS`. The number is resolved once,
+  on the host, and handed down — and the host must not need a toolchain
+  distribution to learn it.
+- `scripts/check_build_artifacts.py` checks one build shape, the
+  container delivery. The manifest half went with the manifest.
+
 ### Changed
 
 - **A build context pins the build environment, and the pin is part of

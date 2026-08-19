@@ -19,8 +19,8 @@ until a build somewhere else fails:
   and nothing else is.
 
 The third test is the loop rather than a property: a real archive, put in
-a directory, acquired and unpacked by the **build server's own**
-``sdkstore.acquire_sdk``, and then read by the program's own
+a directory, acquired and unpacked by the **orchestrator's own**
+``acquire_sdk``, and then read by the program's own
 ``abi.sdk_entry_point``. That is every step between "CI wrote a file" and
 "the container reaches code generation", with nothing simulated in
 between, and it is the only place where the two repositories' assumptions
@@ -331,50 +331,40 @@ def test_an_unreadable_index_is_a_refusal_and_never_an_overwrite(module_script, 
 
 
 # --------------------------------------------------------------------------
-# The loop: CI's archive, the build server's unpack, the program's reader
+# The loop: CI's archive, the orchestrator's unpack, the program's reader
 # --------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
-def unpacked_by_the_build_server(package, tmp_path_factory):
+def unpacked_by_the_consumer(package, tmp_path_factory):
     """``acquire_sdk`` against a directory holding exactly this archive.
 
-    The build server is the only implemented consumer, and it implements
-    the first tier of ADR 0019's search order only: "one or more local
+    The orchestrator is the one implemented consumer — a local build and
+    a build server reach it through the same call — and it implements the
+    first tier of ADR 0019's search order: "one or more local
     directories, searched in the order the operator listed them". So the
-    whole arrangement is a directory — which is also, by that amendment,
-    "the whole first implementation" of the index.
+    whole arrangement is a directory, which is also "the whole first
+    implementation" of the index.
 
-    Skipped rather than faked where the build server is not installed:
-    this repository does not depend on it, and a hand-written stand-in
-    for the extractor would assert this suite's idea of the unpack rule
-    instead of the server's.
+    Skipped rather than faked where the workbench is not installed: this
+    repository does not depend on it, and a hand-written stand-in for the
+    extractor would assert this suite's idea of the unpack rule instead
+    of the consumer's.
     """
-    sdkstore = pytest.importorskip(
-        "mcuhome_buildserver.sdkstore",
-        reason="the build server is not installed in this environment",
+    orchestrator = pytest.importorskip(
+        "mcuhome.workbench.orchestrator",
+        reason="the workbench is not installed in this environment",
     )
-    from mcuhome_buildserver.ingress import IngressCaps
-
-    caps = IngressCaps(
-        compressed_bytes=64 * 1024 * 1024,
-        decompressed_bytes=256 * 1024 * 1024,
-        entries=4096,
-        file_bytes=64 * 1024 * 1024,
-        path_depth=16,
-    )
-    return sdkstore.acquire_sdk(
+    return orchestrator.acquire_sdk(
         version=package.version,
         sha256=package.sha256,
         sources=(package.path.parent,),
         into=tmp_path_factory.mktemp("session") / "sdk",
-        caps=caps,
-        max_bytes=256 * 1024 * 1024,
     )
 
 
-def test_the_build_server_finds_verifies_and_unpacks_this_archive(
-    package, unpacked_by_the_build_server
+def test_the_consumer_finds_verifies_and_unpacks_this_archive(
+    package, unpacked_by_the_consumer
 ) -> None:
     """Name, hash and extraction rule, end to end and in process.
 
@@ -383,13 +373,13 @@ def test_the_build_server_finds_verifies_and_unpacks_this_archive(
     decompressor does not read, and a member shape the extractor refuses.
     All three are answered by the same call the backend makes.
     """
-    assert unpacked_by_the_build_server.version == package.version
-    assert unpacked_by_the_build_server.sha256 == package.sha256
-    assert unpacked_by_the_build_server.source == package.path
-    assert (unpacked_by_the_build_server.tree / "mcuhome-sdk.json").is_file()
+    assert unpacked_by_the_consumer.version == package.version
+    assert unpacked_by_the_consumer.sha256 == package.sha256
+    assert unpacked_by_the_consumer.source == package.path
+    assert (unpacked_by_the_consumer.tree / "mcuhome-sdk.json").is_file()
 
 
-def test_the_unpacked_tree_is_an_sdk_the_program_can_read(unpacked_by_the_build_server) -> None:
+def test_the_unpacked_tree_is_an_sdk_the_program_can_read(unpacked_by_the_consumer) -> None:
     """§6.1's own reader, on the tree the server produced.
 
     ``sdk_entry_point`` is what a build calls before it generates
@@ -399,7 +389,7 @@ def test_the_unpacked_tree_is_an_sdk_the_program_can_read(unpacked_by_the_build_
     an absolute or escaping ``generate.program``, so passing it means the
     archive's §6.1 interface survived the round trip.
     """
-    tree = unpacked_by_the_build_server.tree
+    tree = unpacked_by_the_consumer.tree
     entry, runtime = sdk_entry_point(tree)
     assert entry == tree / "bin" / "generate"
     assert entry.is_file()
@@ -409,7 +399,7 @@ def test_the_unpacked_tree_is_an_sdk_the_program_can_read(unpacked_by_the_build_
         sdk_entry_point(tree / "app")
 
 
-def test_the_entry_point_is_still_executable_after_the_unpack(unpacked_by_the_build_server) -> None:
+def test_the_entry_point_is_still_executable_after_the_unpack(unpacked_by_the_consumer) -> None:
     """The one archive property an unpack can destroy, and the contract requires.
 
     §6.1 makes ``generate.program`` a child process, and
@@ -421,5 +411,5 @@ def test_the_entry_point_is_still_executable_after_the_unpack(unpacked_by_the_bu
     0600, so ``bin/generate`` arrived unexecutable and ``_run_child``
     answered 127). Cross-repo: a regression on either side goes red here.
     """
-    entry, _runtime = sdk_entry_point(unpacked_by_the_build_server.tree)
+    entry, _runtime = sdk_entry_point(unpacked_by_the_consumer.tree)
     assert entry.stat().st_mode & 0o111, "generate.program is spawned, not imported (§6.1)"
