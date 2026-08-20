@@ -9,8 +9,8 @@ produces Zephyr firmware. Design records:
 ```sh
 # from the repository root: this repo's two packages, editable, plus pytest
 pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0'
-pip install -e ../mcuhome        # the workbench (own repo, github.com/mcu-home/mcuhome)
-pip install -e ../cli            # the `mcuhome` command (own repo, github.com/mcu-home/cli)
+pip install -e ../mcuhome-workbench        # the workbench (own repo, github.com/mcu-home/mcuhome-workbench)
+pip install -e ../mcuhome-cli            # the `mcuhome` command (own repo, github.com/mcu-home/mcuhome-cli)
 mcuhome device matter-pairing --new <device>    # draw this device's commissioning credentials
 mcuhome device validate <device>        # stages 1-3, prints the resolved device
 mcuhome device build <device> --generate-only   # + stage 4, writes the application
@@ -30,12 +30,12 @@ them is *where the code has to run*, not what it is about:
 | Import package | Distribution | What it is | Where it runs |
 |---|---|---|---|
 | `mcuhome.model` | `mcuhome-model` | the shared vocabulary — device model, registry, the context and manifest formats, the frozen context-ID rule, error types. No build machinery, no third-party dependency | everywhere, including a build server that carries no build logic at all |
-| `mcuhome.workbench` | `mcuhome-workbench` | stages 1-3, context creation, the three build methods, the session client, signing — **in [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome)**, not here | wherever a build is *driven*: the command line, the dashboard, third-party embedders |
+| `mcuhome.workbench` | `mcuhome-workbench` | stages 1-3, context creation, the three build methods, the session client, signing — **in [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench)**, not here | wherever a build is *driven*: the command line, the dashboard, third-party embedders |
 | `mcuhome.compiler` | `mcuhome-compiler` | stages 4-5 and the invocation-ABI adapter | inside the build container, out of the mounted SDK |
 
 `mcuhome.workbench.api` is the supported programmatic surface. The
 `mcuhome` command itself is a thin shell in its own repository
-([mcu-home/cli](https://github.com/mcu-home/cli)) — it parses arguments
+([mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli)) — it parses arguments
 and calls in here.
 
 The project files are in [`../packaging/`](../packaging/), not here: the
@@ -49,7 +49,7 @@ independently in its own repository (ADR 0024).
 
 Stages 1-3 (tree discovery, loading, validation, resolution) are the
 workbench's modules — see
-[mcu-home/mcuhome](https://github.com/mcu-home/mcuhome).
+[mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench).
 
 | Module | Stage | Role |
 |---|---|---|

@@ -52,13 +52,13 @@ second — they are the fast half of the strategy in
 ## The one suite with extra requirements
 
 `test_sessionclient.py` tests the client of ADR 0019's session protocol
-against the real `mcuhome-build-server` over a real socket — one client
+against the real `mcuhome-buildserver` over a real socket — one client
 and one server tested against each other rather than each against a mock
 of the other. That needs two things the installs above do not bring:
 
 ```sh
 pip install -e './packaging/workbench[remote]'   # aiohttp + zstandard
-pip install -e ../build-server                   # the peer, cloned beside this repo
+pip install -e ../mcuhome-buildserver                   # the peer, cloned beside this repo
 ```
 
 Without them the file skips itself with **one** reason naming exactly
@@ -69,7 +69,7 @@ a stated gap, not a silent one.
 
 The command-surface tests (exit codes, summary output, `-o json`
 documents) live with the command: `tests/test_cli.py` in the
-[mcu-home/cli](https://github.com/mcu-home/cli) repository, which is
+[mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli) repository, which is
 where the `mcuhome` command itself moved.
 
 The one test that runs an external program is the detached-signing
@@ -85,7 +85,7 @@ private key on first need and a suite that reached the real one would
 either read a secret or create one outside a temporary directory.
 
 **No build ever runs here, and neither does docker.** `test_workspace.py`
-and `test_container.py` (plus the `build` tests in the cli repository)
+and `test_container.py` (plus the `build` tests in the mcuhome-cli repository)
 cover everything stage 5 decides *before* the compiler starts and mock
 the subprocess itself — `container.preflight()` takes its process
 runner as an argument for exactly that reason, and an autouse fixture in

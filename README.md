@@ -37,7 +37,7 @@ in flash and RAM. Compiling happens in the versioned builder image
 ([ADR 0007](docs/adr/0007-containerized-toolchain.md)), so the host needs
 nothing but git and docker.
 The companion web interface lives in
-[mcu-home/dashboard](https://github.com/mcu-home/dashboard).
+[mcu-home/mcuhome-ui](https://github.com/mcu-home/mcuhome-ui).
 
 ## Repository layout
 
@@ -48,8 +48,8 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 |---|---|
 | `west.yml` | West manifest pinning Zephyr and modules |
 | `zephyr/module.yml` | Zephyr module definition (boards, DTS, snippets roots) |
-| `mcuhome/` | Python source tree: a PEP 420 namespace with one subpackage per distribution published from this repo (ADR 0020) — `model/` (shared vocabulary), `compiler/` (codegen, west orchestration). The namespace's third subpackage, `workbench/` (config pipeline, build methods, signing — `mcuhome.workbench.api` is its supported surface), lives in its own repository, [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome) (the `mcuhome` command itself is [mcu-home/cli](https://github.com/mcu-home/cli)) |
-| `packaging/` | The project file of each distribution built from this repo: `mcuhome-model`, `mcuhome-compiler` — one version, one tag, one release (`mcuhome-workbench` is published from [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome)) |
+| `mcuhome/` | Python source tree: a PEP 420 namespace with one subpackage per distribution published from this repo (ADR 0020) — `model/` (shared vocabulary), `compiler/` (codegen, west orchestration). The namespace's third subpackage, `workbench/` (config pipeline, build methods, signing — `mcuhome.workbench.api` is its supported surface), lives in its own repository, [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench) (the `mcuhome` command itself is [mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli)) |
+| `packaging/` | The project file of each distribution built from this repo: `mcuhome-model`, `mcuhome-compiler` — one version, one tag, one release (`mcuhome-workbench` is published from [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench)) |
 | `components/` | MCUHome components (Python schema + C sources side by side) |
 | `app/` | The generic application main every generated device shares |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree Zephyr hardware support |
@@ -85,19 +85,19 @@ docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11
 
 Then build a device from its YAML description. The `mcuhome` command is
 a thin shell in its own repository
-([mcu-home/cli](https://github.com/mcu-home/cli)), and the build methods
+([mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli)), and the build methods
 and signing live in the workbench, in its own repository too
-([mcu-home/mcuhome](https://github.com/mcu-home/mcuhome)); until the
+([mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench)); until the
 packages are published they are installed from checkouts next to this
 one:
 
 ```sh
 pip install -e mcuhome-sdk/packaging/model \
             -e mcuhome-sdk/packaging/compiler   # the two SDK-side Python packages
-git clone https://github.com/mcu-home/mcuhome
+git clone https://github.com/mcu-home/mcuhome-workbench
 pip install -e mcuhome                    # the workbench (build methods, signing)
-git clone https://github.com/mcu-home/cli
-pip install -e cli                # the `mcuhome` command
+git clone https://github.com/mcu-home/mcuhome-cli
+pip install -e mcuhome-cli                # the `mcuhome` command
 mcuhome device build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node
 ```
@@ -177,7 +177,7 @@ mcuhome schema registry             # boards, drivers, clusters, device types
 `mcuhome.workbench.api` is the supported programmatic surface for
 driving a build from Python — it lives in the workbench, which is
 published from its own repository: see
-[mcu-home/mcuhome](https://github.com/mcu-home/mcuhome). The two
+[mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench). The two
 packages this repo publishes, `mcuhome.model` and `mcuhome.compiler`,
 are building blocks the workbench consumes; using them directly is an
 implementation detail and may change between releases.
@@ -205,8 +205,8 @@ stay clean of GPL code — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 Questions and ideas go to
-[GitHub Discussions](https://github.com/mcu-home/mcuhome/discussions);
-bug reports to the [issue tracker](https://github.com/mcu-home/mcuhome/issues).
+[GitHub Discussions](https://github.com/mcu-home/mcuhome-workbench/discussions);
+bug reports to the [issue tracker](https://github.com/mcu-home/mcuhome-workbench/issues).
 
 ## License
 

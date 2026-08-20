@@ -369,7 +369,7 @@ is its own later design; the artifacts above are designed so both work.
 ## 8. CLI surface (v0.1)
 
 The command vocabulary, its flags and the `--json`/exit-code contract
-are the CLI's own decisions, recorded in the cli repository since
+are the CLI's own decisions, recorded in the mcuhome-cli repository since
 2026-08-14 (vocabulary: cli ADR 0003; output/exit-code contract: cli
 ADR 0004; configuration and builder selection are platform decisions,
 ADR 0022/0023). The enumeration this section used to carry had drifted —

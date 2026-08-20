@@ -21,7 +21,7 @@ This repository follows the example-application pattern:
 
 - **T2 manifest repo:** `west.yml` pins Zephyr (v4.4.0) and imports only
   the modules we use via `import: name-allowlist:`. Firmware developers run
-  `west init -m https://github.com/mcu-home/mcuhome`.
+  `west init -m https://github.com/mcu-home/mcuhome-workbench`.
 - **Zephyr module:** `zephyr/module.yml` registers `board_root`,
   `dts_root` and `snippet_root`, so advanced users can instead add MCUHome
   to their own manifest as a module.

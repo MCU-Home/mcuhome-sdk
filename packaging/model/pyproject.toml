@@ -28,7 +28,7 @@ re-derive: the device model, the registry, the build-context and
 build-manifest formats including the frozen context-ID rule, the error
 types. No build machinery and no I/O beyond reading a file to hash it.
 
-Part of the MCUHome firmware framework — https://github.com/mcu-home/mcuhome
+Part of the MCUHome firmware framework — https://github.com/mcu-home/mcuhome-workbench
 """, content-type = "text/markdown" }
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -46,9 +46,9 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/mcu-home/mcuhome"
-Issues = "https://github.com/mcu-home/mcuhome/issues"
-Changelog = "https://github.com/mcu-home/mcuhome/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/mcu-home/mcuhome-workbench"
+Issues = "https://github.com/mcu-home/mcuhome-workbench/issues"
+Changelog = "https://github.com/mcu-home/mcuhome-workbench/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 packages = ["mcuhome.model"]

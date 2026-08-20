@@ -9,7 +9,7 @@
 # 1 split what one repository published into three distributions. Since
 # the ADR 0024 repo split this repository publishes two of them —
 # `packaging/{model,compiler}/pyproject.toml`; `mcuhome-workbench` is
-# published from its own repository, github.com/mcu-home/mcuhome.
+# published from its own repository, github.com/mcu-home/mcuhome-workbench.
 #
 # What is deliberately NOT here is a fourth, aggregate distribution. It
 # could not do the job it would exist for: a `[project]` table can depend
@@ -45,7 +45,7 @@ next_steps = [
   "git push && git push origin {tag}",
   "",
   "Then, once the Release workflow has attached the package:",
-  "  github.com/mcu-home/packages.mcuhome.org -> Actions",
+  "  github.com/mcu-home/mcuhome-packagetool -> Actions",
   "  -> \"Publish a package\" -> Run workflow",
   "     source = sdk, tag = {tag}",
 ]

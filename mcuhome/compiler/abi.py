@@ -209,7 +209,7 @@ requires "at least two" artifacts and makes only ``firmware`` and
 bring a fresh device up, and it is in §5.4's role registry. The combined
 hex is not declared and never reaches ``out`` at all: on a build that
 never signs it is the *unsigned* application under a name that looks
-flashable, which is the hazard ``cli/mcuhome_cli/cli.py`` deletes it for.
+flashable, which is the hazard ``cli/mcuhome/cli/main.py`` deletes it for.
 Nothing in ``out`` is undeclared, so there is nothing to delete.
 
 *``build.image.started`` and cancellation are not implemented.* §8 makes

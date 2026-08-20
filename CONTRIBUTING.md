@@ -3,7 +3,7 @@
 Thank you for considering a contribution! MCUHome is in its design phase, so
 the most valuable contributions right now are discussion and review of the
 [architecture decision records](docs/adr/) and participation in
-[GitHub Discussions](https://github.com/mcu-home/mcuhome/discussions).
+[GitHub Discussions](https://github.com/mcu-home/mcuhome-workbench/discussions).
 
 ## Development environment
 
@@ -22,7 +22,7 @@ matching the Zephyr release pinned in [west.yml](west.yml).
 
 For the Python builder package — this repo's two SDK-side packages; the
 workbench (build methods, signing) is developed in its own repository,
-[mcu-home/mcuhome](https://github.com/mcu-home/mcuhome):
+[mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench):
 
 ```sh
 cd mcuhome-sdk
@@ -79,11 +79,11 @@ building it directly is refused with a message saying so.
   living documents; the final ADR is written from the real result once
   the component is done ([docs/adr/README.md](docs/adr/README.md)).
   Project-wide decisions (spanning this repo and the tools repo) live in
-  [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome) instead.
+  [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench) instead.
 
 ## Reporting issues
 
-Use the [issue forms](https://github.com/mcu-home/mcuhome/issues/new/choose).
+Use the [issue forms](https://github.com/mcu-home/mcuhome-workbench/issues/new/choose).
 Security vulnerabilities go through [SECURITY.md](SECURITY.md), never public
 issues.
 

@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
-(0.x during incubation; see [ADR 0005](https://github.com/mcu-home/mcuhome/blob/main/docs/adr/draft/0005-semver-and-conventional-commits.md)).
+(0.x during incubation; see [ADR 0005](https://github.com/mcu-home/mcuhome-workbench/blob/main/docs/adr/draft/0005-semver-and-conventional-commits.md)).
 
 ## [Unreleased]
 
@@ -729,7 +729,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-S debug-rtt` by hand. An explicit `-S debug-rtt` stays valid and
   collapses into the built-in one.
 - The `mcuhome` command line moved to its own repository,
-  [mcu-home/cli](https://github.com/mcu-home/cli), as the thin shell of
+  [mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli), as the thin shell of
   the repo family (mcuhome = SDK + builder library, cli = command
   shell). This package no longer installs a console script; programs
   keep embedding `mcuhome.api`, and the command surface itself is
