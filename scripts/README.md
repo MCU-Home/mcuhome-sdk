@@ -13,4 +13,3 @@ Current content:
 | `check_build_artifacts.py` | Asserts that a finished build left the flashable files behind and a well-formed §7.2.1 `build-report.json` beside them. The gate behind CI's Matter build job |
 | `check_debug_output.py` | Lint against silently reduced diagnostics in config fragments ("Debug output is load-bearing"); a reduction passes only with a `# debug-output: approved <reason>` marker. Runs in CI |
 | `pyshim/` | Stand-in for CHIP's `python_path` helper missing from the v1.5.1.0 release tarball (upstream candidate C1) — see `pyshim/README.md` for the `PYTHONPATH` requirement |
-

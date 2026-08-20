@@ -28,8 +28,6 @@ workbench (build methods, signing) is developed in its own repository,
 cd mcuhome-sdk
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ./packaging/model -e ./packaging/compiler
-pre-commit install --install-hooks
-pre-commit install --hook-type commit-msg
 ```
 
 ## Building and testing
