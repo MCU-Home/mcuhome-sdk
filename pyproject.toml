@@ -17,7 +17,7 @@
 # tree, so `pip install -e '.[dev]'` would install three *published*
 # distributions over the editable ones and quietly undo the setup it
 # was asked for. The two paths are named explicitly instead — one pip
-# invocation, and every word of it true (AGENTS.md, "Commands"):
+# invocation, and every word of it true ("Commands"):
 #
 #     pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0' zstandard
 #
@@ -39,7 +39,7 @@ branch = "main"
 gates = [
   "{python} -m ruff check .",
   "{python} -m ruff format --check .",
-  "{python} -m pytest -q tests_py",
+  "{python} -m pytest -q tests/python",
 ]
 next_steps = [
   "git push && git push origin {tag}",
@@ -52,7 +52,7 @@ next_steps = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 # Design documents are prose; the Python sketches inside them illustrate
 # an idea and are not source. `ruff format` reformats fenced code blocks
 # in Markdown, which would silently rewrite approved design records.
@@ -61,12 +61,12 @@ extend-exclude = ["docs/"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
-# Python tests live in tests_py/, not in tests/: tests/ holds Zephyr
+# Python tests live in tests/python/, not in tests/: tests/ holds Zephyr
 # twister suites (testcase.yaml per directory) and twister recurses into
 # whatever it is pointed at. Two runners, two roots, no overlap — see
-# tests_py/README.md.
+# tests/python/README.md.
 [tool.pytest.ini_options]
-testpaths = ["tests_py"]
+testpaths = ["tests/python"]
 
 # Domain vocabulary codespell would "correct" into errors: OTA Requestor
 # is the Matter specification's own cluster name, PASE/OT are protocol

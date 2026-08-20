@@ -4,7 +4,7 @@
 
 Two kinds of golden file live here, for one reason each:
 
-* ``tests_py/data/golden/`` holds the overlay, the Kconfig fragment and
+* ``tests/python/data/golden/`` holds the overlay, the Kconfig fragment and
   the application ``CMakeLists.txt``. They exist so a change in generator
   output shows up as a reviewable diff instead of as a silent behavior
   change on someone's device.
@@ -185,7 +185,7 @@ def test_the_sample_is_this_generators_output(name: str) -> None:
     artifact = f"{APP_DIR}/src/{name}"
     committed = (SAMPLE_SRC / name).read_text(encoding="utf-8")
     assert _example_files()[artifact] == committed, (
-        f"samples/matter-node/src/{name} is stale — regenerate it, see tests_py/README.md"
+        f"samples/matter-node/src/{name} is stale — regenerate it, see tests/python/README.md"
     )
 
 
@@ -559,7 +559,7 @@ def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> N
     assert not any(line.startswith("CONFIG_CHIP_PROJECT_CONFIG") for line in model.build.kconfig)
     _assert_stack_logs(fragment, thread=True, matter=True)
     # The snippets the app has to be built with, the board's included and
-    # the always-on RTT log transport in front (AGENTS.md, debug output).
+    # the always-on RTT log transport in front (debug output).
     assert "debug-rtt, matter, boot-mode" in fragment
 
 

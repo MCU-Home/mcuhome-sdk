@@ -56,7 +56,7 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 | `snippets/` | Connectivity/device-class variants (wifi, thread-sed, …) |
 | `include/mcuhome/`, `lib/` | Public runtime API and portable libraries |
 | `samples/`, `tests/` | Twister-driven samples and test suites |
-| `tests_py/` | pytest suite of this repo's two Python packages |
+| `tests/python/` | pytest suite of this repo's two Python packages |
 | `containers/build-container/` | The build-container image — the contract's reference implementation (ADR 0007) |
 | `scripts/` | Development tooling and future custom west extension commands |
 | `docs/adr/` | Architecture decision records |

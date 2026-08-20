@@ -12,7 +12,7 @@ that, which is exactly the constraint this package is built under
 ("dependency-free by construction", ADR 0020) and exactly the
 constraint ``mcuhome.workbench`` is not: its supported surface parses
 YAML, so importing it pulls a third-party parser onto a path that only
-ever reads JSON. ``tests_py/test_container_closure.py`` pins the
+ever reads JSON. ``tests/python/test_container_closure.py`` pins the
 consequence — the entry point's import closure stays stdlib plus
 ``mcuhome``.
 

@@ -33,7 +33,7 @@ from mcuhome.model.hashes import sha256_file
 from mcuhome.model.model import DeviceModel
 
 TESTS_DIR = Path(__file__).resolve().parent
-REPO_ROOT = TESTS_DIR.parent
+REPO_ROOT = TESTS_DIR.parents[1]
 EXAMPLES_DIR = REPO_ROOT / "docs" / "design" / "examples"
 DATA_DIR = TESTS_DIR / "data"
 GOLDEN_DIR = DATA_DIR / "golden"
@@ -136,7 +136,7 @@ def _no_real_signing_key(monkeypatch, tmp_path):
     them covers half the paths that lead there.
 
     **What this fixture no longer has to catch.** The package itself
-    stopped reading the process — ``tests_py/test_userpaths.py`` proves
+    stopped reading the process — ``tests/python/test_userpaths.py`` proves
     it for every module — so nothing here resolves a key out of the
     environment pytest happens to run in. What is left for this fixture
     is everything that hands the process environment *in*: the command

@@ -11,7 +11,7 @@
  * units and publishes it when the channel's report delta says the change
  * is worth a Matter report.
  *
- * Design constraints this file is written against (AGENTS.md, and
+ * Design constraints this file is written against (and
  * component-model.md §5):
  *
  * - No heap. All state is a Kconfig-sized static pool; overflow is a hard

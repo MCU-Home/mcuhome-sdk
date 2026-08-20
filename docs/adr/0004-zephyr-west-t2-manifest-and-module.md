@@ -38,4 +38,4 @@ This repository follows the example-application pattern:
 - The T3 option (separate manifest-only repo) remains open if the project
   ever fragments into many repositories.
 - Local checkouts must live one level below a non-git workspace directory;
-  documented in README, CONTRIBUTING and AGENTS.md.
+  documented in README and CONTRIBUTING.

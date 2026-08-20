@@ -18,7 +18,7 @@
  * Pure table validation (duplicate IDs, pool bounds, parent-chain cycles,
  * …) is NOT here: it lives in table_validate.c, a CHIP-free translation
  * unit that also builds standalone for the native_sim suite in
- * tests/matter_tables/, because CHIP cannot compile there. This file calls
+ * tests/twister/matter_tables/, because CHIP cannot compile there. This file calls
  * it before translating a single table entry to ember metadata.
  */
 
@@ -83,7 +83,7 @@ constexpr AttributeId kClusterRevisionId = 0xFFFDu;
 /* --- Static translation pools -----------------------------------------
  *
  * Everything ember dereferences at runtime must outlive registration, so
- * all of it is static: no heap after init (AGENTS.md coding standards).
+ * all of it is static: no heap after init (coding standards).
  * Sized by CONFIG_MCUHOME_MATTER_MAX_*; overflow is a hard init error, not
  * a truncation.
  *

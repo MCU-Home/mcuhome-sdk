@@ -351,7 +351,7 @@ Equivalence between the two paths is "byte-identical image, different
 signature", and that is the strongest statement available: ECDSA draws a
 fresh random nonce per signature, so two signings of the same bytes with
 the same key differ in the signature TLV (occasionally in its length) and
-in nothing else. `tests_py/test_imgtool.py` asserts exactly that —
+in nothing else. `tests/python/test_imgtool.py` asserts exactly that —
 header, payload, protected TLVs and the SHA-256 over all of them equal,
 signature different, both verifying.
 

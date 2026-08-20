@@ -7,7 +7,7 @@ common:
     - channel
 tests:
   mcuhome.channel.convert:
-    # Host-run for the same reason as tests/matter_tables: the unit under
+    # Host-run for the same reason as tests/twister/matter_tables: the unit under
     # test is free of both CHIP and Zephyr by construction. Plain
     # native_sim needs a 32-bit host glibc that not every dev machine has;
     # native/64 is the 64-bit variant.

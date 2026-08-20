@@ -56,7 +56,7 @@
  * silently does nothing.
  *
  * It is its own translation unit, free of CHIP, so that
- * tests/ota_staging can drive it on native_sim and assert that the
+ * tests/twister/ota_staging can drive it on native_sim and assert that the
  * payload lands one sector into the slot in swap-using-offset mode and at
  * offset 0 in a mode without one. The same reason ota_image_header.c is
  * its own translation unit (ADR 0014).

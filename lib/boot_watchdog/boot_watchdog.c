@@ -55,7 +55,7 @@
  * so a module registered at the default level compiles every line in this
  * file away — including the one that would say the bootloader's watchdog
  * did not arm. Silence there is precisely the failure this file exists to
- * prevent, and the debug-output directive (AGENTS.md) does not allow it.
+ * prevent, and the debug-output directive does not allow it.
  * The fallback is for a build outside an MCUboot image, which nothing in
  * this repository does. */
 #ifdef CONFIG_MCUBOOT_LOG_LEVEL

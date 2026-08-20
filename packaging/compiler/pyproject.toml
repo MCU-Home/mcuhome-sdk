@@ -37,7 +37,7 @@ container never installs it.
 
 Part of the MCUHome firmware framework — https://github.com/mcu-home/mcuhome-workbench
 """, content-type = "text/markdown" }
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = "Apache-2.0"
 authors = [{ name = "The MCUHome Contributors" }]
 keywords = ["zephyr", "matter", "thread", "home-assistant", "firmware"]

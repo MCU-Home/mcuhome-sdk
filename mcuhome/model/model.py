@@ -12,7 +12,7 @@ exactly one :data:`MODEL_VERSION`, a build server advertises the range it
 supports, and a mismatch is a refusal that names both numbers — never a
 fallback. A bump is therefore a breaking change to a published contract
 and is treated as one, which also makes
-``tests_py/test_model_golden.py`` the test of that contract rather than
+``tests/python/test_model_golden.py`` the test of that contract rather than
 an internal regression guard. The principle behind the shape is unchanged:
 every field exists because a downstream artifact needs it, and the two
 runtime contracts decide what those fields mean —

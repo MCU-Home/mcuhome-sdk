@@ -43,7 +43,7 @@ code path.
 
 This module reads no process state: argv arrives as an argument and
 every path comes out of the request document — the invariant
-``tests_py/test_userpaths.py`` enforces on every module here.
+``tests/python/test_userpaths.py`` enforces on every module here.
 """
 
 from __future__ import annotations

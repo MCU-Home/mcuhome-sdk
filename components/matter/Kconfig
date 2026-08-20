@@ -231,7 +231,7 @@ menuconfig MCUHOME_MATTER_OTA
 	# REBOOT and USB_DFU_REBOOT. Kconfig refuses to parse the tree when
 	# that happens, which breaks EVERY build in the repository, including
 	# the native_sim suites that never heard of OTA. Verified: with
-	# `select FLASH` in place, `west twister -T mcuhome/tests` errors out
+	# `select FLASH` in place, `west twister -T mcuhome-sdk/tests/twister` errors out
 	# on all four suites.
 	#
 	# So the Zephyr side of this feature is emitted as one group by the

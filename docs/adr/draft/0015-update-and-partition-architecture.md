@@ -97,7 +97,7 @@ that follows from all three. The shape is `BoardDef.update_scheme`, an
 Kconfig, snippets and overlay that implement the scheme; a board names
 an MCUboot *mode*, never a sysbuild symbol — the mode-to-symbol table
 is the registry's, and nothing in the builder may branch on a board
-name. `tests_py/test_registry.py` asserts that by reading the source
+name. `tests/python/test_registry.py` asserts that by reading the source
 of every other module.
 
 Consequence and intent: supporting a new board is a table row plus a
@@ -323,7 +323,7 @@ The implementation grew three pieces the plan had only implied:
   keeps decision 10's revert path armed.
 - **A CHIP-free Matter OTA header parser**
   (`components/matter/src/ota_image_header.c`): static buffers, no
-  heap, exercised on the host by `tests/ota_image_header/` against
+  heap, exercised on the host by `tests/twister/ota_image_header/` against
   golden headers captured from CHIP's own `ota_image_tool.py` plus
   hand-built malformed ones — it decides what gets written into the
   other half of the device's flash.
@@ -593,7 +593,7 @@ be reconfigured after it starts, so whatever the bootloader arms is
 what the application inherits. The generator emits both ends of it
 from a single constant — `CONFIG_BOOT_WATCHDOG_TIMEOUT_MS` in the
 bootloader's fragment and `CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S` in the
-application's — and `tests_py` asserts the two agree. Both are
+application's — and `tests/python` asserts the two agree. Both are
 generator output for every board rather than update-scheme data
 (decision 2): a bootloader that can hang is a property of having a
 bootloader, not of having a staging slot.
@@ -676,7 +676,7 @@ is a call stack in the fault report — precisely what the 2026-08-08
 dump did not have. It fits with 176 KiB to spare and is kept for that
 reason; `CONFIG_EXCEPTION_STACK_TRACE=n` is the documented first lever
 if the slot ever gets tight, and pulling it is a decision for the
-product owner (AGENTS.md), not a silent one.
+product owner, not a silent one.
 
 *The application's 10,212 B of RAM* is 9,540 B of thread stacks
 (`noinit`) and 669 B of `bss`; the health mechanisms themselves are
@@ -716,8 +716,8 @@ sector in — decision 3) was found by reading MCUboot's sources instead
 of a log line. A bootloader that cannot explain a refusal turns a
 five-minute diagnosis into a source audit, and it will do so again for
 the next class of staging or signature failure. This episode is the
-precedent behind the repository-wide debug-output directive
-(AGENTS.md): diagnostics are never reduced silently.
+precedent behind the repository-wide debug-output directive:
+diagnostics are never reduced silently.
 
 **The configuration, and its price.** `CONFIG_LOG=y` +
 `CONFIG_USE_SEGGER_RTT=y` + `CONFIG_LOG_BACKEND_RTT=y`, immediate mode

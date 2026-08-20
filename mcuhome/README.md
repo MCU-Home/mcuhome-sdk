@@ -15,7 +15,7 @@ mcuhome device matter-pairing --new <device>    # draw this device's commissioni
 mcuhome device validate <device>        # stages 1-3, prints the resolved device
 mcuhome device build <device> --generate-only   # + stage 4, writes the application
 mcuhome device build <device>           # + stage 5, compiles it in the builder image
-pytest                           # the suite in ../tests_py/
+pytest                           # the suite in ../tests/python/
 ```
 
 ## One namespace, two of its three packages
@@ -141,6 +141,6 @@ mcuhome_config.{c,h}` is what `compiler/generate.py` emits for
 `docs/design/examples/00-bmp180-two-endpoints.yaml`, and `pytest`
 compares the two byte for byte (ADR 0014). Changing what the generator
 emits therefore means regenerating the sample in the same commit — the
-recipe is in `../tests_py/README.md`. That coupling is deliberate: it is
+recipe is in `../tests/python/README.md`. That coupling is deliberate: it is
 what stops the runtime contract, the hardware-verified sample and the
 generator from drifting apart.

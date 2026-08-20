@@ -16,7 +16,7 @@
  * Three reasons, in order of weight:
  *
  * 1. It is CHIP-free, so it is exercised on the host by
- *    tests/ota_image_header/ — the same pattern as table_validate.c
+ *    tests/twister/ota_image_header/ — the same pattern as table_validate.c
  *    (ADR 0014), and for the same reason: CHIP cannot build on
  *    native_sim, and a parser that decides what gets written into the
  *    other half of the device's flash deserves exhaustive tests.

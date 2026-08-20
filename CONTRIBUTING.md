@@ -35,8 +35,8 @@ pre-commit install --hook-type commit-msg
 ## Building and testing
 
 ```sh
-west twister -T mcuhome-sdk/tests --integration  # C test suites (native_sim)
-pytest                                           # builder test suite (tests_py/)
+west twister -T mcuhome-sdk/tests/twister --integration  # C test suites (native_sim)
+pytest                                           # builder test suite (tests/python/)
 ```
 
 For a full firmware build, build a device from its YAML description — or

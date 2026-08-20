@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Pure conversion and report-decision arithmetic for the channel layer.
- * See sensor_convert.h for the contract and tests/channel/ for the
+ * See sensor_convert.h for the contract and tests/twister/channel/ for the
  * host-run coverage this file exists to be testable by.
  *
  * Style note: everything works on unsigned magnitudes plus a sign flag

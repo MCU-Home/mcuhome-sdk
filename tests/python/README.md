@@ -1,4 +1,4 @@
-# tests_py/
+# tests/python/
 
 Python tests for the three packages under `mcuhome/` (ADR 0020:
 `mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler`), run with
@@ -117,7 +117,7 @@ from mcuhome.workbench import api
 project, entry = api.find_device(
     "docs/design/examples/00-bmp180-two-endpoints.yaml", env={}, cwd=Path.cwd())
 model = api.load_model(entry, project=project)
-Path("tests_py/data/golden/00-bmp180-two-endpoints.device-model.json").write_text(model.to_json())
+Path("tests/python/data/golden/00-bmp180-two-endpoints.device-model.json").write_text(model.to_json())
 PY
 
 # the stage-4 artifacts, including the sample's C files
@@ -125,23 +125,23 @@ mcuhome device build docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir /tmp/bmp180-node --generate-only
 cp /tmp/bmp180-node/app/src/mcuhome_config.[ch] samples/matter-node/src/
 cp /tmp/bmp180-node/app/prj.conf \
-   tests_py/data/golden/00-bmp180-two-endpoints.prj.conf
+   tests/python/data/golden/00-bmp180-two-endpoints.prj.conf
 cp /tmp/bmp180-node/app/CMakeLists.txt \
-   tests_py/data/golden/00-bmp180-two-endpoints.CMakeLists.txt
+   tests/python/data/golden/00-bmp180-two-endpoints.CMakeLists.txt
 cp /tmp/bmp180-node/app/boards/nrf7002dk_nrf5340_cpuapp.overlay \
-   tests_py/data/golden/00-bmp180-two-endpoints.overlay
+   tests/python/data/golden/00-bmp180-two-endpoints.overlay
 cp /tmp/bmp180-node/app/include/CHIPProjectConfig.h \
-   tests_py/data/golden/00-bmp180-two-endpoints.CHIPProjectConfig.h
+   tests/python/data/golden/00-bmp180-two-endpoints.CHIPProjectConfig.h
 cp /tmp/bmp180-node/app/sysbuild.conf \
-   tests_py/data/golden/00-bmp180-two-endpoints.sysbuild.conf
+   tests/python/data/golden/00-bmp180-two-endpoints.sysbuild.conf
 cp /tmp/bmp180-node/app/sysbuild/mcuboot.conf \
-   tests_py/data/golden/00-bmp180-two-endpoints.mcuboot.conf
+   tests/python/data/golden/00-bmp180-two-endpoints.mcuboot.conf
 cp /tmp/bmp180-node/app/sysbuild/mcuboot.overlay \
-   tests_py/data/golden/00-bmp180-two-endpoints.mcuboot.overlay
+   tests/python/data/golden/00-bmp180-two-endpoints.mcuboot.overlay
 
 # the two exported contract documents
-mcuhome schema config > tests_py/data/golden/main.schema.json
-mcuhome schema registry > tests_py/data/golden/registry.json
+mcuhome schema config > tests/python/data/golden/main.schema.json
+mcuhome schema registry > tests/python/data/golden/registry.json
 ```
 
 Regenerating the sample's C files is not optional bookkeeping: it is how

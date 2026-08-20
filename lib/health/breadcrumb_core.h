@@ -6,7 +6,7 @@
  * (reset-surviving) RAM, an integrity word over it, and the sequence
  * rule for counting consecutive faults. Everything here is plain C over
  * a caller-provided struct — no Zephyr, no registers, no sections — so
- * the native_sim suite in tests/health_breadcrumb can drive every branch
+ * the native_sim suite in tests/twister/health_breadcrumb can drive every branch
  * on the host. The one file that talks to hardware and linker sections
  * is breadcrumb.c next to this.
  *

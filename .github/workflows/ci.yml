@@ -6,7 +6,7 @@
 #   lint     — the same ruff/REUSE/debug-output checks
 #              .pre-commit-config.yaml runs locally. Needs nothing but
 #              Python.
-#   pytest   — the Python suite in tests_py/, the fast half of the test
+#   pytest   — the Python suite in tests/python/, the fast half of the test
 #              strategy. Needs nothing but Python either, which is why
 #              running it nowhere automated was never a cost worth
 #              paying.
@@ -57,7 +57,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       # Pinned to the same versions as .pre-commit-config.yaml so local
       # and CI runs agree; bump both together.
@@ -73,13 +73,13 @@ jobs:
       - name: REUSE lint
         run: reuse lint
 
-      # Debug output is load-bearing (AGENTS.md): config fragments must
+      # Debug output is load-bearing: config fragments must
       # not reduce diagnostics without a recorded decision and its
       # `# debug-output: approved <reason>` marker.
       - name: Debug-output policy
         run: python scripts/check_debug_output.py
 
-  # The Python suite in tests_py/ — the fast half of the test strategy
+  # The Python suite in tests/python/ — the fast half of the test strategy
   # (docs/design/builder-pipeline.md §9), which until now ran nowhere
   # automated at all: three distributions' worth of invariants, the
   # golden generator output and every refusal message, none of them
@@ -91,7 +91,7 @@ jobs:
   # mcu-home/mcuhome-workbench. `-rs` keeps any skip loud in the log rather than
   # a dot.
   pytest:
-    name: pytest (tests_py)
+    name: pytest (tests/python)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -100,7 +100,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       # The two editable installs this repository publishes since the
       # ADR 0024 split (the workbench lives in mcu-home/mcuhome-workbench), and no
@@ -225,7 +225,7 @@ jobs:
           key: west-2-${{ runner.os }}-${{ hashFiles('mcuhome-sdk/west.yml') }}
 
       # Without the Matter SDK: every suite in tests/ is CHIP-free by
-      # design (ADR 0014, and the reason tests/matter_tables/ tests the
+      # design (ADR 0014, and the reason tests/twister/matter_tables/ tests the
       # table validator rather than the runtime). Skipping the `matter`
       # group keeps a multi-gigabyte clone with submodules out of CI.
       - name: Initialize the west workspace
@@ -245,7 +245,7 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)" \
             --volume "$PWD:$PWD" --workdir "$PWD" \
             '${{ steps.image.outputs.reference }}' \
-            west twister -T mcuhome-sdk/tests --integration --inline-logs -v -j 2
+            west twister -T mcuhome-sdk/tests/twister --integration --inline-logs -v -j 2
 
   # ------------------------------------------------------------------
   # Publishing the build environment. Since r11 it is a MULTI-ARCHITECTURE
@@ -485,7 +485,7 @@ jobs:
   #   this workflow             so a change to the job runs the job
   #
   # Deliberately NOT in the list: docs/ other than that one example,
-  # tests/, tests_py/, samples/ and the community files. A change there
+  # tests/, tests/python/, samples/ and the community files. A change there
   # cannot alter the firmware this job produces — samples/matter-node is
   # generator OUTPUT (ADR 0014), compared byte for byte by the pytest
   # suite, so a real change to it arrives together with a change under
@@ -642,7 +642,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       # Editable, and that is not a style preference: mcuhome.compiler.workspace's
       # installed_module_dir() resolves the module directory from the
@@ -798,7 +798,7 @@ jobs:
           python mcuhome-sdk/scripts/build_sdk_archive.py --output-dir dist/sdk
 
       # The example the bench node was commissioned from — the YAML form
-      # of samples/matter-node — built the way AGENTS.md documents it:
+      # of samples/matter-node — built the documented way:
       # from the workspace top directory, in the builder image (the
       # default path, not the host method, which is the whole point), against
       # the SDK archive built above, with the RTT snippet the
@@ -832,7 +832,7 @@ jobs:
       # What this architecture produced, as hashes — the input to the
       # cross-architecture comparison below. Only the UNSIGNED artifacts:
       # a signature is not reproducible by construction (ECDSA draws a
-      # random nonce per signature, tests_py asserts exactly that), so
+      # random nonce per signature, tests/python asserts exactly that), so
       # comparing signed images would compare the randomness.
       # The unsigned firmware itself, not only its hash: "the two
       # architectures produced different bytes" is a fact, and "they
@@ -842,7 +842,7 @@ jobs:
       #
       # Unsigned on purpose. A signature is not reproducible by
       # construction — ECDSA draws a random nonce per signature, which
-      # tests_py asserts — so a signed image would differ between two
+      # tests/python asserts — so a signed image would differ between two
       # runs of the SAME architecture and drown the question.
       - name: Record what this architecture produced
         run: |
@@ -937,7 +937,7 @@ jobs:
   # first implementation" of the package index that same amendment
   # describes.
   #
-  # The pytest suite (tests_py/test_sdk_archive.py) is what proves the
+  # The pytest suite (tests/python/test_sdk_archive.py) is what proves the
   # bytes are deterministic and the allowlist holds; this job's value is
   # that the archive gets built from a clean checkout by something other
   # than a developer's machine, which is the same reason the `matter` job
@@ -953,7 +953,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       # Pinned, because the compressor decides the bytes. Identical zstd
       # parameters give identical output for one libzstd and not across
