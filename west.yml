@@ -25,7 +25,7 @@ manifest:
   projects:
     # Zephyr is pinned to a release tag — never track main. Bump the pin
     # deliberately and update the matching Zephyr release/SDK references in
-    # README.md and CONTRIBUTING.md at the same time. (v4.5 is expected
+    # README.md at the same time. (v4.5 is expected
     # 2026-10, next LTS v4.6 ~2027-04.)
     - name: zephyr
       remote: zephyrproject-rtos

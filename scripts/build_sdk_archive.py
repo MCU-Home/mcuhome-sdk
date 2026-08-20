@@ -76,8 +76,8 @@ below has a consumer that fails without it:
 ``samples/``                     the netcore image a user must flash is built
                                  from ``samples/netcore-radio``, and the
                                  registry tells the user so
-``LICENSE``, ``NOTICE``,         this is a redistributed source distribution of
-``LICENSES/``, ``REUSE.toml``    Apache-2.0 material carrying per-file SPDX
+``LICENSE``, ``LICENSES/``,      this is a redistributed source distribution of
+``REUSE.toml``                   Apache-2.0 material carrying per-file SPDX
                                  headers
 ===============================  ==============================================
 
@@ -136,7 +136,7 @@ except ModuleNotFoundError:  # a system python, not the repo's venv
     sys.exit(
         "build_sdk_archive.py needs the zstandard module.\n"
         "Run it from this repository's own venv, which carries it via\n"
-        "mcuhome-compiler (CONTRIBUTING.md):\n"
+        "mcuhome-compiler:\n"
         "    python3 -m venv .venv && . .venv/bin/activate\n"
         "    pip install -e ./packaging/model -e ./packaging/compiler"
     )
@@ -170,7 +170,6 @@ SDK_FILES = frozenset(
         "CMakeLists.txt",
         "Kconfig",
         "LICENSE",
-        "NOTICE",
         "REUSE.toml",
         "bin/generate",
         "mcuhome-sdk.json",
