@@ -35,10 +35,13 @@ from mcuhome.model.context import (
     ContextManifest,
     ContextRequest,
     EnvironmentPin,
+    GeneratorEntry,
     SdkPin,
     canonical_json,
     context_id,
     environment_digest,
+    format_generator_chain,
+    parse_generator_chain,
     validate_manifest,
     vector_id,
 )
@@ -511,3 +514,62 @@ def test_two_contexts_differing_only_in_their_environment_are_two_contexts() -> 
         board=BOARD,
         files=FILES,
     )
+
+
+# --------------------------------------------------------------------------
+# The generator declaration
+# --------------------------------------------------------------------------
+
+
+def test_a_generator_chain_round_trips() -> None:
+    entries = (
+        GeneratorEntry("custom-tool", "4.2.3"),
+        GeneratorEntry("mcuhome-workbench", "0.1.0.dev0"),
+    )
+    chain = format_generator_chain(entries)
+    assert chain == "custom-tool:4.2.3;mcuhome-workbench:0.1.0.dev0"
+    assert parse_generator_chain(chain) == entries
+
+
+def test_the_leftmost_entry_is_the_tool_that_wrote_the_context_last() -> None:
+    """The whole ordering rule, as the one assertion that can enforce it.
+
+    A build environment's default check believes this entry and no other,
+    so a chain read the other way round would hand the decision to the
+    tool that merely created the context and let anything downstream
+    modify it unchecked.
+    """
+    created = parse_generator_chain("mcuhome-workbench:1.0.0")
+    modified = format_generator_chain((GeneratorEntry("custom-tool", "0.2.0"), *created))
+    assert modified == "custom-tool:0.2.0;mcuhome-workbench:1.0.0"
+    assert parse_generator_chain(modified)[0].product == "custom-tool"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        "mcuhome-workbench",  # no version at all
+        "MCUHome-Workbench:1.0.0",  # a product name is lowercase
+        ":1.0.0",  # no product
+        "mcuhome-workbench:",  # no version
+        "-tool:1.0.0",  # a product starts with a letter or digit
+        "custom-tool:1.0.0;",  # a trailing separator is an empty entry
+    ],
+)
+def test_an_unreadable_generator_is_refused(value: object) -> None:
+    """Refused, never skipped.
+
+    Skipping an entry that does not parse would silently move the check
+    to the entry behind it — which is a different tool, with different
+    versions, and a claim rather than a fact.
+    """
+    with pytest.raises(BuildError):
+        parse_generator_chain(value)
+
+
+def test_an_empty_chain_cannot_be_written() -> None:
+    with pytest.raises(BuildError) as caught:
+        format_generator_chain(())
+    assert "empty generator chain" in caught.value.message
