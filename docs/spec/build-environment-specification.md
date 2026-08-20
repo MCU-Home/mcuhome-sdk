@@ -11,6 +11,13 @@ live, what your image contains, which compiler and build system you use,
 and how you do the work. This specification describes a boundary, not a
 build.
 
+Two things it deliberately leaves to the orchestrator — which actions
+exist, and what is in a build context — are documented separately,
+because they belong to whoever drives your environment rather than to
+the boundary itself. For MCUHome that is
+[build actions](build-actions.md) and the
+[build context format](build-context-format.md).
+
 ## 1. Terms
 
 | Term | Meaning |
@@ -149,7 +156,7 @@ The entry point must be executable by the user the orchestrator runs it as.
 | `spec_generation` | The generation the orchestrator is speaking. If it is not one you implement, refuse with `unsupported`. |
 | `session_id` | Identifies the session. Opaque — never build a path from it. |
 | `invocation_id` | Identifies this step. Safe to use directly in a filename. |
-| `action` | What to do. Which actions exist is not part of this specification; the orchestrator documents them. |
+| `action` | What to do. Which actions exist is not part of this specification; the orchestrator documents them — MCUHome's are in [build actions](build-actions.md). |
 | `parameters` | Arguments for the action, or `{}`. |
 
 Ignore fields you do not know.
@@ -273,8 +280,9 @@ its operator's decision.
 
 The build context is at `mcuhome/build-context`. **Never modify anything
 in it.** Its structure belongs to the tool that produced it, not to this
-specification — but two things about it are fixed here, because the
-orchestrator depends on them.
+specification — MCUHome's own is the
+[build context format](build-context-format.md) — but two things about
+it are fixed here, because the orchestrator depends on them.
 
 **First**, the context contains a file `build-context.json`, one JSON
 object, carrying at least:

@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The build context — the self-contained input artifact of a remote build.
 
-A build context is a plain directory: ``manifest.yaml``, the canonical
-device model under ``model/``, optionally patches under
-``patches/<layer>/``. It contains everything a build needs except the
+A build context is a plain directory: ``build-context.json``,
+``manifest.yaml``, the canonical device model under ``model/``,
+optionally patches under ``patches/<layer>/``. It contains everything a build needs except the
 build environment (a build container carrying a toolchain and Zephyr)
 and the SDK (fetched as a hash-pinned package). It travels as an
 archive, but the archive is transport: the directory is the artifact.
@@ -67,8 +67,12 @@ be a third place for the same fact to be wrong in.
 
 ``manifest.yaml`` itself and the backend-written ``.mcuhome/`` runtime
 directory are never integrity entries, so they cannot influence the ID
-either. Neither the YAML file bytes nor the transport archive bytes are
-ever hashed — neither serialization is deterministic. New
+either. ``build-context.json`` is one, deliberately: it names the tool
+that wrote the context, a build environment declares which tools it
+accepts, and a file that decides who may run a build has to be covered
+by the identity that build is claimed under. Neither the YAML file bytes
+nor the transport archive bytes are ever hashed — neither serialization
+is deterministic. New
 build-relevant fields enter the hash only together with a bump of the
 ``context`` format version.
 
@@ -108,6 +112,7 @@ from mcuhome.model.imageref import DOCKER_HUB, parse_reference
 
 __all__ = [
     "BACKEND_DIR",
+    "BUILD_CONTEXT_FILE",
     "CONTEXT_FILE",
     "KEYS_DIR",
     "SIGNING_KEY_FILE",
@@ -120,9 +125,12 @@ __all__ = [
     "ContextManifest",
     "ContextRequest",
     "EnvironmentPin",
+    "GeneratorEntry",
     "SdkPin",
     "canonical_json",
     "context_id",
+    "format_generator_chain",
+    "parse_generator_chain",
     "environment_digest",
     "validate_manifest",
     "vector_id",
@@ -153,6 +161,14 @@ MANIFEST_FILE = "manifest.yaml"
 #: resolved values alone.
 CONTEXT_FILE = "context.yaml"
 
+#: The generator declaration, at the top of every context. The build
+#: environment specification requires it by this name and reads exactly
+#: one key out of it — see :func:`parse_generator_chain`. Everything else
+#: in a context belongs to the generator's own format; this one file is
+#: the boundary, which is why the name is fixed here and not in the
+#: workbench that writes it.
+BUILD_CONTEXT_FILE = "build-context.json"
+
 #: Where the MCUboot verification key lives inside a context (ADR 0018's
 #: 2026-08-09 amendment; required for ``build``, §7.2).
 KEYS_DIR = "keys"
@@ -181,6 +197,114 @@ BACKEND_DIR = ".mcuhome"
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_PRODUCT = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
+
+
+# --------------------------------------------------------------------------
+# The generator declaration
+# --------------------------------------------------------------------------
+#
+# The one thing about a build context that is not the generator's own
+# business: which tool produced it. A build environment declares the
+# generators it accepts as a version constraint, and the orchestrator
+# checks that constraint before it starts anything — so both sides need
+# one spelling of "who wrote this", and it is fixed here rather than in
+# either of them.
+#
+# The chain reads right to left in time: the rightmost entry created the
+# context, everything left of it modified the context afterwards, and the
+# leftmost entry is whoever touched it last. Listing the entries to its
+# right is a *claim* by the tool on the left that it kept the context
+# compatible with them — which is why the default check believes only the
+# leftmost one.
+#
+# PEP 440 is deliberately not enforced here. Parsing a version specifier
+# needs `packaging`, this package has no dependencies by construction
+# (ADR 0020), and the party that needs the parse is the one comparing a
+# version against a constraint — not the one reading a name out of a
+# document.
+
+
+@dataclass(frozen=True)
+class GeneratorEntry:
+    """One ``<product>:<version>`` link of a generator chain."""
+
+    #: Lowercase, ``[a-z0-9][a-z0-9._-]*`` — a distribution name in
+    #: practice, and checked as a spelling rather than looked up.
+    product: str
+    #: A PEP 440 version, unvalidated here (see the section note above).
+    #: Never contains ``;`` or ``:``, which is what keeps the chain
+    #: parseable without escaping.
+    version: str
+
+    def __str__(self) -> str:
+        return f"{self.product}:{self.version}"
+
+
+def format_generator_chain(entries: Iterable[GeneratorEntry]) -> str:
+    """*entries* as the one string a ``generator`` value is, most recent first.
+
+    Prepending is how a tool that modifies a context records itself::
+
+        chain = format_generator_chain(
+            (GeneratorEntry("my-tool", "1.2.0"), *parse_generator_chain(found))
+        )
+    """
+    listed = tuple(entries)
+    if not listed:
+        raise BuildError(
+            "A build context cannot declare an empty generator chain.",
+            hint="the chain names at least the tool that created the context",
+        )
+    for entry in listed:
+        _check_generator_entry(entry.product, entry.version)
+    return ";".join(str(entry) for entry in listed)
+
+
+def parse_generator_chain(value: object) -> tuple[GeneratorEntry, ...]:
+    """The ``generator`` value of ``build-context.json``, split into its links.
+
+    Strict, because the result decides which build environments may run
+    this context: an entry that cannot be read is refused rather than
+    skipped, since skipping the leftmost one would silently hand the
+    decision to a tool that did not write the context last.
+    """
+    if not isinstance(value, str) or not value:
+        raise BuildError(
+            f"The build context declares no generator: {value!r}.",
+            hint=(
+                "build-context.json carries a generator — one or more "
+                "<product>:<version> entries separated by semicolons, the tool "
+                "that wrote the context last on the left"
+            ),
+        )
+    entries = []
+    for part in value.split(";"):
+        product, separator, version = part.partition(":")
+        if not separator:
+            raise BuildError(
+                f'"{part}" is not a generator entry.',
+                hint="an entry is <product>:<version>, like mcuhome-workbench:1.2.0",
+            )
+        _check_generator_entry(product, version)
+        entries.append(GeneratorEntry(product=product, version=version))
+    return tuple(entries)
+
+
+def _check_generator_entry(product: object, version: object) -> None:
+    if not isinstance(product, str) or _PRODUCT.fullmatch(product) is None:
+        raise BuildError(
+            f"{product!r} is not a generator product name.",
+            hint=(
+                "lowercase letters, digits, ., - and _, starting with a letter or "
+                "digit — the distribution name of the tool, like mcuhome-workbench"
+            ),
+        )
+    if not isinstance(version, str) or not version or ":" in version:
+        raise BuildError(
+            f"{version!r} is not a generator version.",
+            hint="a PEP 440 version, like 1.2.0 or 0.1.0.dev0",
+        )
 
 
 # --------------------------------------------------------------------------
