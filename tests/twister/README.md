@@ -22,6 +22,6 @@ host glibc that not every dev machine has, so suites here target the 64-bit
 
 CI (`.github/workflows/ci.yml`) landed together with this first suite, per
 repo policy (we do not ship a red pipeline). It currently only runs the
-lint/licensing checks `.pre-commit-config.yaml` runs locally; the twister
+lint/licensing checks CI runs; the twister
 build itself is not wired into CI yet (needs a full west workspace — see
 the TODO block in the workflow file).

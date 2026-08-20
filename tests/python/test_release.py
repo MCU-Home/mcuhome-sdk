@@ -207,6 +207,23 @@ def test_an_empty_changelog_section_is_refused(release, tmp_path):
         release.main(["0.2.0", "--repo", str(root)])
 
 
+def test_a_missing_changelog_is_refused(release, tmp_path):
+    """The file the configuration names has to be there.
+
+    A repository may have no changelog at all — several here do not, on
+    purpose, while the format still changes weekly. What must not happen
+    is a release that writes the version into every source, commits and
+    tags, and only then discovers it has nowhere to record what changed.
+    So the refusal comes before anything is written.
+    """
+    root = make_repo(tmp_path)
+    (root / "CHANGELOG.md").unlink()
+    git(root, "commit", "--quiet", "-am", "no changelog")
+    git(root, "push", "--quiet", "origin", "main")
+    with pytest.raises(SystemExit, match="is missing"):
+        release.main(["0.2.0", "--repo", str(root)])
+
+
 def test_a_failing_gate_stops_the_release(release, tmp_path):
     root = make_repo(tmp_path)
     (root / "pyproject.toml").write_text(
