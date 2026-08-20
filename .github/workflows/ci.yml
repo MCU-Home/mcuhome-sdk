@@ -688,6 +688,20 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
 
+      # Which machine is this, really. The two architectures build the
+      # same firmware at measurably different speeds — 420 s against
+      # 264 s cold, 88 s against 67 s warm — and the obvious explanation
+      # is that "4 vCPU" means two physical cores plus their hyperthreads
+      # on one side and four real cores on the other. GitHub does not
+      # publish that, so it is asked here rather than assumed: `lscpu`
+      # answers "Thread(s) per core" and the processor's own name, and
+      # one line in a log settles a question that is otherwise a belief.
+      - name: What machine is this
+        run: |
+          nproc --all
+          lscpu | grep -Ei 'model name|^cpu\(s\)|thread|core|socket|mhz|bogomips' || lscpu
+          free -h
+
       # Same resolution as the twister job, and for the same reason: the
       # builder decides what the image is called, nothing else does.
       - name: Resolve the builder image reference
