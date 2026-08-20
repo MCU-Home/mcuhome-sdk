@@ -820,33 +820,29 @@ jobs:
       # a signature is not reproducible by construction (ECDSA draws a
       # random nonce per signature, tests_py asserts exactly that), so
       # comparing signed images would compare the randomness.
+      # The unsigned firmware itself, not only its hash: "the two
+      # architectures produced different bytes" is a fact, and "they
+      # differ in one build id" and "they differ everywhere" are two
+      # entirely different facts behind it. Only the comparison job can
+      # tell those apart, and only if it has the bytes.
+      #
+      # Unsigned on purpose. A signature is not reproducible by
+      # construction — ECDSA draws a random nonce per signature, which
+      # tests_py asserts — so a signed image would differ between two
+      # runs of the SAME architecture and drown the question.
       - name: Record what this architecture produced
         run: |
-          python3 - <<'PY' > firmware-${{ matrix.arch }}.json
-          import hashlib
-          import json
-          import pathlib
-
-          out = pathlib.Path("build/bmp180-node")
-          print(
-              json.dumps(
-                  {
-                      path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                      for path in sorted(out.iterdir())
-                      if path.is_file() and path.name in
-                      ("firmware.bin", "firmware.hex", "bootloader.hex")
-                  },
-                  indent=1,
-              )
-          )
-          PY
-          cat firmware-${{ matrix.arch }}.json
+          mkdir -p produced
+          cp build/bmp180-node/firmware.bin \
+             build/bmp180-node/firmware.hex \
+             build/bmp180-node/bootloader.hex produced/
+          (cd produced && sha256sum *)
 
       - name: Upload what this architecture produced
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: firmware-${{ matrix.arch }}
-          path: firmware-${{ matrix.arch }}.json
+          path: produced/
           retention-days: 7
 
       - name: Save the compiler cache
@@ -885,35 +881,34 @@ jobs:
           pattern: firmware-*
           path: produced
 
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: mcuhome-sdk
+
+      # Not a hash comparison: those two hashes already differ and say
+      # nothing about why. This prints where and what — how many bytes,
+      # in how many regions, at which offsets, and the neighbourhood as
+      # text, which is how a compiler stamp or a path announces itself.
       - name: Compare them
         run: |
-          python3 - <<'PY'
-          import json
-          import pathlib
+          python3 mcuhome-sdk/scripts/compare_firmware.py \
+            produced/firmware-amd64 produced/firmware-arm64 \
+            --label-left amd64 --label-right arm64 | tee comparison.txt
+          {
+            echo '## Does the host architecture change the firmware?'
+            echo
+            echo '```'
+            cat comparison.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          found = {
-              path.parent.name.removeprefix("firmware-"): json.loads(path.read_text())
-              for path in sorted(pathlib.Path("produced").glob("*/firmware-*.json"))
-          }
-          if len(found) != 2:
-              print(f"::notice::only {sorted(found)} reported; nothing to compare")
-              raise SystemExit(0)
-          (left, one), (right, other) = sorted(found.items())
-          same = [name for name in sorted(one) if one.get(name) == other.get(name)]
-          differ = [name for name in sorted(set(one) | set(other)) if name not in same]
-          for name in same:
-              print(f"  identical  {name}")
-          for name in differ:
-              print(f"  DIFFERS    {name}")
-              print(f"             {left}:  {one.get(name, '<absent>')}")
-              print(f"             {right}: {other.get(name, '<absent>')}")
-          verdict = (
-              f"the host architecture does not change the firmware ({len(same)} files)"
-              if not differ
-              else f"{len(differ)} of {len(same) + len(differ)} files differ between {left} and {right}"
-          )
-          print(f"::notice::{verdict}")
-          PY
+      - name: Keep the comparison
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firmware-comparison
+          path: comparison.txt
+          retention-days: 7
 
   # ------------------------------------------------------------------
   # The SDK package (B2)
