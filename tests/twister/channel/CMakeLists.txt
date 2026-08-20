@@ -19,7 +19,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(mcuhome_channel_test)
 
-set(MCUHOME_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+set(MCUHOME_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 set(MCUHOME_SENSOR_SRC_DIR ${MCUHOME_ROOT}/components/sensor/src)
 
 target_sources(app PRIVATE
