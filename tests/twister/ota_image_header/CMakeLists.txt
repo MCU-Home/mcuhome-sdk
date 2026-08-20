@@ -3,7 +3,7 @@
 #
 # native_sim twister suite for the Matter OTA image header parser
 # (components/matter/src/ota_image_header.c, ADR 0015 decision 5). Same
-# trick as tests/matter_tables and tests/channel: pull the source in
+# trick as tests/twister/matter_tables and tests/twister/channel: pull the source in
 # directly instead of enabling the mcuhome Zephyr module, because
 # CONFIG_MCUHOME_MATTER depends on CHIP and CHIP cannot build on
 # native_sim — while the parser itself has no Zephyr and no CHIP

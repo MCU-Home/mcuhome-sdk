@@ -8,7 +8,7 @@
  * state. That is deliberate — it is the part with the interesting edge
  * cases (rounding direction, saturation, the reserved Matter null
  * markers, the delta decision) and the part worth exhaustive host-run
- * coverage, which tests/channel/ provides on native_sim.
+ * coverage, which tests/twister/channel/ provides on native_sim.
  *
  * The poller (sensor_poll.c) keeps everything impure: devices, the
  * workqueue, fault latching, the attr-store publish.

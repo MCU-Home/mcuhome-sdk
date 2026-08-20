@@ -7,7 +7,7 @@
  * table_validate.c, which touches nothing but plain-C contract structs —
  * no CHIP/ember header, no Zephyr kernel API. That is what makes it
  * buildable and testable on native_sim, where CHIP cannot compile
- * (tests/matter_tables/).
+ * (tests/twister/matter_tables/).
  *
  * endpoint_registry.cpp is the only framework caller: it runs this before
  * translating a single table entry to ember metadata, then supplies its

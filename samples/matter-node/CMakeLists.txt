@@ -7,7 +7,7 @@
 #
 # The Matter build glue below — the CHIP_ROOT block, the link-order fix,
 # the app-common include and the chip_configure_data_model() call — is
-# byte-identical to what `mcuhome build` emits, and tests_py/
+# byte-identical to what `mcuhome build` emits, and tests/python/
 # test_generate.py asserts that it stays so. This sample IS a generated
 # device (ADR 0014 makes its src/mcuhome_config.{c,h} the codegen
 # fixture), so a build mechanism found on the bench must never end up in

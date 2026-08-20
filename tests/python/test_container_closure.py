@@ -29,7 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: What a fresh interpreter loads after importing the entry point's
 #: body, minus the standard library — computed inside the subprocess so

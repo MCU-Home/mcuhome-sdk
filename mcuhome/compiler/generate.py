@@ -63,7 +63,7 @@ only, for exactly that reason.
 **clang-format.** The emitters produce Zephyr-style C (tabs, 100 columns,
 ``.clang-format`` at the repository root) *as written*. The repository's
 editor hook does not see generator output, so the output has to be clean
-on its own; ``tests_py/test_generate.py`` checks that with clang-format
+on its own; ``tests/python/test_generate.py`` checks that with clang-format
 when it is installed.
 """
 
@@ -1190,7 +1190,7 @@ def render_bootloader_overlay(model: DeviceModel, *, config_name: str) -> str:
 #: The Matter (CHIP) build glue, verbatim, exactly as
 #: ``samples/matter-node/CMakeLists.txt`` carries it. Two files state these
 #: mechanics — the hand-written sample and every generated application —
-#: and ``tests_py/test_generate.py`` asserts they stay identical, because a
+#: and ``tests/python/test_generate.py`` asserts they stay identical, because a
 #: fix found on the bench must not live in only one of them.
 #:
 #: Split in two because everything up to and including the CHIP module

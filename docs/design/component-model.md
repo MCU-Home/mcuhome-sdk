@@ -86,7 +86,7 @@ trivially testable and lintable.
   reference them by symbol, the linker keeps only what's used (builder
   principle §1).
 - **No heap after init, ISR-safe boundaries, SED power budget** — the
-  scaffold's embedded rules (AGENTS.md) are the component contract, and
+  scaffold's embedded rules are the component contract, and
   the `zephyr-code-reviewer` agent enforces them in review.
 
 ## 6. Worked example (end to end)

@@ -4,7 +4,7 @@ Twister test suites (`testcase.yaml` per suite). Run from the workspace
 top directory with:
 
 ```sh
-west twister -T mcuhome/tests --integration --inline-logs -v
+west twister -T mcuhome-sdk/tests/twister --integration --inline-logs -v
 ```
 
 Host-run unit tests target `native_sim` — plain `native_sim` needs a 32-bit

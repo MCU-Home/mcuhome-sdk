@@ -135,9 +135,9 @@ ARG ZAP_SHA256_ARM64=9b9c41d2c0384acec6f47e7aab286166890e572219084fd6b8c5b78d666
 # They double as the version part of the patch file names, which is the
 # naming convention patches/README.md documents.
 #
-# Restating a pin is a drift risk, so it is checked: tests_py/
+# Restating a pin is a drift risk, so it is checked: tests/python/
 # test_builder_workspace.py asserts both against west.yml, the same way
-# tests_py/test_container.py asserts the image tag against it.
+# tests/python/test_container.py asserts the image tag against it.
 ARG ZEPHYR_REVISION=v4.4.0
 ARG CHIP_REVISION=v1.5.1.0
 

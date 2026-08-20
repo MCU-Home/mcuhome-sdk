@@ -3,7 +3,7 @@
 #
 # native_sim twister suite for the channel layer's arithmetic
 # (components/sensor/src/sensor_convert.c). Same trick as
-# tests/matter_tables: pull the source in directly instead of enabling the
+# tests/twister/matter_tables: pull the source in directly instead of enabling the
 # mcuhome Zephyr module. CONFIG_MCUHOME_SENSOR depends on
 # CONFIG_MCUHOME_MATTER and therefore on CHIP, which cannot build on
 # native_sim — while sensor_convert.c itself has no Zephyr and no CHIP

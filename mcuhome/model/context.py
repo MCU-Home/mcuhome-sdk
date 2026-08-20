@@ -806,7 +806,7 @@ CONTEXT_ID_VECTORS: tuple[dict[str, Any], ...] = (
         "id": "sha256:19f02a62af58d3889d556389fd5dd79f2ad44e32a30940a40c08808a148f3300",
     },
     {
-        # The vector tests_py/test_context.py has pinned since the format
+        # The vector tests/python/test_context.py has pinned since the format
         # was written, kept where a second implementation can reach it.
         "name": "model and one patch",
         "inputs": {

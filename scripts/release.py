@@ -16,7 +16,7 @@ version_files = ["mcuhome/model/__init__.py"]   # every place the number is writ
 changelog     = "CHANGELOG.md"
 tag_prefix    = "v"
 branch        = "main"
-gates         = ["{python} -m ruff check .", "{python} -m pytest -q tests_py"]
+gates         = ["{python} -m ruff check .", "{python} -m pytest -q tests/python"]
 next_steps    = ["git push && git push origin {tag}", "…"]
 ```
 

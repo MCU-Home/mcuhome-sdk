@@ -13,7 +13,7 @@ v4.4.0. Background, root-cause analysis and per-patch rationale:
 The file name is `<project>-<pinned revision>-<topic>.patch`, and the
 builder image's `Dockerfile` builds both names out of its `ZEPHYR_REVISION`
 and `CHIP_REVISION` arguments — so the convention is load-bearing, not
-decoration. `tests_py/test_builder_workspace.py` asserts that the names
+decoration. `tests/python/test_builder_workspace.py` asserts that the names
 the image applies and the files in this directory are the same set, in
 both directions: a renamed patch fails the image build loudly, an *added*
 one would otherwise be silently left out of the image.

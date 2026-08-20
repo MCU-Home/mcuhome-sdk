@@ -51,7 +51,7 @@ from mcuhome.model.context import (
 )
 from mcuhome.model.errors import BuildError
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = REPO_ROOT / "containers" / "build-container" / "Dockerfile"
 LAUNCHER = REPO_ROOT / "containers" / "build-container" / "run"
 
@@ -2408,7 +2408,7 @@ def test_the_launcher_is_a_launcher() -> None:
 # The SDK package's own entry point (§6.1)
 # --------------------------------------------------------------------------
 
-SDK_ROOT = Path(__file__).resolve().parent.parent
+SDK_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_the_sdk_package_declares_its_entry_point() -> None:

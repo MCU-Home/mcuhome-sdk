@@ -6,7 +6,7 @@
  * about it that touches hardware, linker sections and the log. The pure
  * logic — the record layout, its integrity word and the sequence rule —
  * is in breadcrumb_core.h, where the native_sim suite in
- * tests/health_breadcrumb can drive every branch of it on the host.
+ * tests/twister/health_breadcrumb can drive every branch of it on the host.
  *
  * WHY THIS EXISTS. A fatal error on an MCUHome node reboots
  * (CONFIG_MCUHOME_RESET_ON_FATAL_ERROR). That is correct and it is also

@@ -155,7 +155,7 @@ Zephyr line exists and no blob is integrated yet:
   `available_blobs()` is the single hook the availability matrix plugs
   into; it returns nothing for every board.
 - `blobs: <name>: enabled` produces the plain-language refusal decision
-  2 requires, naming this ADR (pinned by `tests_py/test_validate.py`);
+  2 requires, naming this ADR (pinned by `tests/python/test_validate.py`);
   `disabled` and `auto` are accepted as honest no-ops — nothing is
   being switched off, and `auto` is defined to self-heal.
 - An unsupported `zephyr_version` is refused with the recommendation to

@@ -9,7 +9,7 @@ common:
   # Host-run on native_sim's simulated flash, which brings a
   # slot1_partition with 4 KiB sectors — everything this needs. Plain
   # native_sim wants a 32-bit host glibc that not every dev machine has;
-  # native/64 is the 64-bit variant (same pattern as tests/channel).
+  # native/64 is the 64-bit variant (same pattern as tests/twister/channel).
   platform_allow:
     - native_sim/native/64
   integration_platforms:

@@ -48,7 +48,7 @@ import zstandard
 from mcuhome.compiler.abi import sdk_entry_point
 from mcuhome.model.errors import BuildError
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_sdk_archive.py"
 
 #: Directories the archive must never carry, each for a reason the
@@ -57,14 +57,12 @@ SCRIPT = REPO_ROOT / "scripts" / "build_sdk_archive.py"
 #: definition, the packaging metadata nothing installs, the test suite
 #: that tests the tree).
 EXCLUDED = (
-    ".claude",
     ".github",
     "containers",
     "docs",
     "packaging",
     "patches",
     "tests",
-    "tests_py",
 )
 
 
@@ -403,7 +401,7 @@ def test_the_entry_point_is_still_executable_after_the_unpack(unpacked_by_the_co
     """The one archive property an unpack can destroy, and the contract requires.
 
     §6.1 makes ``generate.program`` a child process, and
-    ``tests_py/test_abi.py`` already pins the rule on the repository's own
+    ``tests/python/test_abi.py`` already pins the rule on the repository's own
     copy: "the entry point is invoked, not imported (§6.1)". The archive
     ships the bit; whether a build can use it is decided here — this was
     an xfail until the build server learned to preserve the owner's

@@ -11,7 +11,7 @@
 # subpackage it ships, which is why the project directories are here and
 # the code is not — `package-dir` maps the empty prefix two levels up and
 # `packages` names the one subpackage this distribution owns. Nothing
-# else of the tree ends up in the wheel; `tests_py/test_packaging.py`
+# else of the tree ends up in the wheel; `tests/python/test_packaging.py`
 # checks that against the built artifacts rather than trusting it.
 
 [build-system]
@@ -30,7 +30,7 @@ types. No build machinery and no I/O beyond reading a file to hash it.
 
 Part of the MCUHome firmware framework — https://github.com/mcu-home/mcuhome-workbench
 """, content-type = "text/markdown" }
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = "Apache-2.0"
 authors = [{ name = "The MCUHome Contributors" }]
 keywords = ["zephyr", "matter", "thread", "home-assistant", "firmware"]

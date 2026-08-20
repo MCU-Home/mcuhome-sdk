@@ -122,7 +122,7 @@ in [builder-pipeline.md](../design/builder-pipeline.md) §9. The
 direction of that fixture has since inverted: originally the
 hand-written phase-1 tables were the golden file the generator had to
 reproduce; today `samples/matter-node/src/mcuhome_config.{c,h}` **is
-generator output**, committed, and `tests_py/test_generate.py`
+generator output**, committed, and `tests/python/test_generate.py`
 compares it byte for byte against fresh output. Either way around, the
 comparison is what keeps sample and contract in lockstep.
 
@@ -185,7 +185,7 @@ exercised with more than one endpoint.
   own tables/version bump later.
 - The phase-1 sample's tables double as the phase-2 codegen regression
   fixture, so the sample must be kept in lockstep with the contract —
-  enforced byte for byte by `tests_py/test_generate.py`.
+  enforced byte for byte by `tests/python/test_generate.py`.
 - The dev prototype required one manual re-commissioning after the
   topology change; no other user-facing devices existed yet, so this
   cost was paid once and does not recur.

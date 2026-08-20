@@ -13,7 +13,7 @@ program inside the container recomputes it without the workbench
 be identical everywhere is the *rule*, and the rule lives one package
 down, in :mod:`mcuhome.model.context` — both implementations are thin
 I/O shells over the same frozen vocabulary, and the golden vectors in
-``tests_py`` pin them against each other.
+``tests/python`` pin them against each other.
 
 Existing because of ADR 0024: the compiler ships inside the SDK package
 and runs in the build container, where the workbench neither exists nor

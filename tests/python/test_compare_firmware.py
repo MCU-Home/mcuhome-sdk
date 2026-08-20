@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "compare_firmware.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "compare_firmware.py"
 
 
 @pytest.fixture(scope="module")

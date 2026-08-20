@@ -21,7 +21,7 @@ from pathlib import Path
 
 from mcuhome.model import buildimage
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_the_image_tag_is_the_zephyr_pin_plus_a_revision() -> None:

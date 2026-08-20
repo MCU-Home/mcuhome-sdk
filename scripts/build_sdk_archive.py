@@ -87,7 +87,7 @@ until somebody names it here. The four that are out on purpose, because
 each looks includable: ``patches/`` (the program applies patches from
 the context, never from ``trees.sdk``, and the org patch set is applied
 at image build time), ``packaging/`` (nothing pip-installs this tree —
-the launcher puts the SDK root on ``PYTHONPATH``), ``tests_py/`` and
+the launcher puts the SDK root on ``PYTHONPATH``), ``tests/python/`` and
 ``tests/`` (no build-container consumer), and ``containers/`` (the image
 is a separate artifact of the same release, and the SDK is mounted
 *into* it).

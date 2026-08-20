@@ -6,7 +6,7 @@
  *
  * Internal header: this is not public API, it exists so the part of the
  * driver that has no transport dependency can be built and exercised on
- * the host (tests/entropy_ipc/). Everything transport-specific — the
+ * the host (tests/twister/entropy_ipc/). Everything transport-specific — the
  * ipc_service endpoint, the devicetree node, the SYS_INIT — lives in
  * entropy_mcuhome_ipc.c and reaches this layer through
  * @ref mcuhome_entropy_seed_source.

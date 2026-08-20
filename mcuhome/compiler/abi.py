@@ -243,7 +243,7 @@ its **children** get is built here and passed to them, which is a
 different thing from reading one — and it is built from nothing, exactly
 as the backend does for the other
 direction. That is what keeps this module off the exemption list of
-``tests_py/test_userpaths.py``.
+``tests/python/test_userpaths.py``.
 """
 
 from __future__ import annotations
@@ -279,7 +279,7 @@ from mcuhome.model.modelfile import read_model
 # run_invocation, and its runtime is what the SDK package declares — a
 # bare interpreter, no third-party packages. contextdir carries the YAML
 # emitter and pulls ruamel at import, which only the program's own
-# environment provides. tests_py/test_container_closure.py pins the
+# environment provides. tests/python/test_container_closure.py pins the
 # entry point's closure to stdlib plus mcuhome.
 if TYPE_CHECKING:
     from mcuhome.compiler.contextread import ContextVerification
@@ -2388,7 +2388,7 @@ def main(
     *env* is the environment a ``build``'s child processes start from, and
     it is **stated by whoever started this program, never read out of the
     process**. That distinction is the invariant
-    ``tests_py/test_userpaths.py`` enforces on every module here: one
+    ``tests/python/test_userpaths.py`` enforces on every module here: one
     process serves several sessions, and a call-time ``os.environ`` is
     what makes two of them answer each other's questions. A caller that
     states nothing gets children that run in exactly what §6.1 makes the
@@ -2486,6 +2486,6 @@ if __name__ == "__main__":  # pragma: no cover - the launcher's entry point
     # this program", and the environment it hands over is the image's
     # own — PATH with the toolchain and west, exactly what
     # :func:`main`'s docstring says the launcher owes its children.
-    # ``tests_py/test_userpaths.py`` exempts this guard by shape and
+    # ``tests/python/test_userpaths.py`` exempts this guard by shape and
     # pins the handover itself; library imports never execute it.
     raise SystemExit(main(sys.argv, env=dict(os.environ)))

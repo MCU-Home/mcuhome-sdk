@@ -9,7 +9,7 @@ and devicetree binding under [dts/bindings/](../dts/bindings/)).
 
 `entropy/` is split in two on purpose: `entropy_ipc_core.c` holds the DRBG
 and the seeded/unseeded state machine and knows nothing about IPC, so it
-builds and runs on the host ([`tests/entropy_ipc/`](../tests/entropy_ipc/));
+builds and runs on the host ([`tests/twister/entropy_ipc/`](../tests/entropy_ipc/));
 `entropy_mcuhome_ipc.c` is the transport plus the Zephyr driver plumbing.
 The seam between them (`struct mcuhome_entropy_seed_source`) is also where
 a different seed provider would be substituted — see ADR 0013 on blob

@@ -161,7 +161,7 @@ The Zephyr part is the `zephyr` revision pinned in
 [`west.yml`](../../west.yml); the revision counts rebuilds of the image
 for that same Zephyr release. The single source of truth for both is
 [`mcuhome/model/buildimage.py`](../../mcuhome/model/buildimage.py) — the builder, the CI
-workflow and this file all read the tag from there, and `tests_py/
+workflow and this file all read the tag from there, and `tests/python/
 test_container.py` asserts that it still agrees with `west.yml`.
 
 There is no `latest`: a build environment that changes under a stable

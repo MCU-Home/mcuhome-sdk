@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Debug output is load-bearing — lint for silently reduced diagnostics.
 
-Enforces the product-owner directive recorded in AGENTS.md ("Debug
+Enforces the product-owner directive ("Debug
 output is load-bearing"): no config fragment in this repository may
 disable or reduce debug output silently. The precedent is ADR 0015's RTT
 amendment — an OTA swap failure whose one explanatory MCUboot log line
@@ -21,7 +21,7 @@ What it scans:
 
 What it skips (host-side or generated, annotating them would be wrong):
 
-* ``tests_py/`` — pytest fixtures and the golden files, which are
+* ``tests/python/`` — pytest fixtures and the golden files, which are
   byte-compared generator output and must never be hand-edited; their
   source of truth is ``mcuhome/model/registry.py``, which IS scanned;
 * ``docs/``, ``containers/``, ``scripts/``, ``patches/``, ``.github/``,
@@ -32,7 +32,7 @@ the directly preceding line::
 
     # debug-output: approved <short reason, or where the decision is recorded>
 
-The marker states a decision; it never creates one (AGENTS.md).
+The marker states a decision; it never creates one.
 
 Exit status: 0 when clean, 1 with findings (one ``file:line`` per
 finding), 2 on usage errors.
@@ -89,13 +89,20 @@ EXCLUDE_DIRS = {
     "docs",
     "patches",
     "scripts",
-    "tests_py",
 }
+
+#: The same, for directories that only mean anything as a path. The
+#: pytest fixtures and golden files sit under ``tests/``, whose twister
+#: suites are real configuration and stay in scope.
+EXCLUDE_PATHS = ("tests/python",)
 
 
 def _excluded(path: Path, root: Path) -> bool:
-    parts = path.relative_to(root).parts[:-1]
-    return any(part in EXCLUDE_DIRS or part.startswith("twister-out") for part in parts)
+    relative = path.relative_to(root)
+    parts = relative.parts[:-1]
+    if any(part in EXCLUDE_DIRS or part.startswith("twister-out") for part in parts):
+        return True
+    return any(relative.as_posix().startswith(f"{prefix}/") for prefix in EXCLUDE_PATHS)
 
 
 def _approved(lines: list[str], index: int) -> bool:
@@ -134,7 +141,7 @@ def main(argv: list[str]) -> int:
     if not findings:
         return 0
 
-    print("Silently reduced debug output (AGENTS.md: 'Debug output is load-bearing'):\n")
+    print("Silently reduced debug output ('Debug output is load-bearing'):\n")
     for finding in findings:
         print(f"  {finding}")
     print(

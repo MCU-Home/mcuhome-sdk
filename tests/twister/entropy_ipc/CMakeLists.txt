@@ -3,7 +3,7 @@
 #
 # native_sim twister suite for the entropy driver's DRBG and state
 # machine (drivers/entropy/entropy_ipc_core.c) plus the shared wire
-# framing. Same trick as tests/channel and tests/matter_tables: pull the
+# framing. Same trick as tests/twister/channel and tests/twister/matter_tables: pull the
 # source in directly instead of enabling the mcuhome Zephyr module.
 #
 # CONFIG_MCUHOME_ENTROPY_IPC depends on IPC_SERVICE, which needs a real
