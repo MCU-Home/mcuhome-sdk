@@ -9,7 +9,7 @@ MCUHome is an open-source alternative to ESPHome: users describe a smart
 home device in YAML, the builder produces Zephyr-based firmware. Networking
 uses CoAP and Matter (no custom API protocol); transports are WiFi and
 Thread, including Sleepy End Devices (SED). The web interface lives in a
-separate repository ([mcu-home/dashboard](https://github.com/mcu-home/dashboard)).
+separate repository ([mcu-home/mcuhome-ui](https://github.com/mcu-home/mcuhome-ui)).
 
 **Current phase.** Phase 1 (firmware runtime: tables-contract framework,
 channel layer, netcore entropy, BMP180 two-endpoint sample) is complete
@@ -36,8 +36,8 @@ decision.
 | `mcuhome-sdk.json`, `bin/generate` | The SDK package's §6.1 interface: the metadata file names `bin/generate` as the code-generation entry point a build container invokes as a child process (body: `mcuhome/compiler/sdkentry.py`) |
 | `zephyr/module.yml` | Makes this repo consumable as a Zephyr module |
 | `CMakeLists.txt`, `Kconfig` | Zephyr module build entry points |
-| `mcuhome/` | Python source tree — a PEP 420 **namespace** with one subpackage per distribution built from this repo (ADR 0020): `model/` the shared vocabulary, `compiler/` stages 4-5 plus the invocation-ABI adapter. `compiler/` is the program that runs **inside** a build container; the orchestrator that drives one from the outside is the workbench's, so nothing here starts a container. No `__init__.py` at this level and no module directly under it. The namespace's third subpackage, `workbench/` (stages 1-3 plus the build methods and signing — `mcuhome.workbench.api` is its supported surface), lives in its own repo, [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome). The `mcuhome` command line is a thin shell in its own repo too ([mcu-home/cli](https://github.com/mcu-home/cli)) |
-| `packaging/` | One project file per distribution built from this repo — `mcuhome-model`, `mcuhome-compiler` — each shipping exactly its subpackage out of the shared tree above. The version is read from `mcuhome/model/__init__.py`, so both carry one number (ADR 0020 decision 8); `mcuhome-workbench` is a third distribution of the same namespace, published from [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome) |
+| `mcuhome/` | Python source tree — a PEP 420 **namespace** with one subpackage per distribution built from this repo (ADR 0020): `model/` the shared vocabulary, `compiler/` stages 4-5 plus the invocation-ABI adapter. `compiler/` is the program that runs **inside** a build container; the orchestrator that drives one from the outside is the workbench's, so nothing here starts a container. No `__init__.py` at this level and no module directly under it. The namespace's third subpackage, `workbench/` (stages 1-3 plus the build methods and signing — `mcuhome.workbench.api` is its supported surface), lives in its own repo, [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench). The `mcuhome` command line is a thin shell in its own repo too ([mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli)) |
+| `packaging/` | One project file per distribution built from this repo — `mcuhome-model`, `mcuhome-compiler` — each shipping exactly its subpackage out of the shared tree above. The version is read from `mcuhome/model/__init__.py`, so both carry one number (ADR 0020 decision 8); `mcuhome-workbench` is a third distribution of the same namespace, published from [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench) |
 | `components/` | Components: Python schema + C sources side by side |
 | `app/` | The generic application main every generated device shares — **not** a buildable app |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree hardware support |
@@ -46,7 +46,7 @@ decision.
 | `lib/` | Portable, `native_sim`-testable libraries |
 | `compat/` | Headers that bridge a version mismatch between two pinned upstreams (today: mbedTLS 4's moved legacy headers, for connectedhomeip). Each entry names its own deletion condition — see `compat/README.md` |
 | `tests/`, `samples/` | Twister suites and samples |
-| `tests_py/` | pytest suite of this repo's two Python packages — the SDK half; the workbench's tests live with it in [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome) (kept apart from twister's `tests/`) |
+| `tests_py/` | pytest suite of this repo's two Python packages — the SDK half; the workbench's tests live with it in [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench) (kept apart from twister's `tests/`) |
 | `containers/build-container/` | The build-container image (ADR 0007) — the contract's reference implementation |
 | `scripts/` | Dev tooling, future custom west extension commands |
 | `docs/adr/` | Architecture decision records (MADR-style) — immutable finals at the top level, living drafts in `draft/`; lifecycle in `docs/adr/README.md` (ADR 0021) |
@@ -156,14 +156,14 @@ west twister -T mcuhome-sdk/tests --integration --inline-logs -v
 
 # Builder (Python): install once, then run its tests (tests_py/) — no
 # Zephyr and no west workspace needed, ~1 s. The `mcuhome` *command*
-# comes from the sibling cli repo (github.com/mcu-home/cli, cloned next
+# comes from the sibling cli repo (github.com/mcu-home/mcuhome-cli, cloned next
 # to this one); the workbench (build methods, signing) comes the same way
-# from the sibling mcu-home/mcuhome repo. The two distributions below are
+# from the sibling mcu-home/mcuhome-workbench repo. The two distributions below are
 # this repo's own — what the workbench and the compiler's container path
 # call into.
 #
 # Two paths and no `.[dev]`: the repository root ships no distribution
-# any more (ADR 0020 decision 2 reserves the plain name `mcuhome` for the
+# any more (the command line ships as `mcuhome-cli`; the plain name
 # command), and an aggregate that pulled the two from an index would
 # undo the editable installs it was asked for. The root pyproject.toml
 # says so at the top and keeps the tool configuration.
@@ -173,11 +173,11 @@ pytest
 
 # Optional: the `mcuhome` command, for driving the SDK by hand. Either
 # from sibling checkouts (cloned next to this repo) …
-pip install -e ../mcuhome -e ../cli
+pip install -e ../mcuhome-workbench -e ../mcuhome-cli
 # … or, working on this repository alone, straight from git — pip
 # clones internally, you keep exactly one checkout:
-pip install "mcuhome @ git+https://github.com/mcu-home/cli" \
-  "mcuhome-workbench[remote,generate] @ git+https://github.com/mcu-home/mcuhome"
+pip install "mcuhome @ git+https://github.com/mcu-home/mcuhome-cli" \
+  "mcuhome-workbench[remote,generate] @ git+https://github.com/mcu-home/mcuhome-workbench"
 
 # scripts/build_sdk_archive.py runs from this venv too — that is what
 # the zstandard above is for; there is no system-python path.
@@ -187,7 +187,7 @@ mcuhome device validate docs/design/examples/00-bmp180-two-endpoints.yaml
 
 # The machine-readable surface (cli ADR 0003/0004; -o json for output format):
 # -o json on validate/build, the registry and the main.yaml JSON Schema as data, and
-# a scaffold for a new device. `mcuhome.workbench.api` (mcu-home/mcuhome)
+# a scaffold for a new device. `mcuhome.workbench.api` (mcu-home/mcuhome-workbench)
 # is the same thing in process.
 mcuhome device validate <device> -o json
 mcuhome schema registry

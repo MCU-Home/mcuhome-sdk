@@ -1181,7 +1181,7 @@ three subfields and no classification of its own.
   unchanged, could succeed. A backend MUST NOT relay it as the session
   protocol's `retryable` — that value is the server's, derived from the
   server's own registry precisely so the promise cannot be forged
-  (`build-server/mcuhome_buildserver/errors.py:13-17`, `:199-216`), and
+  (`build-server/mcuhome/buildserver/errors.py:13-17`, `:199-216`), and
   the two answer different questions.
 - **`error.message` is untrusted text**, and the only untrusted-text
   field in the document: backends and clients MUST NOT render it raw

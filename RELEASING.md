@@ -41,7 +41,7 @@ and its `.sha256` to the GitHub release.
 The package host does not watch this repository; publishing is a
 deliberate act, because what it records is permanent.
 
-> **github.com/mcu-home/packages.mcuhome.org → Actions →
+> **github.com/mcu-home/mcuhome-packagetool → Actions →
 > "Publish a package" → Run workflow**
 > `source` = `sdk`, `tag` = `v0.1.0`
 

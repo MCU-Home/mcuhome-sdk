@@ -4,7 +4,7 @@
 # The SDK package as a release artifact: `scripts/build_sdk_archive.py`
 # builds it from the tagged *commit* — never a working tree — and it is
 # attached to the GitHub release of that tag. The package host
-# (mcu-home/packages.mcuhome.org) then pulls it from here and records it
+# (mcu-home/mcuhome-packagetool) then pulls it from here and records it
 # in a signed index; nothing in this repository pushes anywhere, and no
 # cross-repository credential exists.
 #

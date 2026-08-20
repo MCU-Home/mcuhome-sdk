@@ -10,7 +10,7 @@ module, the C runtime, and the `mcuhome.model`/`mcuhome.compiler`
 packages it publishes. Project-wide ADRs and the tools-repo/workbench
 ADRs (0017-0024 among them, including the split itself, ADR 0024) live
 in the flagship repository,
-[mcu-home/mcuhome](https://github.com/mcu-home/mcuhome/tree/main/docs/adr).
+[mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench/tree/main/docs/adr).
 Numbers are **one project-wide sequence shared by both repositories** —
 gaps in the table below are not missing files, they are ADRs that live
 on the other side.
@@ -40,9 +40,9 @@ Statuses: `draft` (in `draft/`), `accepted`, `deferred`,
 `superseded by NNNN`.
 
 The full lifecycle rule is ADR 0021, which lives in the flagship repo:
-[mcu-home/mcuhome, docs/adr/0021-draft-first-adr-lifecycle.md](https://github.com/mcu-home/mcuhome/blob/main/docs/adr/0021-draft-first-adr-lifecycle.md).
+[mcu-home/mcuhome-workbench, docs/adr/0021-draft-first-adr-lifecycle.md](https://github.com/mcu-home/mcuhome-workbench/blob/main/docs/adr/0021-draft-first-adr-lifecycle.md).
 Project-wide decisions are recorded there; dashboard-specific decisions
-live in [mcu-home/dashboard](https://github.com/mcu-home/dashboard).
+live in [mcu-home/mcuhome-ui](https://github.com/mcu-home/mcuhome-ui).
 
 ## Final ADRs (this repo)
 
@@ -71,5 +71,5 @@ live in [mcu-home/dashboard](https://github.com/mcu-home/dashboard).
 Numbers 0001-0003, 0005 and 0017-0024 are project-wide or tools/workbench
 ADRs (repo topology, packaging, SemVer policy, the remote-build
 architecture, the SDK/tools split itself) and live in
-[mcu-home/mcuhome](https://github.com/mcu-home/mcuhome/tree/main/docs/adr)
+[mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench/tree/main/docs/adr)
 — both its finalized top level and its `draft/`.

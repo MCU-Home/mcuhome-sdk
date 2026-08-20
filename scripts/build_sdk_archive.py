@@ -214,7 +214,7 @@ class SdkArchive:
 def package_filename(version: str) -> str:
     """What the package is called — restated from the only implemented consumer.
 
-    ``mcuhome_buildserver.sdkstore.package_filename`` builds the same
+    ``mcuhome.buildserver.sdkstore.package_filename`` builds the same
     string to *find* a candidate in a source directory, and the two are
     kept apart on purpose: this repository must not import the build
     server to name its own artifact, and a package named anything else is
