@@ -69,7 +69,7 @@
  * `_ms32` user-defined literal suffix.
  */
 #define MCUHOME_MATTER_MS32_(x) x##_ms32
-#define MCUHOME_MATTER_MS32(x) MCUHOME_MATTER_MS32_(x)
+#define MCUHOME_MATTER_MS32(x)  MCUHOME_MATTER_MS32_(x)
 
 #define CHIP_CONFIG_MRP_LOCAL_ACTIVE_RETRY_INTERVAL                                                \
 	MCUHOME_MATTER_MS32(CONFIG_MCUHOME_MATTER_MRP_ACTIVE_RETRY_MS)

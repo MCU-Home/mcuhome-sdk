@@ -290,8 +290,8 @@ static int watchdog_start(void)
 	 * only decides what happens on a board whose bootloader left the
 	 * watchdog alone. */
 	rc = wdt_setup(watchdog, IS_ENABLED(CONFIG_MCUHOME_WATCHDOG_PAUSE_ON_DEBUG)
-				  ? WDT_OPT_PAUSE_HALTED_BY_DBG
-				  : 0);
+					 ? WDT_OPT_PAUSE_HALTED_BY_DBG
+					 : 0);
 	if (rc < 0) {
 		LOG_ERR("wdt_setup failed: %d", rc);
 		watchdog_channel = -1;

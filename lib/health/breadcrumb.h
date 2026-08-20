@@ -31,8 +31,7 @@ void mcuhome_health_breadcrumb_record(unsigned int reason, const struct arch_esf
 
 #else /* !CONFIG_MCUHOME_CRASH_BREADCRUMB */
 
-static inline void mcuhome_health_breadcrumb_record(unsigned int reason,
-						    const struct arch_esf *esf)
+static inline void mcuhome_health_breadcrumb_record(unsigned int reason, const struct arch_esf *esf)
 {
 	(void)reason;
 	(void)esf;

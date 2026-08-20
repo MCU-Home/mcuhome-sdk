@@ -30,7 +30,7 @@ extern "C" {
 #endif
 
 /** A fatal error was recorded and has not been reported yet. */
-#define MCUHOME_BREADCRUMB_LIVE 0x42D0FA7AU
+#define MCUHOME_BREADCRUMB_LIVE     0x42D0FA7AU
 /** The record was reported at boot; kept only so the fault count
  *  survives until the next fault or until power is lost. */
 #define MCUHOME_BREADCRUMB_REPORTED 0x42D05EE2U
@@ -42,8 +42,8 @@ extern "C" {
  *  before this record is written. PC, LR and the reason come from the
  *  exception stack frame and are always real. */
 struct mcuhome_crash_breadcrumb {
-	uint32_t state; /**< MCUHOME_BREADCRUMB_LIVE / _REPORTED. */
-	uint32_t seq;   /**< Fault count since this RAM last lost power. */
+	uint32_t state;  /**< MCUHOME_BREADCRUMB_LIVE / _REPORTED. */
+	uint32_t seq;    /**< Fault count since this RAM last lost power. */
 	uint32_t reason; /**< The k_fatal_error reason code. */
 	uint32_t pc;
 	uint32_t lr;
@@ -59,8 +59,8 @@ struct mcuhome_crash_breadcrumb {
  *  cryptographic and nothing needs to be. */
 static inline uint32_t mcuhome_breadcrumb_check(const struct mcuhome_crash_breadcrumb *bc)
 {
-	const uint32_t words[8] = {bc->state, bc->seq, bc->reason, bc->pc,
-				   bc->lr,    bc->cfsr, bc->hfsr,  bc->bfar};
+	const uint32_t words[8] = {bc->state, bc->seq,  bc->reason, bc->pc,
+				   bc->lr,    bc->cfsr, bc->hfsr,   bc->bfar};
 	uint32_t check = 0x9E3779B9U;
 
 	for (unsigned int i = 0; i < 8U; i++) {
