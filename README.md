@@ -64,22 +64,36 @@ own west workspace, which is how an application consumes the C runtime directly.
 | `samples/`, `tests/` | Sample firmware, the Python suite and the twister suites |
 | `patches/` | Patches applied to the pinned upstream trees |
 
-## Working on this repository
+## Development — how to work on this repository
 
-The Python side needs Python 3.13 and the two distributions installed editable.
-The firmware side needs a west workspace — `west init -m
-https://github.com/mcu-home/mcuhome-sdk && west update` — and the Zephyr SDK,
-most simply by running twister inside the build-environment image.
+This repository has its own virtual environment in `.venv/`; nothing is
+installed into the system Python or into another repository's environment.
+`bin/` holds the user-facing entry points, `scripts/` the development
+tooling: `scripts/test` and `scripts/lint` dispatch the checks — `all` runs
+every one, `list` names them, `<name>` runs one — and each check is its own
+wrapper in `scripts/test.d/` or `scripts/lint.d/`. The wrappers select
+`.venv` themselves (never activate one by hand) and are exactly what CI
+runs, one job per check.
+
+Needs Python 3.13 for `packaging/model` and `packaging/compiler`, and — only
+for `scripts/test twister` — a west workspace (`west init -m
+https://github.com/mcu-home/mcuhome-sdk && west update`) plus a container
+runtime and the pinned build-environment image. C sources follow
+`.clang-format`, checked with a pinned clang-format binary.
 
 ```sh
-pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0' zstandard
-ruff check . && ruff format --check . && pytest -q tests/python
-west twister -T mcuhome-sdk/tests/twister --integration
+python3.13 -m venv .venv && .venv/bin/pip install \
+  -e ./packaging/model -e ./packaging/compiler --group dev
 ```
 
-C sources are formatted with clang-format. Continuous integration runs those
-checks on every change, and builds the build environment and the reference
-Matter device on both amd64 and arm64.
+```sh
+scripts/test all
+scripts/lint all
+```
+
+The rules that hold across every MCUHome repository — coding standards,
+commits, licensing — are in the organization's
+[contributing guide](https://github.com/mcu-home/.github/blob/main/CONTRIBUTING.md).
 
 ## Security
 
