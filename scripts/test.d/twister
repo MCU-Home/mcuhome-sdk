@@ -9,7 +9,7 @@
 # workspace cache, and `west init`/`west update` inside the container all
 # need network access or publish rights this wrapper does not assume. A
 # missing prerequisite is reported as a failure with what to prepare,
-# never done silently (PO decision D) and never a pull this wrapper
+# never done silently and never a pull this wrapper
 # performs itself.
 #
 # The west workspace top directory — the T2 workspace: `.west/`,
