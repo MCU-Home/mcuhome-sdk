@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The lint gate: ruff check, ruff format --check, and — because a pinned
+# clang-format binary is runnable locally via the `clang-format` PyPI
+# wheel — the same clang-format check CI runs, over every tracked C
+# source. Run from this repository's own .venv; extra arguments are
+# passed through to the two ruff invocations.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+venv="$root/.venv"
+
+if [ ! -x "$venv/bin/python" ]; then
+  echo "scripts/lint: no .venv found. Create it first: python3.13 -m venv .venv && .venv/bin/pip install -e ./packaging/model -e ./packaging/compiler ruff clang-format==22.1.8 (see README, \"Working on this repository\")." >&2
+  exit 1
+fi
+
+cd "$root"
+status=0
+"$venv/bin/python" -m ruff check . "$@" || status=$?
+"$venv/bin/python" -m ruff format --check . "$@" || status=$?
+
+if [ -x "$venv/bin/clang-format" ]; then
+  mapfile -t c_sources < <(git ls-files '*.c' '*.h' '*.cpp' '*.hpp')
+  if [ "${#c_sources[@]}" -gt 0 ]; then
+    "$venv/bin/clang-format" --dry-run --Werror "${c_sources[@]}" || status=$?
+  fi
+else
+  echo "scripts/lint: clang-format not installed in .venv — skipping the C format check. Install it with: .venv/bin/pip install clang-format==22.1.8" >&2
+fi
+
+exit "$status"

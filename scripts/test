@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The test gate: the Python suite in tests/python/ only, run from this
+# repository's own .venv. Deliberately NOT twister and NOT a firmware
+# build — no canonical build entry point exists yet (CLAUDE.md), and
+# twister needs the Zephyr SDK and the build-environment image, which
+# this script does not assume. Run `west twister -T
+# mcuhome-sdk/tests/twister --integration` yourself for that suite (see
+# README, "Working on this repository"). Extra arguments are passed
+# through to pytest.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+venv="$root/.venv"
+
+if [ ! -x "$venv/bin/python" ]; then
+  echo "scripts/test: no .venv found. Create it first: python3.13 -m venv .venv && .venv/bin/pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0' zstandard (see README, \"Working on this repository\")." >&2
+  exit 1
+fi
+
+cd "$root"
+exec "$venv/bin/python" -m pytest -q tests/python "$@"

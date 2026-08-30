@@ -3,13 +3,13 @@
 #
 # CI for the MCUHome firmware framework. Four gates:
 #
-#   lint     — the same ruff/REUSE/debug-output checks
-#              ruff runs. Needs nothing but
-#              Python.
-#   pytest   — the Python suite in tests/python/, the fast half of the test
-#              strategy. Needs nothing but Python either, which is why
-#              running it nowhere automated was never a cost worth
-#              paying.
+#   lint     — scripts/lint (ruff, plus clang-format when the job
+#              installed it) and the debug-output policy check, run from
+#              this job's own .venv. Needs nothing but Python.
+#   pytest   — scripts/test (the Python suite in tests/python/, the fast
+#              half of the test strategy), same .venv convention. Needs
+#              nothing but Python either, which is why running it
+#              nowhere automated was never a cost worth paying.
 #   twister  — the Zephyr test suites in tests/, compiled and run inside
 #              the MCUHome builder image (ADR 0007). The image is the same
 #              one `mcuhome device build` uses, which is the point of having one:
@@ -59,21 +59,26 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install lint tools
-        run: python -m pip install --disable-pip-version-check ruff==0.16.1
+      # scripts/lint selects this job's own .venv, so it is created
+      # first, the same way a developer creates one locally. clang-format
+      # goes in here too — scripts/lint runs it when it finds the binary
+      # — even though the separate format-clang job below already checks
+      # the same thing directly; see that job's head comment.
+      - name: Create .venv and install lint tools
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check ruff==0.16.1 clang-format==22.1.8
 
-      - name: ruff check
-        run: ruff check .
-
-      - name: ruff format --check
-        run: ruff format --check .
-
+      - name: scripts/lint
+        run: scripts/lint
 
       # Debug output is load-bearing: config fragments must
       # not reduce diagnostics without a recorded decision and its
-      # `# debug-output: approved <reason>` marker.
+      # `# debug-output: approved <reason>` marker. Not part of
+      # scripts/lint: the README's "Working on this repository" gate
+      # does not name this check, so it stays a CI-only step.
       - name: Debug-output policy
-        run: python scripts/check_debug_output.py
+        run: .venv/bin/python scripts/check_debug_output.py
 
   # The Python suite in tests/python/ — the fast half of the test strategy
   # (docs/design/builder-pipeline.md §9), which until now ran nowhere
@@ -106,15 +111,16 @@ jobs:
       # needs it and so does the test over it. It used to arrive through
       # mcuhome-compiler, which declared it for the orchestrator — and
       # the orchestrator is the workbench's now.
-      - name: Install the two distributions
+      - name: Create .venv and install the two distributions
         run: |
-          python -m pip install --disable-pip-version-check \
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check \
             -e ./packaging/model \
             -e ./packaging/compiler \
             'pytest>=8.0' zstandard
 
-      - name: pytest
-        run: pytest -q -rs
+      - name: scripts/test
+        run: scripts/test -rs
 
   test-twister:
     name: Test (twister)
@@ -1095,6 +1101,13 @@ jobs:
           done
           exit $status
 
+  # This job calls the tool directly rather than scripts/lint (which now
+  # also runs clang-format — 2026-08-30 unify-dev-baseline task): the
+  # task's CI change was scoped to jobs calling ruff/pytest/pnpm
+  # directly, and this one calls clang-format, not one of those. Kept
+  # as its own job so a C-only breakage is reported as "Format
+  # (clang-format)" rather than folded into "Lint (ruff)"; the overlap
+  # with scripts/lint's own clang-format step is a known duplication.
   format-clang:
     name: Format (clang-format)
     runs-on: ubuntu-latest
