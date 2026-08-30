@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Zephyr test suites in tests/, run inside the MCUHome builder image —
+# mirrors ci-test.yml's test-twister job's container invocation. What
+# that job does BEFORE calling this wrapper is not repeated here: logging
+# in to ghcr.io, pulling or building the image, restoring the west-
+# workspace cache, and `west init`/`west update` inside the container all
+# need network access or publish rights this wrapper does not assume. A
+# missing prerequisite is reported as a failure with what to prepare,
+# never done silently (PO decision D) and never a pull this wrapper
+# performs itself.
+#
+# The west workspace top directory — the T2 workspace: `.west/`,
+# `zephyr/`, `modules/`, `bootloader/` beside this repository checked out
+# as `mcuhome-sdk/`, exactly as ci-test.yml's test-twister job lays it
+# out — is passed as this wrapper's first argument or in the
+# MCUHOME_SDK_WEST_WORKSPACE environment variable, mirroring the
+# buildserver's test.d/e2e (MCUHOME_E2E_SDK_DIR) precedent. Extra
+# arguments are passed through to `west twister`, so `-j` stays
+# overridable (twister keeps the last occurrence of a repeated option).
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+venv="$root/.venv"
+
+if [ ! -x "$venv/bin/python" ]; then
+  echo "test.d/twister: no .venv found. Create it first: python3.13 -m venv .venv && .venv/bin/pip install -e ./packaging/model -e ./packaging/compiler --group dev (see README)." >&2
+  exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  echo "test.d/twister: no reachable container runtime. Install/start docker first." >&2
+  exit 1
+fi
+
+if ! image="$("$venv/bin/python" -c "
+import sys
+sys.path.insert(0, '$root')
+from mcuhome.model.buildimage import IMAGE
+print(IMAGE)
+" 2>/dev/null)"; then
+  echo "test.d/twister: could not resolve the builder image reference from mcuhome.model.buildimage." >&2
+  exit 1
+fi
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  echo "test.d/twister: build-container image '$image' is not present locally. Pull or build it first (this wrapper never pulls it) — ci-test.yml's test-twister job does this before calling scripts/test twister." >&2
+  exit 1
+fi
+
+workspace="${1:-${MCUHOME_SDK_WEST_WORKSPACE:-}}"
+if [ -z "$workspace" ]; then
+  echo "test.d/twister: no west workspace directory given. Pass it as the first argument or set MCUHOME_SDK_WEST_WORKSPACE (the T2 workspace top directory holding .west/, zephyr/, modules/, bootloader/ and this repository checked out as mcuhome-sdk/ — ci-test.yml's test-twister job prepares it with west init/west update before calling this wrapper)." >&2
+  exit 1
+fi
+[ $# -gt 0 ] && shift
+
+if [ ! -d "$workspace/.west" ]; then
+  echo "test.d/twister: '$workspace' has no .west/ — the west workspace is not initialized. Run west init -l mcuhome-sdk && west update inside it first, as ci-test.yml's test-twister job does." >&2
+  exit 1
+fi
+
+if [ ! -e "$workspace/mcuhome-sdk" ]; then
+  echo "test.d/twister: '$workspace/mcuhome-sdk' does not exist — the west workspace has no manifest-repo checkout at the path twister expects." >&2
+  exit 1
+fi
+
+docker run --rm --user "$(id -u):$(id -g)" \
+  --volume "$workspace:$workspace" --workdir "$workspace" \
+  "$image" \
+  west twister -T mcuhome-sdk/tests/twister --integration --inline-logs -v -j 2 "$@"

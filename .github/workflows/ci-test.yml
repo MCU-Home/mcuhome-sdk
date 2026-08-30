@@ -1,0 +1,215 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Test gate for the MCUHome firmware framework: one job per wrapper in
+# scripts/test.d/ (pytest, twister), plus a pre-check that every wrapper
+# has a job here.
+#
+#   test-pytest  — the Python suite in tests/python/ (the fast half of
+#                  the test strategy, docs/design/builder-pipeline.md
+#                  §9): model, compiler, the golden generator output, the
+#                  container conformance tests. `-rs` keeps any skip loud
+#                  in the log rather than a dot.
+#   test-twister — the Zephyr test suites in tests/, compiled and run
+#                  inside the MCUHome builder image (ADR 0007): the same
+#                  image `mcuhome device build` uses, which is the point
+#                  of having one. Everything scripts/test.d/twister
+#                  cannot do for itself — logging in to ghcr.io, pulling
+#                  or building the image, restoring the west-workspace
+#                  cache, `west init`/`west update` — stays a preparation
+#                  step in this job, exactly as it ran before the wrapper
+#                  existed; see that wrapper's head comment for what it
+#                  checks once handed a prepared workspace.
+#
+# --group needs pip >= 25.1; test-pytest upgrades pip in its fresh .venv
+# before using it.
+#
+# All actions are pinned to commit SHAs, not tags.
+
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-gates:
+    name: Check gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: scripts/test check-ci
+        run: scripts/test check-ci
+
+  test-pytest:
+    name: Test (pytest)
+    needs: check-gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # The two editable installs this repository publishes since the
+      # ADR 0024 split (the workbench lives in mcu-home/mcuhome-workbench),
+      # and no aggregate distribution over them (ADR 0020 decision 2 and
+      # the head comment of the root pyproject.toml). The dev tools are a
+      # PEP 735 dependency group (--group dev), which needs pip >= 25.1;
+      # upgrade first.
+      - name: Create .venv and install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check -U pip
+          .venv/bin/pip install --disable-pip-version-check \
+            -e ./packaging/model \
+            -e ./packaging/compiler \
+            --group dev
+
+      - name: scripts/test pytest
+        run: scripts/test pytest -rs
+
+  test-twister:
+    name: Test (twister)
+    needs: check-gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Pull only. Publishing is the `image` job's business since r11:
+      # a multi-architecture image is published as an index over two
+      # per-architecture manifests, and neither of the jobs that *use* an
+      # image is in a position to compose one.
+      packages: read
+    steps:
+      # The checkout goes one level down: this repository is the west
+      # manifest repository of a T2 workspace, and the workspace top
+      # directory (GITHUB_WORKSPACE, here) must not be a git repository.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: mcuhome-sdk
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Create .venv
+        run: |
+          cd mcuhome-sdk
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check -U pip
+
+      # One source of truth for the image name: mcuhome/model/buildimage.py
+      # carries the Zephyr release and the image revision, this job tags
+      # what it says, and a workbench resolves the very same string when a
+      # developer runs `mcuhome device build`. Importing it needs no
+      # third-party package — that module is a handful of constants, on
+      # purpose.
+      #
+      # The moving tags (aliases) are how a build environment is found:
+      # a client picks the Zephyr release it needs and the publisher says
+      # which revision of it he currently recommends through the moving tags.
+      - name: Resolve the builder image reference
+        id: image
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import sys
+          sys.path.insert(0, "mcuhome-sdk")
+          from mcuhome.model.buildimage import (
+              IMAGE,
+              IMAGE_REPOSITORY,
+              ZEPHYR_RELEASE,
+              aggregate_tags,
+              latest_tag,
+          )
+          print(f"reference={IMAGE}")
+          moving = (latest_tag(ZEPHYR_RELEASE), *aggregate_tags(ZEPHYR_RELEASE))
+          print("aliases=" + " ".join(f"{IMAGE_REPOSITORY}:{tag}" for tag in moving))
+          PY
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # "Has the image changed?" is answered by asking the registry, not by
+      # diffing the Dockerfile: the tag *is* the content identity
+      # (zephyr-<line>-r<revision>), so a tag that does not exist yet means
+      # an image input changed and its revision was bumped — and a bump
+      # that somebody forgot fails loudly here instead of quietly testing
+      # against a stale environment. Since r3 the image inputs are
+      # containers/build-container/ AND west.yml AND patches/, because the image
+      # bakes a west workspace with the patch set applied.
+      - name: Pull the builder image, or build it
+        id: builder
+        run: |
+          reference='${{ steps.image.outputs.reference }}'
+          if docker pull --quiet "$reference"; then
+            echo "Using the published image."
+          else
+            echo "::notice::$reference is not published yet — building it."
+            # The context is the repository, not containers/build-container/:
+            # since r3 the image bakes a west workspace, so west.yml
+            # and patches/ are image inputs too.
+            docker build --tag "$reference" \
+              --file mcuhome-sdk/containers/build-container/Dockerfile mcuhome-sdk
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Keyed on west.yml alone: that file is the complete description of
+      # what `west update` produces. Zephyr and the modules are fetched
+      # shallow and narrow, which is what keeps this cache small enough to
+      # be worth having.
+      #
+      # The path list must cover EVERY directory west creates, because a
+      # cache hit skips `west update` entirely: a project the cache did
+      # not carry is then simply absent from the workspace. That is not
+      # hypothetical — mcuboot lands in bootloader/, the original list
+      # stopped at modules/, and the first warm-cache run after the
+      # ota_staging suite appeared failed on a missing
+      # bootutil/bootutil_public.h (flash_img includes it via
+      # CONFIG_IMG_MANAGER). The `west-2` segment versions the path set:
+      # bumping it retires caches saved with the old, incomplete list,
+      # which a key based on west.yml alone would happily restore.
+      - name: Restore the west workspace
+        id: west-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .west
+            zephyr
+            modules
+            bootloader
+          key: west-2-${{ runner.os }}-${{ hashFiles('mcuhome-sdk/west.yml') }}
+
+      # Without the Matter SDK: every suite in tests/ is CHIP-free by
+      # design (ADR 0014, and the reason tests/twister/matter_tables/ tests the
+      # table validator rather than the runtime). Skipping the `matter`
+      # group keeps a multi-gigabyte clone with submodules out of CI.
+      - name: Initialize the west workspace
+        if: steps.west-cache.outputs.cache-hit != 'true'
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$PWD:$PWD" --workdir "$PWD" \
+            '${{ steps.image.outputs.reference }}' \
+            sh -euc '
+              west init -l mcuhome-sdk
+              west config manifest.group-filter -- -matter
+              west update --narrow -o=--depth=1
+            '
+
+      - name: scripts/test twister
+        run: mcuhome-sdk/scripts/test twister "$PWD"

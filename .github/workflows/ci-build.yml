@@ -1,37 +1,36 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# CI for the MCUHome firmware framework. Four gates:
+# Build jobs for the MCUHome firmware framework, moved verbatim out of
+# the former ci.yml (job bodies unchanged, only the file they live in):
 #
-#   lint     — scripts/lint (ruff, plus clang-format when the job
-#              installed it) and the debug-output policy check, run from
-#              this job's own .venv. Needs nothing but Python.
-#   pytest   — scripts/test (the Python suite in tests/python/, the fast
-#              half of the test strategy), same .venv convention. Needs
-#              nothing but Python either, which is why running it
-#              nowhere automated was never a cost worth paying.
-#   twister  — the Zephyr test suites in tests/, compiled and run inside
-#              the MCUHome builder image (ADR 0007). The image is the same
-#              one `mcuhome device build` uses, which is the point of having one:
-#              "passes in CI" and "builds on my machine" mean the same
-#              thing or the container strategy is not worth its weight.
-#   matter   — one real Matter firmware, built end to end the way a user
-#              builds one: patched west projects, the builder image, the
-#              generator, `mcuhome device build`. The expensive gate, and the
-#              only one that touches the Matter SDK at all; it runs only
-#              when something that can break it changed. `matter-gate`
-#              below decides that, and the head comment of `matter` says
-#              why the job exists.
+#   build-image         — the build environment, published as a
+#                          multi-architecture image (ADR 0007).
+#   publish-image-index  — the OCI index over the two per-architecture
+#                          images build-image pushes.
+#   gate-matter          — path-based trigger deciding whether
+#                          build-firmware needs to run.
+#   build-firmware        — one real Matter firmware, built end to end
+#                          the way a user builds one.
+#   compare-firmware      — does the host architecture change the
+#                          firmware? A report, not a gate.
+#   build-sdk-package    — builds and hashes the mcuhome-sdk-<version>
+#                          archive on `main` (ADR 0019 amendment).
 #
-# And one job that is not a gate: `sdk-package` builds the
-# `mcuhome-sdk-<version>` archive on `main` and uploads it as a workflow
-# artifact. It publishes nothing and can fail nothing that a pull request
-# would notice; see its own head comment.
+# None of these are the lint/test gates (ci-lint.yml, ci-test.yml):
+# container/firmware/package builds stay outside the gates by policy.
 #
-# All actions are pinned to commit SHAs, not tags (see dependabot.yml,
-# which keeps the pins current via its github-actions ecosystem entry).
+# Known pre-existing defect, tracked in tasks/open-bugs.md and NOT fixed
+# here on purpose (out of this step's scope): build-firmware's `if:`
+# reads `needs.matter-gate.outputs.run`, but the job below is named
+# `gate-matter`; compare-firmware's `if:` reads `needs.matter.result`,
+# but it depends on `build-firmware`. Both reference job ids that do not
+# exist, so neither condition is ever true and the Matter firmware build
+# and comparison never run in CI.
+#
+# All actions are pinned to commit SHAs, not tags.
 
-name: CI
+name: Build
 
 on:
   push:
@@ -40,215 +39,13 @@ on:
   # Manual runs exist for the `matter` gate: it is path-triggered, and
   # "run it anyway" (after a builder-image publish, before a release, to
   # reproduce a bench failure) has to be possible without an empty
-  # commit. lint and twister come along, which costs a minute.
+  # commit.
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  lint-ruff:
-    name: Lint (ruff)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      # scripts/lint selects this job's own .venv, so it is created
-      # first, the same way a developer creates one locally. clang-format
-      # goes in here too — scripts/lint runs it when it finds the binary
-      # — even though the separate format-clang job below already checks
-      # the same thing directly; see that job's head comment.
-      - name: Create .venv and install lint tools
-        run: |
-          python -m venv .venv
-          .venv/bin/pip install --disable-pip-version-check ruff==0.16.1 clang-format==22.1.8
-
-      - name: scripts/lint
-        run: scripts/lint
-
-      # Debug output is load-bearing: config fragments must
-      # not reduce diagnostics without a recorded decision and its
-      # `# debug-output: approved <reason>` marker. Not part of
-      # scripts/lint: the README's "Working on this repository" gate
-      # does not name this check, so it stays a CI-only step.
-      - name: Debug-output policy
-        run: .venv/bin/python scripts/check_debug_output.py
-
-  # The Python suite in tests/python/ — the fast half of the test strategy
-  # (docs/design/builder-pipeline.md §9), which until now ran nowhere
-  # automated at all: three distributions' worth of invariants, the
-  # golden generator output and every refusal message, none of them
-  # gated by anything but a developer remembering to run pytest.
-  #
-  # Since the ADR 0024 split this repository carries the SDK half of
-  # the suite: model, compiler, the golden generator output, the
-  # container conformance tests. The workbench half runs in
-  # mcu-home/mcuhome-workbench. `-rs` keeps any skip loud in the log rather than
-  # a dot.
-  test-pytest:
-    name: Test (pytest)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      # The two editable installs this repository publishes since the
-      # ADR 0024 split (the workbench lives in mcu-home/mcuhome-workbench), and no
-      # aggregate distribution over them (ADR 0020 decision 2 and the
-      # head comment of the root pyproject.toml).
-      # zstandard is named in its own right: scripts/build_sdk_archive.py
-      # needs it and so does the test over it. It used to arrive through
-      # mcuhome-compiler, which declared it for the orchestrator — and
-      # the orchestrator is the workbench's now.
-      - name: Create .venv and install the two distributions
-        run: |
-          python -m venv .venv
-          .venv/bin/pip install --disable-pip-version-check \
-            -e ./packaging/model \
-            -e ./packaging/compiler \
-            'pytest>=8.0' zstandard
-
-      - name: scripts/test
-        run: scripts/test -rs
-
-  test-twister:
-    name: Test (twister)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # Pull only. Publishing is the `image` job's business since r11:
-      # a multi-architecture image is published as an index over two
-      # per-architecture manifests, and neither of the jobs that *use* an
-      # image is in a position to compose one.
-      packages: read
-    steps:
-      # The checkout goes one level down: this repository is the west
-      # manifest repository of a T2 workspace, and the workspace top
-      # directory (GITHUB_WORKSPACE, here) must not be a git repository.
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: mcuhome-sdk
-
-      # One source of truth for the image name: mcuhome/model/buildimage.py
-      # carries the Zephyr release and the image revision, this job tags
-      # what it says, and a workbench resolves the very same string when a
-      # developer runs `mcuhome device build`. Importing it needs no
-      # third-party package — that module is a handful of constants, on
-      # purpose.
-      #
-      # The moving tags (aliases) are how a build environment is found:
-      # a client picks the Zephyr release it needs and the publisher says
-      # which revision of it he currently recommends through the moving tags.
-      - name: Resolve the builder image reference
-        id: image
-        run: |
-          python3 - >> "$GITHUB_OUTPUT" <<'PY'
-          import sys
-          sys.path.insert(0, "mcuhome-sdk")
-          from mcuhome.model.buildimage import (
-              IMAGE,
-              IMAGE_REPOSITORY,
-              ZEPHYR_RELEASE,
-              aggregate_tags,
-              latest_tag,
-          )
-          print(f"reference={IMAGE}")
-          moving = (latest_tag(ZEPHYR_RELEASE), *aggregate_tags(ZEPHYR_RELEASE))
-          print("aliases=" + " ".join(f"{IMAGE_REPOSITORY}:{tag}" for tag in moving))
-          PY
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # "Has the image changed?" is answered by asking the registry, not by
-      # diffing the Dockerfile: the tag *is* the content identity
-      # (zephyr-<line>-r<revision>), so a tag that does not exist yet means
-      # an image input changed and its revision was bumped — and a bump
-      # that somebody forgot fails loudly here instead of quietly testing
-      # against a stale environment. Since r3 the image inputs are
-      # containers/build-container/ AND west.yml AND patches/, because the image
-      # bakes a west workspace with the patch set applied.
-      - name: Pull the builder image, or build it
-        id: builder
-        run: |
-          reference='${{ steps.image.outputs.reference }}'
-          if docker pull --quiet "$reference"; then
-            echo "Using the published image."
-          else
-            echo "::notice::$reference is not published yet — building it."
-            # The context is the repository, not containers/build-container/:
-            # since r3 the image bakes a west workspace, so west.yml
-            # and patches/ are image inputs too.
-            docker build --tag "$reference" \
-              --file mcuhome-sdk/containers/build-container/Dockerfile mcuhome-sdk
-            echo "built=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Keyed on west.yml alone: that file is the complete description of
-      # what `west update` produces. Zephyr and the modules are fetched
-      # shallow and narrow, which is what keeps this cache small enough to
-      # be worth having.
-      #
-      # The path list must cover EVERY directory west creates, because a
-      # cache hit skips `west update` entirely: a project the cache did
-      # not carry is then simply absent from the workspace. That is not
-      # hypothetical — mcuboot lands in bootloader/, the original list
-      # stopped at modules/, and the first warm-cache run after the
-      # ota_staging suite appeared failed on a missing
-      # bootutil/bootutil_public.h (flash_img includes it via
-      # CONFIG_IMG_MANAGER). The `west-2` segment versions the path set:
-      # bumping it retires caches saved with the old, incomplete list,
-      # which a key based on west.yml alone would happily restore.
-      - name: Restore the west workspace
-        id: west-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            .west
-            zephyr
-            modules
-            bootloader
-          key: west-2-${{ runner.os }}-${{ hashFiles('mcuhome-sdk/west.yml') }}
-
-      # Without the Matter SDK: every suite in tests/ is CHIP-free by
-      # design (ADR 0014, and the reason tests/twister/matter_tables/ tests the
-      # table validator rather than the runtime). Skipping the `matter`
-      # group keeps a multi-gigabyte clone with submodules out of CI.
-      - name: Initialize the west workspace
-        if: steps.west-cache.outputs.cache-hit != 'true'
-        run: |
-          docker run --rm --user "$(id -u):$(id -g)" \
-            --volume "$PWD:$PWD" --workdir "$PWD" \
-            '${{ steps.image.outputs.reference }}' \
-            sh -euc '
-              west init -l mcuhome-sdk
-              west config manifest.group-filter -- -matter
-              west update --narrow -o=--depth=1
-            '
-
-      - name: Run the Zephyr test suites
-        run: |
-          docker run --rm --user "$(id -u):$(id -g)" \
-            --volume "$PWD:$PWD" --workdir "$PWD" \
-            '${{ steps.image.outputs.reference }}' \
-            west twister -T mcuhome-sdk/tests/twister --integration --inline-logs -v -j 2
-
   # ------------------------------------------------------------------
   # Publishing the build environment. Since r11 it is a MULTI-ARCHITECTURE
   # image: an OCI index over one manifest per architecture, built natively
@@ -514,7 +311,7 @@ jobs:
         id: decide
         run: |
           paths='
-            .github/workflows/ci.yml
+            .github/workflows/ci-build.yml
             CMakeLists.txt
             Kconfig
             west.yml
@@ -986,144 +783,3 @@ jobs:
           name: mcuhome-sdk-package
           path: dist/sdk
           if-no-files-found: error
-
-  license-reuse:
-    name: License (reuse)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      - name: Install
-        run: python -m pip install --disable-pip-version-check reuse==5.0.2
-
-      - name: reuse lint
-        run: reuse lint
-
-  spell-codespell:
-    name: Spelling (codespell)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      - name: Install
-        run: python -m pip install --disable-pip-version-check codespell==2.4.3
-
-      # The ignored words are deliberate spellings, not slips: Requestor and
-      # PASE are the Matter specification's own, OT is OpenThread, rsource is
-      # Kconfig's. Generated documents and patches are skipped because their
-      # wording is not ours to correct.
-      - name: codespell
-        run: codespell --ignore-words-list=requestor,pase,ot,rsource,re-declared,re-declare,re-used,unparseable,pre-empt --skip='./.git,./frontend/node_modules,*.matter,*.zap,pnpm-lock.yaml,*.patch'
-
-  hygiene-prehooks:
-    name: Hygiene (pre-commit-hooks)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      - name: Install
-        run: python -m pip install --disable-pip-version-check pre-commit-hooks==5.0.0
-
-      # The fixers rewrite and exit non-zero when they had to; in CI the tree
-      # is throwaway, so that is exactly a check. `patches/` is excluded on
-      # purpose: a context line in a unified diff is a single space, and
-      # stripping it produces a patch that no longer applies.
-      - name: Whitespace, final newline and line endings
-        run: |
-          text=$(git grep -Il '' -- . ':!patches/**' ':!*.patch' ':!*.matter' ':!*.zap')
-          trailing-whitespace-fixer $text
-          end-of-file-fixer $text
-          mixed-line-ending --fix=no $text
-
-      - name: No merge markers
-        run: check-merge-conflict $(git grep -Il '' -- .)
-
-      # --unsafe checks the syntax and not the tags: this project has its own
-      # (`!secret`, `!file`), and a loader that refuses them is not a finding.
-      - name: YAML parses
-        run: |
-          files=$(git ls-files '*.yml' '*.yaml')
-          if [ -n "$files" ]; then check-yaml --unsafe $files; fi
-
-  commits-conventional:
-    name: Commits (conventional)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      - name: Install
-        run: python -m pip install --disable-pip-version-check conventional-pre-commit==4.0.0
-
-      # Merge commits carry GitHub's wording, not ours, so they are skipped.
-      - name: Every commit message states its kind
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          if [ -n "$BASE" ]; then
-            range="$BASE..$HEAD_SHA"
-          elif [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            range="$BEFORE..${{ github.sha }}"
-          else
-            range="HEAD~1..HEAD"
-          fi
-          status=0
-          for sha in $(git log --no-merges --format=%H "$range"); do
-            git log -1 --format=%B "$sha" > /tmp/commit-message
-            conventional-pre-commit /tmp/commit-message || { echo "  ^ $sha"; status=1; }
-          done
-          exit $status
-
-  # This job calls the tool directly rather than scripts/lint (which now
-  # also runs clang-format — 2026-08-30 unify-dev-baseline task): the
-  # task's CI change was scoped to jobs calling ruff/pytest/pnpm
-  # directly, and this one calls clang-format, not one of those. Kept
-  # as its own job so a C-only breakage is reported as "Format
-  # (clang-format)" rather than folded into "Lint (ruff)"; the overlap
-  # with scripts/lint's own clang-format step is a known duplication.
-  format-clang:
-    name: Format (clang-format)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      # Pinned, because the rules are in .clang-format but their reading
-      # is the binary's: two versions disagree about the same file.
-      - name: Install
-        run: python -m pip install --disable-pip-version-check clang-format==22.1.8
-
-      - name: clang-format
-        run: clang-format --dry-run --Werror $(git ls-files '*.c' '*.h' '*.cpp' '*.hpp')

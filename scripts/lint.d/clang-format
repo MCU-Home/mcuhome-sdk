@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# clang-format --dry-run --Werror over every tracked C source, using the
+# pinned binary the `clang-format` PyPI wheel installs into this
+# repository's own .venv. Extra arguments are passed through.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+venv="$root/.venv"
+
+if [ ! -x "$venv/bin/clang-format" ]; then
+  echo "lint.d/clang-format: no .venv found. Create it first: python3.13 -m venv .venv && .venv/bin/pip install --group dev (see README)." >&2
+  exit 1
+fi
+
+cd "$root"
+mapfile -t c_sources < <(git ls-files '*.c' '*.h' '*.cpp' '*.hpp')
+if [ "${#c_sources[@]}" -eq 0 ]; then
+  exit 0
+fi
+exec "$venv/bin/clang-format" --dry-run --Werror "${c_sources[@]}" "$@"
