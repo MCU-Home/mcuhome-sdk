@@ -348,7 +348,7 @@ RUN set -eu; \
             "refs/tags/$tag:refs/tags/$tag"; \
     done
 
-# The patch set, applied the way CI applies it (.github/workflows/ci.yml)
+# The patch set, applied the way CI applies it (.github/workflows/ci-build.yml)
 # and patches/README.md documents it: `git apply`, nothing else — no
 # --3way, no --reject, no retry. A patch that has drifted from the
 # revision west.yml pins has to fail the IMAGE build, loudly, right here.

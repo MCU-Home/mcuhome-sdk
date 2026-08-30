@@ -20,7 +20,7 @@ host glibc that not every dev machine has, so suites here target the 64-bit
 | `health_breadcrumb/` | `lib/health/breadcrumb_core.h` and the file that ships on top of it, `lib/health/breadcrumb.c` — the crash record MCUHome leaves in reset-surviving RAM so the boot after a fatal error can say what happened (ADR 0015 health amendment). Two questions only: does it survive, and does it ever lie. The second is the one that needs a suite. The record lives in memory nothing initializes, which after a power-up holds junk and on this project's targets belonged to MCUboot first, so most of the tests feed it junk — all-zeros, all-ones, a planted magic word, every single-bit flip of every field — and assert it is rejected. The alternative to a checksummed record is a report about a crash that never happened, and that would make every later report suspect. |
 | `entropy_ipc/` | `drivers/entropy/entropy_ipc_core.c` — the CTR-DRBG and the seeded/unseeded/reseeding state machine of the netcore entropy driver, plus the wire framing in `include/mcuhome/entropy_ipc.h`. The transport is faked through `struct mcuhome_entropy_seed_source`, which is what makes the seed timeout, the retry behaviour and the reseed interval testable in seconds instead of on a two-core hardware cycle. |
 
-CI (`.github/workflows/ci.yml`) landed together with this first suite, per
+CI (`.github/workflows/ci-test.yml`) landed together with this first suite, per
 repo policy (we do not ship a red pipeline). It currently only runs the
 lint/licensing checks CI runs; the twister
 build itself is not wired into CI yet (needs a full west workspace — see

@@ -20,8 +20,7 @@
 # None of these are the lint/test gates (ci-lint.yml, ci-test.yml):
 # container/firmware/package builds stay outside the gates by policy.
 #
-# Known pre-existing defect, tracked in tasks/open-bugs.md and NOT fixed
-# here on purpose (out of this step's scope): build-firmware's `if:`
+# Known defect, left unchanged in this move: build-firmware's `if:`
 # reads `needs.matter-gate.outputs.run`, but the job below is named
 # `gate-matter`; compare-firmware's `if:` reads `needs.matter.result`,
 # but it depends on `build-firmware`. Both reference job ids that do not

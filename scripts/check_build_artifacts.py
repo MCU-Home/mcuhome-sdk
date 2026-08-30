@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Assert that a finished build left the flashable files behind, well-formed.
 
-The gate behind the Matter build job in ``.github/workflows/ci.yml``: a
+The gate behind the Matter build job in ``.github/workflows/ci-build.yml``: a
 build that exits 0 but leaves no flashable image behind is a worse result
 than a build that fails, because nothing downstream notices. This script
 turns "the compiler was happy" into "the things a device needs exist and

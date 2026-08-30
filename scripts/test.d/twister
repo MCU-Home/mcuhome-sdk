@@ -26,7 +26,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 venv="$root/.venv"
 
 if [ ! -x "$venv/bin/python" ]; then
-  echo "test.d/twister: no .venv found. Create it first: python3.13 -m venv .venv && .venv/bin/pip install -e ./packaging/model -e ./packaging/compiler --group dev (see README)." >&2
+  echo "test.d/twister: no .venv found. Create it first — see README, \"Development — how to work on this repository\"." >&2
   exit 1
 fi
 
