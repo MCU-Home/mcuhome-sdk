@@ -135,7 +135,7 @@ def test_the_patches_the_image_applies_are_the_patches_in_the_repository() -> No
 
 
 def test_the_patches_are_applied_with_plain_git_apply() -> None:
-    """No ``--3way``, no ``--reject``, no retry (patches/README.md, ci.yml).
+    """No ``--3way``, no ``--reject``, no retry (patches/README.md, ci-build.yml).
 
     A patch that has drifted from the revision ``west.yml`` pins must fail
     the image build. Every fallback ``git apply`` offers turns that
