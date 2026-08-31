@@ -108,7 +108,6 @@ report a vulnerability, follow the organization's security policy at
 
 - [docs/spec/](docs/spec/) — the normative build-environment specifications
 - [docs/design/](docs/design/) — pipeline, component model and YAML schema
-- [docs/adr/](docs/adr/) — the decisions behind them
 - [github.com/mcu-home](https://github.com/mcu-home) — the MCUHome project
 
 ## Contributing and support
