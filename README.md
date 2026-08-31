@@ -75,14 +75,14 @@ wrapper in `scripts/test.d/` or `scripts/lint.d/`. The wrappers select
 `.venv` themselves (never activate one by hand) and are exactly what CI
 runs, one job per check.
 
-Needs Python 3.13 for `packaging/model` and `packaging/compiler`, and — only
+Needs Python ≥3.13 for `packaging/model` and `packaging/compiler`, and — only
 for `scripts/test twister` — a west workspace (`west init -m
 https://github.com/mcu-home/mcuhome-sdk && west update`) plus a container
 runtime and the pinned build-environment image. C sources follow
 `.clang-format`, checked with a pinned clang-format binary.
 
 ```sh
-python3.13 -m venv .venv && .venv/bin/pip install \
+python3 -m venv .venv && .venv/bin/pip install \
   -e ./packaging/model -e ./packaging/compiler --group dev
 ```
 
