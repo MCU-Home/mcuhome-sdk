@@ -37,16 +37,17 @@ moves `git describe` from `v4.4.0` to `v4.4.0-1-g<sha>`, which is what
 Zephyr stamps into `BUILD_VERSION` and compiles into the boot banner — so
 a committed patch set changes the firmware.
 
-Automatic application per build is **specified** — the build-container
-contract makes each patched west project a *patched layer* whose patches
-the build program applies to a writable view of the tree, once per
-session, before building
-([docs/design/build-container-contract.md](../docs/design/build-container-contract.md),
-§6.2 "Patched layers: writable views, applied once"). That is a
-specification, not working code: the image applies its patch set once, at
-image-build time, which is not the same thing as a context choosing its
-patches per session. Several hunks are upstream-issue candidates (tracked
-outside the repo for now); only what upstream does not take stays here.
+Automatic application per build is what the build program itself does for
+a build context's own patches: each patched west project is a *patched
+layer*, and the program applies its patches to a writable view of the
+tree, once per session, before building. That is a separate mechanism
+from the two patches in this directory, which the image bakes in once, at
+image-build time, and which nobody re-applies per build. The rule the
+build program follows is specified in
+[docs/spec/build-environment-specification.md](../docs/spec/build-environment-specification.md)
+§10 (patch semantics; a patched copy under `work` for read-only trees).
+Several hunks here are upstream-issue candidates (tracked outside the
+repo for now); only what upstream does not take stays here.
 
 The mbedTLS legacy-header shims the chip-module hunk puts on CHIP's
 include path are **not** in this directory and are not generated: they

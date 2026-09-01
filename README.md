@@ -107,7 +107,8 @@ report a vulnerability, follow the organization's security policy at
 ## Documentation
 
 - [docs/spec/](docs/spec/) — the normative build-environment specifications
-- [docs/design/](docs/design/) — pipeline, component model and YAML schema
+- [docs/design/](docs/design/) — pipeline, component model, YAML schema, the
+  build-environment design and the Matter/Zephyr integration notes
 - [github.com/mcu-home](https://github.com/mcu-home) — the MCUHome project
 
 ## Contributing and support

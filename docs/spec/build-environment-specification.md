@@ -1,13 +1,13 @@
 # MCUHome Build Environment Specification
 
-**Spec generation 1.** Draft — not yet released.
+**Spec generation 3.** Draft — not yet released.
 
 A **build environment** turns a MCUHome build context into firmware. This
 document is everything you need to build your own one, and everything your
 build environment may rely on in return.
 
 Anything not written here is deliberately yours: where your source trees
-live, what your image contains, which compiler and build system you use,
+live, what your packages contain, which compiler and build system you use,
 and how you do the work. This specification describes a boundary, not a
 build.
 
@@ -22,8 +22,10 @@ the boundary itself. For MCUHome that is
 
 | Term | Meaning |
 |---|---|
-| **build environment** | An OCI image that satisfies this specification. |
-| **entry point** | The executable the orchestrator runs, at a fixed path in your image. |
+| **build environment** | A set of packages that satisfies this specification. |
+| **package** | One distributable archive with a name, a version, and a content hash. |
+| **package set** | The packages one environment is made of. It is the environment's identity: the same set, however it was delivered, is the same environment. |
+| **entry point** | The executable the orchestrator runs, at a fixed path in your environment. |
 | **builder** | The process started from your entry point, and everything it spawns. |
 | **orchestrator** | The MCUHome software that runs your build environment. You never talk to it directly; you exchange two files with it. |
 | **session** | A sequence of steps that together produce one set of artifacts. |
@@ -31,30 +33,77 @@ the boundary itself. For MCUHome that is
 | **build context** | The resolved input of a build: what to build, for which board, with which settings. |
 | **generator** | The tool that produced the build context. MCUHome's own is `mcuhome-workbench`. |
 
-There are two **profiles**. In the **container profile** your image runs as
-a container. In the **subprocess profile** your image is unpacked into a
-directory and the entry point is run as an ordinary process. Every rule in
+There are two **profiles**. In the **container profile** your environment
+is delivered as a container image and runs as a container. In the
+**subprocess profile** its packages are unpacked into a read-only store on
+the host and the entry point is run as an ordinary process. Every rule in
 this document applies to both unless a paragraph says otherwise.
 
-## 2. The environment at the start of a step
+## 2. The package set
 
-> **At the start of every step, your build environment is exactly what your
-> image defines. Only the directories under `mcuhome/` listed in §3 are
+> **A build environment is defined by its packages, not by an image.**
+
+An environment is a named, versioned, hash-identified set of packages.
+Which packages, and how many, is yours to decide; what this specification
+fixes is that the set exists, that the environment declares it (§5), and
+that the set — not the wrapping it arrives in — is what identifies the
+environment.
+
+MCUHome's own environment is two packages:
+
+| Package | Architecture | Content |
+|---|---|---|
+| `mcuhome-build-workspace` | neutral | The materialized source world: the framework and its dependencies at pinned revisions, the base patches already applied, binary blobs already fetched, generated code that is a release constant already generated, plus a record of what was resolved. |
+| `mcuhome-build-tools-<os>-<arch>` | one per platform | The host tools: compiler toolchain, build system, workspace tool, and the Python wheel set the build's virtual environment is created from. |
+
+The split is by cadence, not by taste: the source world moves with every
+release, the tools move rarely and are large.
+
+A third package, `mcuhome-sdk`, is **not** part of the environment. Each
+build context chooses its own SDK version; the orchestrator delivers it at
+`mcuhome/sdk` (§4). An environment builds whatever SDK it is handed, and
+does not have an opinion about which one that is.
+
+**Two profiles, one set.** In the container profile the orchestrator
+selects a container image that declares exactly the package set the build
+context asks for; the image is a delivery of the set, and two images built
+from the same set are the same environment. In the subprocess profile the
+orchestrator provisions the same packages into a read-only store on the
+host and runs the entry point from there. Neither profile is privileged:
+an environment that behaves differently in one of them is broken, not
+clever.
+
+Which of your packages carries the entry point is your business too. The
+specification fixes only the path it is found at, and that the profile in
+use puts it there — as image content in the container profile, from the
+store in the subprocess profile.
+
+## 3. The environment at the start of a step
+
+> **At the start of every step, the environment's source trees are
+> pristine: exactly what its packages define, with nothing an earlier step
+> did left in them. Only the directories under `mcuhome/` listed in §4 are
 > managed by the orchestrator.**
 
-How that is achieved is not specified and is not your concern: in the
-container profile the orchestrator starts a fresh container from your
-image, in the subprocess profile it unpacks your image afresh. Either way
-you get your image, unmodified, every time.
+How that is achieved is not your concern and differs by profile: the
+container profile starts a fresh container per step, the subprocess
+profile keeps the store read-only and hands every step fresh directories
+under `mcuhome/`. Steps of a session run strictly one after another, never
+at the same time.
 
-Two consequences follow, and they are the whole mental model:
+Three consequences follow, and they are the whole mental model:
 
 - **Nothing you write survives a step** — except what you put in
   `mcuhome/out` and in the writable cache tiers.
-- **You never have to clean up after yourself.** Modify your own trees
-  freely; the next step will not see it.
+- **You never have to clean up after yourself.** There is nothing left
+  over from the last step, nothing to undo, and nothing that could be
+  applied twice.
+- **What you may modify depends on the profile.** Trees that are
+  disposable may be changed freely; a read-only store may not be touched
+  at all. §10 says how patches are handled under both, and the habit that
+  follows from it is simply: work in `work`.
 
-## 3. The filesystem tree
+## 4. The filesystem tree
 
 The orchestrator sets the environment variable **`MCUHOME_BUILDER_BASE_DIR`**
 to an absolute path. It is the only environment variable this
@@ -83,33 +132,90 @@ absolute path from one step to the next.
 
 | Path | Written by | Present at step start | You may write |
 |---|---|---|---|
-| `mcuhome/bin/build-environment-entry` | you, in the image | your image content | — |
+| `mcuhome/bin/build-environment-entry` | you, in a package | your environment's content | — |
 | `mcuhome/invocation-request.json` | orchestrator | this step's request | no |
 | `mcuhome/work` | you | **empty** | yes |
 | `mcuhome/sdk` | orchestrator | the SDK | assume no |
 | `mcuhome/build-context` | orchestrator | the build context | **never** |
 | `mcuhome/out` | you | what earlier steps left | yes |
-| `mcuhome/cache/*` | mixed — see §7 | see §7 | see §7 |
+| `mcuhome/cache/*` | mixed — see §8 | see §8 | see §8 |
 
-Everything outside `mcuhome/` is your image, as you built it.
+Everything outside `mcuhome/` is your environment as its packages define
+it. In the subprocess profile that is a read-only store, possibly shared
+with other builds running right now, so treat it as read-only in both
+profiles. `work`, `out` and `cache/local` are the places you are
+guaranteed to be able to write.
 
-## 4. Labels
+## 5. Self-description
 
-Your image declares itself with OCI labels under
-`org.mcuhome.build-environment.`:
+Your environment declares itself in the metadata of its packages. The
+declaration is one JSON object; every member is a string:
 
-| Label | Required | Value |
+| Member | Required | Value |
 |---|---|---|
-| `spec-generation` | yes | The generation of this specification your environment implements. Currently `1`. |
+| `spec-generation` | yes | The generation of this specification your environment implements. Currently `3`. |
 | `zephyr.version` | yes | The Zephyr version your environment builds against, as SemVer 2.0.0 — for example `4.4.0` or `4.5.0-rc.1`. |
-| `build-context.generator-constraint` | yes | Which build contexts you accept. See §8. |
-| `build-context.generator-constraint-mode` | no | `strict` (default) or `chain`. See §8. |
+| `build-context.generator-constraint` | yes | Which build contexts you accept. See §9. |
+| `build-context.generator-constraint-mode` | no | `strict` (default) or `chain`. See §9. |
+| `packages` | yes | The package set your environment consists of. See §5.1. |
+
+```json
+{
+  "spec-generation": "3",
+  "zephyr.version": "4.4.0",
+  "build-context.generator-constraint": "mcuhome-workbench:~=1.0.5",
+  "packages": "mcuhome-build-tools:1.2.0;mcuhome-build-workspace:2.4.0@sha256:7c31…"
+}
+```
+
+One package of the set carries the declaration and it speaks for the whole
+set. For MCUHome's own environment that is `mcuhome-build-workspace`, the
+architecture-neutral one: a set that spans architectures needs a carrier
+that does not.
+
+Member names not defined here are reserved, exactly as §5.2 reserves
+their label mirrors; names prefixed `x-` are free.
+
+### 5.1 The package set value
+
+`packages` is a list of `<name>:<version>` entries separated by
+semicolons, sorted by name in ascending byte order, each optionally
+followed by `@sha256:<64 lowercase hex digits>`:
+
+```
+mcuhome-build-tools:1.2.0;mcuhome-build-workspace:2.4.0@sha256:7c31…
+```
+
+`<name>` is lowercase, `[a-z0-9][a-z0-9._-]*`. `<version>` is a PEP 440
+version.
+
+An entry carries its hash when its bytes are the same everywhere, which is
+what an architecture-neutral package means. An architecture-specific
+package is named at version level only, because its bytes differ per
+platform on purpose and the version is what the platforms have in common;
+such an entry names the family (`mcuhome-build-tools`), not one platform's
+package (`mcuhome-build-tools-linux-amd64`). Whoever matches a set matches
+what is stated: hashes where they are given, name and version otherwise.
+
+### 5.2 Container images mirror the declaration
+
+An image delivering the environment repeats every member of the
+declaration as an OCI label `org.mcuhome.build-environment.<member>`, with
+the identical value:
 
 ```dockerfile
-LABEL org.mcuhome.build-environment.spec-generation="1" \
+LABEL org.mcuhome.build-environment.spec-generation="3" \
       org.mcuhome.build-environment.zephyr.version="4.4.0" \
-      org.mcuhome.build-environment.build-context.generator-constraint="mcuhome-workbench:~=1.0.5"
+      org.mcuhome.build-environment.build-context.generator-constraint="mcuhome-workbench:~=1.0.5" \
+      org.mcuhome.build-environment.packages="mcuhome-build-tools:1.2.0;mcuhome-build-workspace:2.4.0@sha256:7c31…"
 ```
+
+The `packages` label is what makes an image findable. A build context
+references packages, never an image; the orchestrator looks for the image
+that declares exactly those packages and starts it. An image whose
+`packages` label says something else is a different environment, whatever
+is otherwise inside it — and an image assembled from packages it does not
+declare is simply lying about what it is.
 
 **Every other name under `org.mcuhome.build-environment.` is reserved.**
 Do not invent one — a future generation of this specification may define
@@ -120,11 +226,11 @@ try a feature out before a later generation adopts it properly.
 Labels **outside** that prefix are yours entirely. If you want to publish
 feature flags of your own, do it under a name you control.
 
-The orchestrator reads these labels from the image configuration before it
-starts anything — in both profiles, since unpacking an image means reading
-its configuration.
+The orchestrator reads the declaration before it starts anything: from the
+package metadata when it provisions packages, from the image configuration
+when it runs an image. Both must say the same thing.
 
-## 5. The invocation
+## 6. The invocation
 
 The orchestrator runs your entry point **once per step**:
 
@@ -137,13 +243,13 @@ the step is about is in the request document.
 
 The entry point must be executable by the user the orchestrator runs it as.
 
-### 5.1 The request document
+### 6.1 The request document
 
 `mcuhome/invocation-request.json`, one JSON object, UTF-8:
 
 ```json
 {
-  "spec_generation": 1,
+  "spec_generation": 3,
   "session_id": "9f2c1a",
   "invocation_id": "9f2c1a-3",
   "action": "build",
@@ -161,18 +267,18 @@ The entry point must be executable by the user the orchestrator runs it as.
 
 Ignore fields you do not know.
 
-### 5.2 The result document
+### 6.2 The result document
 
 Every step writes `mcuhome/out/result-<invocation_id>.json`, one JSON
 object, UTF-8, as its last action:
 
 ```json
 {
-  "spec_generation": 1,
+  "spec_generation": 3,
   "invocation_id": "9f2c1a-3",
   "status": "success",
   "message": "",
-  "artifacts": ["mcuhome-firmware.bin", "mcuhome-firmware.hex"]
+  "artifacts": ["firmware.bin", "firmware.hex", "build-report.json"]
 }
 ```
 
@@ -190,7 +296,7 @@ you do not understand. It tells the orchestrator to look for a different
 environment rather than report a broken build. Everything else that goes
 wrong is `failure`.
 
-### 5.3 Exit code
+### 6.3 Exit code
 
 Exit `0` when you wrote a result document with `status: "success"`, and
 non-zero otherwise.
@@ -199,11 +305,12 @@ The orchestrator reads the result document whenever it exists, whatever
 the exit code. A step that produced no readable result document failed,
 whatever it exited with.
 
-## 6. `work` and `out`
+## 7. `work` and `out`
 
 **`work` is empty at the start of every step.** It is your scratch space:
 unpack, generate, configure, compile there. Point `TMPDIR` at a directory
-inside it if the tools you drive need one.
+inside it if the tools you drive need one. It is also where a patched copy
+of a read-only tree goes (§10).
 
 **`out` is created empty when the session starts and survives every step
 of it.** It holds the artifacts of the whole session — and it is the only
@@ -222,8 +329,9 @@ the other steps:
 
 - Build in `work` and copy the finished file into `out`. `out` is not
   scratch space.
-- Name artifacts for what they are: `mcuhome-firmware.bin`, not
-  `image.bin`. You do not know what else is in there.
+- Name artifacts for what they are: `firmware.bin`, not `image.bin`. You
+  do not know what else is in there. Where the orchestrator's action
+  vocabulary fixes a name, that name wins.
 - Assume nothing exists. Check what your step needs **before** you start
   long work, and fail immediately if something is missing — nobody
   benefits from a twenty-minute compile that ends at a signature file
@@ -236,7 +344,7 @@ You may delete a file in `out` that your step has replaced — if your step
 turns a plain firmware image into an update package, removing the
 intermediate keeps the session's result honest. Be sure before you do.
 
-## 7. Caches
+## 8. Caches
 
 Four tiers. They exist so that a build can be fast; a build must be
 **correct without any of them**.
@@ -249,8 +357,8 @@ Four tiers. They exist so that a build can be fast; a build must be
 | `cache/shared` | orchestrator | assume not | anything, and nothing |
 
 At the start of a step, `local` holds either nothing or whatever your own
-image put there — the orchestrator may or may not mount something over it.
-Either way it is yours, it is writable, and it is gone afterwards.
+packages put there — the orchestrator may or may not mount something over
+it. Either way it is yours, it is writable, and it is gone afterwards.
 
 Assume every tier except `local` is read-only, may be missing entirely,
 and may change between steps. `shared` in particular belongs to the
@@ -270,13 +378,14 @@ Where things go:
 
 - **ccache** goes in `<tier>/ccache`.
 - Anything else of yours goes in `<tier>/private/<namespace>`, where
-  `<namespace>` is something you own — a domain, or your image's name.
+  `<namespace>` is something you own — a domain, or your environment's
+  name.
 
 Use the most local writable tier as your primary cache and the rest as
 read-only secondaries. Which tiers an orchestrator actually provides is
 its operator's decision.
 
-## 8. The build context
+## 9. The build context
 
 The build context is at `mcuhome/build-context`. **Never modify anything
 in it.** Its structure belongs to the tool that produced it, not to this
@@ -311,7 +420,7 @@ A context without `build-context.json`, or without a readable `generator`
 in it, is not a valid build context; the orchestrator refuses it before
 your environment is started.
 
-### 8.1 Declaring which contexts you accept
+### 9.1 Declaring which contexts you accept
 
 `build-context.generator-constraint` is a list of
 `<product>:<specifier>` entries separated by semicolons, where
@@ -340,14 +449,15 @@ An empty specifier accepts every version of that product, so
 `mcuhome-workbench:` means "any build context the workbench produced".
 
 The orchestrator runs this check before **every** step, against the
-generator chain in the build context. This is why the label is required:
-an image that declares no constraint accepts nothing and can never pass.
+generator chain in the build context. This is why the constraint is a
+required member of your declaration: an environment that declares none
+accepts nothing and can never pass.
 
 When the check fails you are not started at all and never see the context.
 You may still refuse a context yourself, for a reason a version constraint
 cannot express — answer `unsupported`.
 
-## 9. Patches
+## 10. Patches
 
 A build context may carry patches for source trees in your environment.
 Where those trees are is your business; applying the patches is your job,
@@ -368,36 +478,55 @@ files:
 Which tool you use — `git apply`, `patch`, your own implementation — is
 up to you.
 
-Apply patches to your trees in place. Your environment is fresh at the
-start of every step (§2), so there is nothing to undo and nothing to
-apply twice.
+**Where the patched tree lives depends on your profile.** The trees are
+pristine at the start of every step (§3) and have to be pristine again for
+the next one, so there is nothing to undo — but there is something not to
+break:
 
-## 10. What you must not assume
+- A tree that is **disposable** — the container profile's, which goes away
+  with the container — may be patched in place.
+- A tree in a **read-only store** — the subprocess profile's — must not be
+  touched. Materialize a patched copy of it under `work`, and build
+  against a view of the environment in which that copy stands in for the
+  original. Trees no patch names stay where they are; copying is the price
+  of a patch and is paid only for the trees a patch actually names.
+
+Either way the packages' content is never durably modified, and the next
+step starts from pristine trees again.
+
+## 11. What you must not assume
 
 - **No network.** Never require it. Everything a build needs is in your
-  image, in `mcuhome/sdk`, or in the build context. An orchestrator may
+  packages, in `mcuhome/sdk`, or in the build context. An orchestrator may
   cut off the network, and often will.
+- **Not everything is writable.** Outside `work`, `out` and `cache/local`,
+  assume read-only — your own trees included.
 - **Limits are enforced.** Whatever CPU, memory, disk and time budget the
   orchestrator has set, it may enforce hard. Be prepared to be killed;
   behave accordingly.
 - **Nothing survives a step** except `out` and the writable cache tiers.
 - **You are not alone.** Another build of the same project may be running
-  against the same `project` cache right now.
+  against the same `project` cache right now — and in the subprocess
+  profile, against the same store.
 
-## 11. Spec generations
+## 12. Spec generations
 
 The generation is a single number. It goes up by one whenever this
 specification changes in a way that an environment built for the previous
-generation would get wrong. Anything that only adds — a new label under
-the reserved prefix, a new optional field in either document, a new
+generation would get wrong. Anything that only adds — a new optional
+member of the declaration, a new optional field in either document, a new
 action — does not raise it.
 
-Your image declares the generation it implements
-(`org.mcuhome.build-environment.spec-generation`); the orchestrator states
-the generation it speaks in every request document. If they cannot agree,
-the side that notices refuses: the orchestrator does not start an
-environment whose generation it does not implement, and your entry point
-answers `unsupported` to a request generation it does not implement.
+Generation 3 is the current one. The two before it were drafts that were
+never released and that no environment implements; the number keeps
+counting rather than restarting, so that a generation number means one
+thing forever.
+
+Your environment declares the generation it implements (§5); the
+orchestrator states the generation it speaks in every request document. If
+they cannot agree, the side that notices refuses: the orchestrator does not
+start an environment whose generation it does not implement, and your entry
+point answers `unsupported` to a request generation it does not implement.
 
 In both documents, **ignore fields you do not know**. That is what makes
 an additive change additive.

@@ -1,10 +1,10 @@
 # MCUHome Build Context Format
 
-**Format version 3.** Draft — not yet released.
+**Format version 4.** Draft — not yet released.
 
 A **build context** is the resolved input of one build: what to build,
-for which board, with which SDK, patched how. It is a plain directory,
-and it is what a build environment finds at
+for which board, with which SDK, in which environment, patched how. It is
+a plain directory, and it is what a build environment finds at
 `$MCUHOME_BUILDER_BASE_DIR/mcuhome/build-context` — see the
 [build environment specification](build-environment-specification.md),
 which is the document a build environment is written against. This one
@@ -57,13 +57,13 @@ One JSON object, UTF-8:
 }
 ```
 
-The chain format is the specification's (§8). More keys may join this
+The chain format is the specification's (§9). More keys may join this
 file later; a reader ignores what it does not know.
 
 ## 4. `context.yaml` — the request
 
 ```yaml
-context: 3
+context: 4
 created: 2026-08-10T09:00:00Z
 mcuhome:
   constraint: ~=2.3.6
@@ -71,7 +71,20 @@ mcuhome:
   package:
     url: https://packages.mcuhome.org/sdk/mcuhome-sdk-2.4.0.tar.zst
     sha256: 9d1c…
-build_environment: ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11@sha256:4d2f…
+build_environment:
+  workspace:
+    name: mcuhome-build-workspace
+    version: 2.4.0
+    sha256: 7c31…
+    url: https://packages.mcuhome.org/build-workspace/mcuhome-build-workspace-2.4.0.tar.zst
+  tools:
+    name: mcuhome-build-tools
+    version: 1.2.0
+    platforms:
+      linux-amd64:
+        sha256: b90a…
+      linux-arm64:
+        sha256: 4e77…
 target:
   board: nrf7002dk/nrf5340/cpuapp
 ```
@@ -84,14 +97,28 @@ target:
 | `mcuhome.version` | What the constraint resolved to. |
 | `mcuhome.package.url` | Where those bytes were found. A hint; may be empty. |
 | `mcuhome.package.sha256` | The bytes themselves — this is what identifies the SDK. |
-| `build_environment` | The image this context is compiled in, as a container reference **carrying a digest**. |
+| `build_environment.workspace` | The architecture-neutral package carrying the environment's source world: `name`, `version`, `sha256`, and `url` as a hint. The `sha256` is what identifies it. |
+| `build_environment.tools` | The architecture-specific tools package: `name` — the family name, without the platform suffix — and `version`. Together they are the identity; there is no single hash, because there are no single bytes. |
+| `build_environment.tools.platforms` | The concrete per-platform packages of that version, keyed `<os>-<arch>`, each with its `sha256` and optionally a `url`. Informational: which entry a host needs depends on the host, and a host that needs none of them cannot run this environment at all. |
 | `target.board` | The Zephyr board. |
 
-The build environment is **pinned, not requested**. The party that
-created the context already chose the image, digest and all; nobody
-downstream picks anything. That is what lets one context mean one
-firmware: a context that named a requirement could be answered by two
-different images, and two different images are two different builds.
+The build environment is referenced **by its packages**, which is what
+the specification says an environment is: a package set, not an image.
+Whoever runs this context finds an environment whose own `packages`
+declaration states these packages — a container image that declares them,
+or a store provisioned from them. Both are the same environment.
+
+The environment is **pinned, not requested**. The party that created the
+context already chose the packages, hash and all; nobody downstream picks
+anything. That is what lets one context mean one firmware: a context that
+named a requirement could be answered by two different package sets, and
+two different package sets are two different builds.
+
+The one thing deliberately left open is the platform. The tools package
+exists once per architecture, and the context pins the version they share
+rather than one platform's bytes, so the same context builds the same
+firmware on an amd64 host and on an arm64 host. Pinning one platform's
+hash would make a context that is only nominally portable.
 
 ## 5. `manifest.yaml` — the lock
 
@@ -99,14 +126,26 @@ The request restated, plus the two things that do not exist until the
 file set is final:
 
 ```yaml
-context: 3
+context: 4
 mcuhome:
   constraint: ~=2.3.6
   version: 2.4.0
   package:
     url: https://packages.mcuhome.org/sdk/mcuhome-sdk-2.4.0.tar.zst
     sha256: 9d1c…
-build_environment: ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11@sha256:4d2f…
+build_environment:
+  workspace:
+    name: mcuhome-build-workspace
+    version: 2.4.0
+    sha256: 7c31…
+  tools:
+    name: mcuhome-build-tools
+    version: 1.2.0
+    platforms:
+      linux-amd64:
+        sha256: b90a…
+      linux-arm64:
+        sha256: 4e77…
 target:
   board: nrf7002dk/nrf5340/cpuapp
 files:
@@ -133,7 +172,8 @@ anywhere, so nothing can disagree with the patches actually present.
 document in RFC 8785 canonical JSON:
 
 ```json
-{"build_environment":{"digest":"sha256:…"},
+{"build_environment":{"tools":{"name":"…","version":"…"},
+                      "workspace":{"sha256":"…"}},
  "files":[{"path":"…","sha256":"…"}],
  "sdk":{"sha256":"…"},
  "target":{"board":"…"}}
@@ -142,14 +182,18 @@ document in RFC 8785 canonical JSON:
 `files` is sorted by `path` in ascending byte order of its UTF-8
 encoding, which for these names is a plain string sort.
 
-Four things are hashed and nothing else: the SDK's content hash, the
-build environment's digest, the board, and every file with its own
-hash. Deliberately outside it are `created`, `mcuhome.constraint`,
-`mcuhome.version` and `mcuhome.package.url` — a timestamp, an intent,
-and two names for bytes the hash already pins — and everything about the
-build environment except its digest, for the same reason: a registry
-and a tag are a location and a label for bytes that are already
-identified.
+Five things are hashed and nothing else: the SDK's content hash, the
+workspace package's content hash, the tools package's name and version,
+the board, and every file with its own hash.
+
+Deliberately outside it are `created`, `mcuhome.constraint`,
+`mcuhome.version`, `mcuhome.package.url`, and the workspace package's
+name, version and url — a timestamp, an intent, and names for bytes the
+hash already pins. The tools package is in the hash the other way round,
+by name and version and without a hash, for the reason §4 gives: its
+bytes are per platform, its version is not, and an ID that changed with
+the host architecture would say two identical builds were different
+builds.
 
 **The rule is frozen.** Everything that ever names a context depends on
 computing the same ID from the same inputs forever, so a field can join
@@ -193,7 +237,8 @@ Source patches for the trees a build environment carries.
   nesting, because nothing deeper would have a meaning.
 
 A build environment decides which layers it accepts and where each one
-lives; how a patch is applied is the specification's §9.
+lives; how a patch is applied — and where the patched tree ends up, which
+depends on the environment's profile — is the specification's §10.
 
 ## 10. Versioning
 
@@ -207,8 +252,7 @@ get something wrong. Adding a file or an optional field does not raise
 it: readers ignore what they do not know, which is what makes such a
 change additive.
 
-`build-context.json` joined this way and the version stayed at 3. It is
-new content, no reader requires it yet, and the constraint check that
-makes it load-bearing arrives with the specification's implementation —
-at which point this format is reworked as a whole and gets the number
-that comes with that.
+Version 4 is where the environment reference became a package set. That
+moved `build_environment` from one string to a structure and changed what
+the context ID hashes, and a reader of version 3 would get both wrong —
+which is precisely when the number goes up.

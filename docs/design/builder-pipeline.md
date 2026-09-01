@@ -1,96 +1,27 @@
 # MCUHome Builder Pipeline — Design
 
 > **Status: approved by the product owner (2026-08-03).**
-> Builds on the approved YAML schema design ([yaml-schema.md](yaml-schema.md)),
-> ADR 0007 (containerized toolchain) and ADR 0010 (Matter-only).
-> Incorporates the PO requirements: device-as-folder config tree,
-> shared-fragments folder, dashboard/build-server decoupling.
+> Builds on the approved YAML schema design ([yaml-schema.md](yaml-schema.md))
+> and on two product decisions: the toolchain is not installed on the
+> user's machine, and the integration targets Matter only.
 >
-> ---
+> **What this document covers:** the principles behind MCUHome's code
+> generation, the configuration tree a device is described in, the
+> pipeline stages from YAML to a complete Zephyr application, the Matter
+> data-model wiring, what happens to the build's artifacts on the host,
+> the CLI surface and the testing strategy.
 >
-> **STATUS NOTE (2026-08-09) — §5 and §6 no longer describe the design,
-> and §7's manifest is renamed and moves into the build container.**
->
-> **[§5](#5-build-execution-per-adr-0007) and
-> [§6](#6-build-service-boundary--local-and-remote) are superseded** by
-> ADR 0017-0020 and
-> [build-container-contract.md](build-container-contract.md). They are
-> kept for the record, not as design; **everything else in this document
-> stays valid**, except the two statements about
-> [§7](#7-artifacts)'s manifest marked at the end of this note. Exactly
-> what no longer holds:
->
-> - **§6's stateless build requests — "No shared filesystem, no
->   server-side session state".** The unit of interaction is a
->   **session**: one session = one build environment = one effective
->   context, with state surviving from one command to the next
->   (ADR 0019 decisions 1-2). The session's persistent working area is a
->   named path the backend supplies on every invocation (contract §4,
->   `work`).
-> - **§6's "thin HTTP wrapper" build server.** The client interface is
->   the session verb set of ADR 0019 decision 2 over WebSocket with a
->   bearer token (ADR 0019 decision 1; the transport itself carries
->   forward from dashboard ADR 0006 decisions 1-2). Towards the build
->   environment the interface is the frozen invocation ABI of the
->   build-container contract (ADR 0019 decision 4, contract §5), which
->   is what lets a build server drive **any** conforming build
->   container, not only ours.
-> - **§5's "the add-on container *is* the builder image plus
->   dashboard".** The dashboard carries no toolchain (ADR 0017 §2) and
->   never compiles (dashboard ADR 0003 decision 2, the part of that ADR
->   that carries forward). How an App builds without a container runtime
->   is **open**: the build environment would have to be unpacked and the
->   program run in it directly, which is a property of the machine that
->   builds and never a client's to ask for. The `subprocess` backend
->   profile this note used to name was one answer; it is gone
->   (2026-08-19), and the contract is about containers alone.
-> - **§5's persistent volume carrying ccache plus the west workspace
->   across runs.** The west workspace is baked into the build-container
->   image, and the program assembles its build environment from the
->   trees it is handed (contract §6.1). ccache is an optional path in
->   the request document whose writability the backend asserts rather
->   than the program probing it — read-only secondary storage for
->   untrusted work, writable only for an operator's own cache warming
->   (contract §10, §4.1; ADR 0019 decision 6).
->
-> Nothing else in §5 or §6 is superseded by this note — in particular
-> not §5's ccache requirement and its GN compiler-launcher finding, and
-> not §6's rule that the canonical device model is the wire format,
-> which ADR 0018 decision 1 keeps by putting `device-model.json` inside
-> the build context.
->
-> **[§7](#7-artifacts) stays, with two exceptions — the manifest's name,
-> and where it is written.** What a build produces is unchanged: the
-> artifact set of §7's table stays, and so does the memory report. What
-> no longer holds as written:
->
-> - **The document is called `build-report.json`, and it is the only one
->   there is** (2026-08-19: `build-manifest.json` had one writer, the
->   host-compile mode, and both are gone). The build-side
->   report is `build-report.json`, artifact role `report`, and it
->   carries the `signing` block §7 describes — the `imgtool` parameters
->   the client needs for detached signing (contract §7.2, §5.4;
->   dashboard ADR 0007 decision 3). The block's content is the one §7
->   states; only the document it lives in is renamed.
-> - **It is written inside the build container**, by the program, and
->   declared in the result document's `artifacts` list, which is
->   mandatory for a successful `build` (contract §5.4, §7.2). Producing
->   it belongs to stage 5 and therefore to `mcuhome-compiler`, which
->   runs inside the build container (ADR 0020 decision 1) — §7's
->   "implemented (`mcuhome/model/manifest.py`)" describes that document's
->   implementation, not a host-side step after the build.
->
-> The contract governs the names and roles under which artifacts leave
-> the build container — `firmware.hex`/`firmware.bin` (role `firmware`)
-> and `build-report.json` (role `report`), with **no `ota` role in v1**
-> (contract §7.2, §5.4). That leaves §7's `.ota` file where §7 already
-> puts it in a detached build: written by `mcuhome sign`, on the machine
-> holding the private key, because the wrapper's payload has to be the
-> signed image and the program in the container must not sign.
->
-> Terminology: "builder container" and "builder image" below read as
-> **build container** and build-container image; "the lib" reads as the
-> packages of ADR 0020 decision 1.
+> **What it does not cover:** the build environment. What a build
+> environment must provide, how it is invoked, which actions exist and
+> what a build context contains are fixed by the specification set —
+> [build-environment-specification.md](../spec/build-environment-specification.md),
+> [build-actions.md](../spec/build-actions.md) and
+> [build-context-format.md](../spec/build-context-format.md). How
+> MCUHome builds, distributes and runs its *own* environment is
+> [build-environment.md](build-environment.md). The former §5 (build
+> execution) and §6 (build service boundary) described that area and
+> were removed; the sections after them keep their numbers, so
+> references from other documents and from the test suite stay valid.
 
 ## 1. Principles
 
@@ -105,19 +36,21 @@
    uses; the linker strips the rest). The interpreter engine costs a few
    KB; the flash budget is dominated by the Matter/Thread stacks
    (~600–800 KB), which is also what defines the minimum viable MCU.
-   The per-build memory report (§7) tracks this permanently.
+   The memory figures every build reports
+   ([build-actions.md](../spec/build-actions.md)) track this permanently.
 2. **One canonical intermediate model.** Validation and resolution
    produce a normalized "device model" (JSON): the single internal
-   representation between YAML and generators, the transfer format for
-   remote builds (§6), and the contract the dashboard consumes
-   (schema-versioned). No generator reads raw YAML.
+   representation between YAML and generators, and what actually travels
+   to a build — it is the `model/device-model.json` of the build context
+   ([build-context-format.md](../spec/build-context-format.md)), and it
+   is schema-versioned. No generator reads raw YAML.
 3. **Every intermediate artifact is inspectable.** The build directory
    contains the resolved model and all generated files as plain text —
    debuggable with standard tools, no hidden state.
-4. **Reproducible by construction.** Pinned west workspace (ADR 0008),
-   versioned builder container (ADR 0007): same config tree + same
-   MCUHome version = same image, on any machine — including someone
-   else's build server.
+4. **Reproducible by construction.** A pinned dependency world and a
+   versioned build environment: same config tree + same MCUHome version
+   = same image, on any machine — including someone else's build server.
+   Nothing a build consumes is resolved "latest" at build time.
 5. **Fail early, fail precisely.** The validation layers from the schema
    design run before anything is generated; every error carries
    file/line/key and a fix hint.
@@ -175,17 +108,18 @@ devices/<name>/main.yaml
   │                  ├─ app/CMakeLists.txt           (generated app skeleton)
   │                  ├─ app/sysbuild.conf            (bootloader, mode, signature type)
   │                  └─ app/sysbuild/mcuboot.{conf,overlay}   (the bootloader image)
-  │  5 build       west build --sysbuild inside the builder container
+  │  5 build       compiled in a build environment (sysbuild)
   ▼
-artifacts, per image: MCUboot + the signed application, plus the combined
-hex, build-manifest.json and the memory report
+artifacts: the unsigned application image, the bootloader, and the build
+report — names and content per build-actions.md (§7)
 ```
 
 The flash layout and the bootloader configuration are **per-board
-registry data** (ADR 0015 decision 2), not generator logic: stage 4
-renders `BoardDef.update_scheme` into the two devicetree overlays and the
-two Kconfig fragments above, and nothing in the builder branches on a
-board name.
+registry data**, not generator logic: stage 4 renders
+`BoardDef.update_scheme` into the two devicetree overlays and the two
+Kconfig fragments above, and nothing in the builder branches on a board
+name. Supporting a new board is therefore a registry entry, never a code
+change in the generator.
 
 - Stages are separately invocable (`mcuhome validate`, `mcuhome build`);
   stage 4's output is a complete, standalone Zephyr application that
@@ -207,161 +141,58 @@ integration prototype (2026-08-04, see
 `emberAfSetDynamicEndpoint`, with a static ZAP-generated data model only
 for the fixed root endpoint — generated once per MCUHome release, not
 per device config. `CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT` sizing is
-resolved (ADR 0014): it derives automatically from
+resolved: it derives automatically from
 `CONFIG_MCUHOME_MATTER_MAX_DYNAMIC_ENDPOINTS`
 (`include/mcuhome/matter/chip_project_config.h`), so the builder's
-remaining job there is at most a Kconfig passthrough. Requirements the
-builder still owns: zap-cli/gn provisioning and the vanilla-Zephyr patch
-set ([../../patches/](../../patches/)).
+remaining job there is at most a Kconfig passthrough — one Kconfig symbol
+instead of a number that has to be kept in sync by hand.
 
-## 5. Build execution (per ADR 0007)
-
-> **Superseded in part — see the status note at the top of this
-> document.**
-
-- `mcuhome build` runs stage 5 inside the versioned builder image
-  (Zephyr SDK + pinned west workspace pre-baked). Host needs docker
-  only; a persistent volume carries ccache + west workspace across runs.
-- **ccache is a hard requirement of the builder image** (PO decision,
-  2026-08-03), not an optimization: on Raspberry-class Home Assistant
-  hosts without a remote build server it is the difference between
-  usable and painful rebuild times. Prototype finding to honor: Zephyr's
-  CMake side picks ccache up automatically, but the Matter SDK's inner
-  GN build invokes the compiler directly — the builder must explicitly
-  route it through ccache (compiler-launcher wiring in the GN args).
-- Inside the Home Assistant add-on the same code path runs natively —
-  the add-on container *is* the builder image plus dashboard.
-- ~~`--method local-dev` escape hatch~~ — superseded (2026-08-19): a
-  development change reaches a build as a *patch* in the build context,
-  so it is compiled against the declared environment. Everyone uses the
-  container.
-
-## 6. Build service boundary — local and remote
-
-> **Superseded in part — see the status note at the top of this
-> document.**
-
-The dashboard never calls the builder directly; it talks to a **build
-service interface** with two implementations:
-
-| Implementation | v0.1 | How |
-|---|---|---|
-| **Local** | yes | same container, in-process invocation of the builder package |
-| **Remote build server** | designed now, built later | HTTP API on a user-operated machine running the same builder image |
-
-Design rules that make "remote" cheap later (and are therefore fixed
-now, even though v0.1 only ships "local"):
-
-- **Stateless build requests.** Input: a self-contained bundle (the
-  device folder + referenced `shared/` fragments + resolved secrets +
-  MCUHome version). Output: the artifact set from §7 plus logs. No
-  shared filesystem, no server-side session state.
-- **The canonical model is the wire format** — the request carries the
-  resolved model, the response carries `build-manifest.json` + artifacts;
-  both ends speak device-model JSON, nothing else. **Implemented on the
-  builder side**: `mcuhome build --model <device-model.json>` starts at
-  stage 4, and reads no configuration tree and no secrets file at all
-  (dashboard ADR 0007 decision 4) — a build server has no business
-  holding either. `mcuhome.api.read_model` is the same thing in process,
-  and it refuses a `model_version` it does not implement by naming both
-  numbers rather than guessing. The two routes produce byte-identical
-  trees, which is what makes the split a contract instead of a hope; the
-  file name of the source configuration is a field of the model
-  (`device.source`) for exactly that reason, since the generated headers
-  name it and stage 4 may read nothing but the model.
-- **Version negotiation.** A build server advertises the MCUHome/builder
-  image versions it can build; the dashboard picks the match for the
-  config. Mismatch is an error, never a silent fallback.
-- **Same code everywhere.** The build server is a thin HTTP wrapper
-  around the identical builder package/container — no second build
-  implementation to maintain.
-- Rationale: HA (and thus the dashboard) often runs on a Raspberry Pi;
-  compiling Zephyr+Matter there is slow. Anyone can point the dashboard
-  at a beefier machine running the build-server container.
-- Open sub-topic for the build-server design doc: secrets transport
-  (send-with-bundle vs. server-side injection) and authentication.
+Because that data model is a release constant, it is generated when
+MCUHome's build environment is packaged, not while a device is built:
+neither ZAP nor its provisioning is part of a build
+([build-environment.md](build-environment.md)). The vanilla-Zephyr patch
+set ([../../patches/](../../patches/)) is applied at the same point.
 
 ## 7. Artifacts
 
-Since ADR 0015 a build produces **a set per image**, not one file. Under
-sysbuild each image has its own sub-directory of the build tree
-(`<build>/mcuboot/`, `<build>/<app>/`):
+What a build produces, under which names, and what the build report
+contains is fixed by the action vocabulary
+([build-actions.md](../spec/build-actions.md)): the unsigned application
+image, the bootloader where one was built, and `build-report.json`. This
+section is about what happens to them afterwards, on the host — the part
+no build environment ever does, because it needs the private key.
 
-| Artifact | Image | Purpose |
-|---|---|---|
-| `zephyr.hex` / `.bin` / `.elf` | MCUboot | the bootloader, installed once per device by the ADR 0016 bootstrap |
-| `zephyr.signed.hex` / `.bin` | application | what MCUboot chain-loads, and what an update carries |
-| `merged.hex` | — | every image at its own offset, for a full-chip flash over a debug probe |
-| `zephyr.uf2` | application | drag-and-drop bootstrap on UF2 boards (ADR 0016 decision 5) |
-| `<device>-<version>.ota` | application | Matter OTA image (header + the signed payload above) |
-| `build-manifest.json` | — | device model + versions + image hashes — consumed by the dashboard |
-| `memory-report.txt` | per image | ROM/RAM footprint — regression tracking |
+**Signing is detached.** A build never signs and never sees a private
+key; it compiles the public half in, which is all MCUboot needs to
+verify at boot. `mcuhome sign <build dir>` then runs `imgtool` with the
+parameters the build reported, on the machine that holds the key. Three
+of those parameters — header size, slot size and alignment — come from
+the board's registry entry, the same partition table stage 4 rendered
+into the overlay; the fourth, the image version, is read out of the
+built application's Kconfig. They are reported by the side that knows
+them rather than guessed by the side that signs: get one of them wrong
+and the result is an image the bootloader silently refuses.
 
-**`build-manifest.json` is implemented** (`mcuhome/model/manifest.py`). It sits
-at the top of the build directory next to `device-model.json`, and every
-path in it is relative to that directory, because a manifest crosses a
-network (§6). It carries the device name, board and model version, the
-builder's version, the snippets and job count the build ran with, one
-entry per image (role, files, size, SHA-256 per file), the combined hex,
-an `ota` block (below), and a `signing` block: the `imgtool` arguments — `--version`,
-`--header-size`, `--slot-size`, `--align` — under imgtool's own option
-names, the input and output artifact of each format, and two booleans,
-`signed_by_the_build` (how the build ran, never changes) and `signed`
-(whether a signature exists in the directory now). Three of the four
-signing arguments come from the board's registry entry, which is the same
-partition table stage 4 rendered into the overlay; the fourth,
-`--version`, is read out of the built application's Kconfig. The document
-is deterministic apart from the sizes and hashes it measures: no
-timestamps, no host names, no absolute paths.
+Signing afterwards costs nothing in equivalence: it does not touch the
+image, it appends a signature. ECDSA draws a fresh random nonce per
+signature, so two signings of identical bytes differ in the signature
+TLV (occasionally in its length) and in nothing else — mcuhome-workbench
+asserts exactly that in `tests/python/test_imgtool.py`: header, payload,
+protected TLVs and the SHA-256 over all of them equal, signature
+different, both verifying.
 
-**The Matter OTA file is implemented** (`mcuhome/model/ota.py`, ADR 0015
-decision 5). It is written for a device that can actually receive one —
-the board's update scheme has a staging slot and the device has a Matter
-stack — and it wraps the **signed** application image, so an inline build
-writes it at the end and a detached build only gets it from `mcuhome
-sign`. The manifest's `ota` block exists in both cases and carries the
-version, the Matter `SoftwareVersion` derived from it (ADR 0015 decision
-9), and the vendor and product IDs; `path`/`size`/`sha256` are null until
-the file exists. That is what lets the machine holding the signing key
-produce the .ota without a device configuration and without the Matter
-SDK: MCUHome writes the format itself rather than calling CHIP's
-`ota_image_tool.py`, and the pytest suite compares the two byte for byte
-wherever the SDK is present.
-
-`memory-report.txt` is still to come; the memory figures are reported to
-the terminal today and carried per image in the manifest as
-`flash_bytes`.
-
-The unsigned `zephyr.bin` is kept as well, and not only for the memory
-report: signing is a detached `imgtool` step over the finished binary, so
-a remote builder returns the unsigned image and the signature is applied
-where the key is (ADR 0015 decision 8). **That path is implemented too**:
-`mcuhome build --no-sign --public-key <file>` gives sysbuild the public
-half of the key pair — enough for MCUboot, which compiles the public key
-in, and useless for signing — and the generated tree's `sysbuild.cmake`
-clears the application image's key setting, which makes Zephyr's
-`cmake/mcuboot.cmake` skip signing entirely rather than write an unsigned
-file with `signed` in its name. `mcuhome sign <build dir>` then runs
-`imgtool` with the manifest's parameters, wherever the private key is.
-Such a build deliberately leaves no `merged_*.hex` behind either:
-sysbuild fills it with the *unsigned* application when there is no signed
-one, which would be a file that looks flashable and bricks the boot.
-
-Equivalence between the two paths is "byte-identical image, different
-signature", and that is the strongest statement available: ECDSA draws a
-fresh random nonce per signature, so two signings of the same bytes with
-the same key differ in the signature TLV (occasionally in its length) and
-in nothing else. `tests/python/test_imgtool.py` asserts exactly that —
-header, payload, protected TLVs and the SHA-256 over all of them equal,
-signature different, both verifying.
-
-Measured once on the real toolchain (nRF7002-DK, the BMP180 example, one
-build directory built both ways): the **bootloader is byte-identical**
-whether sysbuild is given the private key or only its public half, and
-the two signed applications agree in header (512 B), payload
-(564,396 B), flags, protected TLVs, image digest and key hash, differing
-only in the ECDSA signature — 71 bytes against 72, which is the DER
-length of a random nonce.
+**The Matter OTA file is written after signing, on the same machine**
+(`mcuhome/model/ota.py` here; the writing end lives in
+mcuhome-workbench). It wraps the *signed* application, so it can only be
+produced where the signature is, and it is written only for a device
+that could receive one — the board's update scheme has a staging slot
+and the device has a Matter stack. MCUHome writes the format itself
+instead of calling CHIP's `ota_image_tool.py`, which is what lets the
+key holder produce an OTA image without a device configuration and
+without the Matter SDK; the pytest suite compares the two byte for byte
+wherever the SDK is present. The Matter `SoftwareVersion` is derived
+from the firmware version, so the number a controller compares is never
+maintained by hand.
 
 Flashing UX (`mcuhome flash`, browser-based flashing from the dashboard)
 is its own later design; the artifacts above are designed so both work.
@@ -369,18 +200,16 @@ is its own later design; the artifacts above are designed so both work.
 ## 8. CLI surface (v0.1)
 
 The command vocabulary, its flags and the `--json`/exit-code contract
-are the CLI's own decisions, recorded in the mcuhome-cli repository since
-2026-08-14 (vocabulary: cli ADR 0003; output/exit-code contract: cli
-ADR 0004; configuration and builder selection are platform decisions,
-ADR 0022/0023). The enumeration this section used to carry had drifted —
-it listed `--keep-going`, which was never built — and is not repeated
-here.
+are the CLI's own decisions and are documented in the mcuhome-cli
+repository. The enumeration this section used to carry had drifted from
+what was built — it listed `--keep-going`, which never existed — and is
+not repeated here: one place per decision beats two that disagree.
 
 What stays pipeline-relevant: `<device>` is a folder name resolved
 against the config tree root (`devices/<name>/main.yaml`; an explicit
 path works too; tree root `--config-root`, else auto-discovered cwd
-upwards — as built today; the target model, a project directory with
-`mcuhome.yaml` and `--project-dir`, is ADR 0022). `mcuhome device
+upwards — as built today; the target model is a project directory with
+`mcuhome.yaml` and `--project-dir`). `mcuhome device
 matter-pairing --new` is the exception to "the builder never writes into
 the configuration tree" (§2), and it exists because of §1.4: a device
 needs credentials nobody else has, and a build has to be reproducible, so
@@ -410,9 +239,7 @@ design. In process, the supported programmatic surface is
 
 | Topic | Status |
 |---|---|
-| Dynamic endpoints vs ZAP fallback | Prototype first, then ADR (§4) |
-| Build-server API details (auth, secrets transport) | Own design doc, pre-dashboard |
+| Build-server client API (authentication, secrets transport) | Own design doc |
 | Flashing UX (CLI + browser) | Own design doc |
-| device-model.json schema versioning | **Closed.** `MODEL_VERSION` is 1 and is a published contract: the dashboard pins what it sends and what it can read (`versions.py`); the server-side range advertisement retired with the job protocol (dashboard ADR 0007 decision 4) |
-| Builder image layout/registry | Decided with the first image (`containers/build-container/`): Debian 13 base, tools only, `ghcr.io/mcu-home/build-container:zephyr-<line>-r<rev>` |
-| `mcuhome migrate` (ESPHome import) | Later milestone (ADR 0009) |
+| device-model.json schema versioning | **Closed.** `MODEL_VERSION` is 1 and is a published contract: a consumer pins what it sends and what it can read (`versions.py`), and a build reads the model out of the build context, so nothing negotiates a version range at run time |
+| `mcuhome migrate` (ESPHome import) | Later milestone |

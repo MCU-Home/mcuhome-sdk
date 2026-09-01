@@ -1,6 +1,6 @@
 # MCUHome Build Actions
 
-**For spec generation 1.** Draft — not yet released.
+**For spec generation 3.** Draft — not yet released.
 
 The [build environment specification](build-environment-specification.md)
 gives every step an `action` and says which actions exist is not its
@@ -33,14 +33,14 @@ Compile the firmware for the device the build context describes.
 
 **Reads:** everything. `mcuhome/build-context` for the device model, the
 verification key and the patches, `mcuhome/sdk` for the code generator
-and the framework sources, and whatever source trees the environment
-carries.
+and the framework sources, and whatever source trees the environment's
+packages carry.
 
 **Parameters:** none today. `parameters` is `{}`.
 
 **Does:**
 
-1. Apply the context's patches to the trees they name, per §9 of the
+1. Apply the context's patches to the trees they name, per §10 of the
    specification.
 2. Generate the Zephyr application for the device model. MCUHome's own
    environment does not do this itself — the code generator ships in
@@ -117,9 +117,12 @@ incomplete. It exists to be shown to a person, not to be acted on.
 ## 3. What is not an action
 
 **Describing the environment.** Its Zephyr version, the spec generation
-it implements and the contexts it accepts are OCI labels, read before
-anything is started. An action could only answer the same questions
-later and at the cost of a container.
+it implements, the contexts it accepts and the packages it consists of
+are declared in the environment's package metadata and mirrored as image
+labels, and they are read before anything is started — that is how the
+orchestrator picks the environment in the first place. An action could
+only answer the same questions afterwards, and at the cost of starting
+what it was supposed to help choose.
 
 **Verifying the context.** The orchestrator creates the context, hashes
 it, and delivers it; the environment is forbidden to modify it. There is

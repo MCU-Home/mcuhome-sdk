@@ -89,15 +89,17 @@ today — is a separate change.
 
 ## The contract program at `/mcuhome/run` (r4)
 
-The executable §2.2 of the [build-container
-contract](../../docs/design/build-container-contract.md) fixes at that
-absolute path, invoked as `/mcuhome/run <action> <absolute path of the
+`/mcuhome/run` is invoked as `/mcuhome/run <action> <absolute path of the
 request document>`. It is [`run`](run) in this directory, installed mode
-0755 — §2.2 requires it to be executable by *every* user the backend may
-exec as — and it is a thin launcher: it puts the mounted SDK on
-`PYTHONPATH` and executes `mcuhome.compiler.abi`, which is where the
-invocation ABI actually lives, because the contract's `subprocess`
-profile runs the same code with no image around it.
+0755 so that every user the backend may exec as can execute it, and it is
+a thin launcher: it puts the mounted SDK on `PYTHONPATH` and executes
+`mcuhome.compiler.abi`, which is where the invocation ABI actually lives,
+because the specification's `subprocess` profile runs the same code with
+no image around it.
+
+The build-environment boundary is now specified by
+[`docs/spec/build-environment-specification.md`](../../docs/spec/build-environment-specification.md),
+which this image predates and will be aligned to.
 
 That module path is why **r6** exists: ADR 0020's package split moved the
 ABI from `mcuhome.abi` into `mcuhome.compiler.abi`, and this launcher is

@@ -331,20 +331,37 @@ def test_describe_runs_after_the_record_it_describes() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_recorded_layer_names_are_the_contract_registry() -> None:
-    """Layer names are an append-only registry the contract owns (§1.1).
+def _layer_name_grammar() -> re.Pattern[str]:
+    """The layer-name pattern, read out of the spec itself (§9).
 
-    They are what a later ``describe`` fills its ``trees`` block from, so
-    a private spelling here would mean a translation step nobody wrote.
+    Hardcoding the grammar here would defeat the point of this suite: a
+    spec change to the pattern must fail this test rather than go
+    unnoticed. Failing to find the pattern at all is the same kind of
+    drift and gets its own clear message.
+    """
+    spec = REPO_ROOT / "docs" / "spec" / "build-context-format.md"
+    text = spec.read_text(encoding="utf-8")
+    found = re.search(r"Lowercase, `(\[a-z\]\[a-z0-9_-\]\*)`", text)
+    assert found is not None, (
+        f"could not find the §9 layer-name pattern in {spec} — "
+        "has the grammar wording moved or changed?"
+    )
+    return re.compile(f"^{found.group(1)}$")
+
+
+def test_the_recorded_layer_names_are_valid_layer_names() -> None:
+    """Layer names must match the grammar the spec fixes (§9).
+
+    There is deliberately no closed registry any more — a layer is
+    "whatever the environment knows" — but the spelling is still
+    constrained (docs/spec/build-context-format.md §9).
     """
     module = _record_module()
-    contract = (REPO_ROOT / "docs" / "design" / "build-container-contract.md").read_text(
-        encoding="utf-8"
-    )
-    found = re.search(r"defines the layer names\s*\n?\s*(`[^\n]+`)", contract)
-    assert found is not None, "the contract no longer states its layer registry as expected"
-    registry = set(re.findall(r"`(\w+)`", found.group(1)))
-    assert set(module.LAYER_PROJECTS) | {module.SDK_LAYER} == registry
+    layer_name = _layer_name_grammar()
+    names = set(module.LAYER_PROJECTS) | {module.SDK_LAYER}
+    assert names, "expected at least one recorded layer name"
+    for name in names:
+        assert layer_name.match(name), f"{name!r} is not a valid layer name"
 
 
 def test_the_record_names_the_resolved_commit_and_the_patch_digest(tmp_path, monkeypatch) -> None:
