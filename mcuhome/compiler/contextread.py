@@ -4,16 +4,15 @@
 
 This is deliberately the *second* implementation of the context
 read/verify half; :mod:`mcuhome.workbench.contextdir` carries the
-client's. The duplication is the contract's own design, not an accident:
-build-container-contract.md §3.3 wants every party to compute the
-context ID *independently, from the bytes it actually holds* — the
-build server recomputes it without the workbench (ADR 0019 §8), the
-program inside the container recomputes it without the workbench
-(§7.3), and the client computes it when creating the context. What must
-be identical everywhere is the *rule*, and the rule lives one package
-down, in :mod:`mcuhome.model.context` — both implementations are thin
-I/O shells over the same frozen vocabulary, and the golden vectors in
-``tests/python`` pin them against each other.
+client's. The duplication is deliberate, not an accident: every party
+that ever names a context computes its ID *independently, from the
+bytes it actually holds* — the build server recomputes it without the
+workbench, the program inside the container recomputes it without the
+workbench, and the client computes it when creating the context. What
+must be identical everywhere is the *rule*, and the rule lives one
+package down, in :mod:`mcuhome.model.context` — both implementations
+are thin I/O shells over the same frozen vocabulary, and the golden
+vectors in ``tests/python`` pin them against each other.
 
 Existing because of ADR 0024: the compiler ships inside the SDK package
 and runs in the build container, where the workbench neither exists nor
@@ -54,12 +53,13 @@ class ContextFormatVersionError(BuildError):
     """The manifest states a ``context`` format version nothing here implements.
 
     The compiler-side twin of the workbench's error of the same name —
-    the build-container contract answers this refusal differently from
-    every other unreadable manifest: ``status: "unsupported"``,
-    ``reason: "unsupported.context"``, the found version in
-    ``error.details`` (build-container-contract.md §3.2). :attr:`found`
-    carries the manifest's ``context`` key verbatim — ``None`` when the
-    manifest names no format version at all.
+    this refusal answers differently from every other unreadable
+    manifest: ``status: "unsupported"``, ``reason: "unsupported.context"``,
+    the found version in ``error.details`` — the legacy result-document
+    vocabulary that :mod:`mcuhome.compiler.abi`'s legacy invocation still
+    answers with (its ``_STATUS_UNSUPPORTED`` and ``_REASON_CONTEXT``).
+    :attr:`found` carries the manifest's ``context`` key verbatim —
+    ``None`` when the manifest names no format version at all.
     """
 
     def __init__(self, message: str, *, hint: str, found: object) -> None:
@@ -73,8 +73,11 @@ def _context_files(root: Path) -> tuple[ContextFile, ...]:
     Neither context document — ``manifest.yaml`` (the list itself) nor
     ``context.yaml`` (the request, whose never-hashed fields would leak
     into the identity through the back door) — is content, and neither
-    is the backend-written ``.mcuhome/`` runtime directory
-    (build-container-contract.md §3.2).
+    is the backend-written ``.mcuhome/`` runtime directory: a holdover
+    exclusion from an earlier design (see
+    :data:`mcuhome.model.context.BACKEND_DIR`) that never actually
+    occurs under the v3 specification set, where the per-invocation
+    request document lives outside the build context entirely.
     """
     entries = []
     for path in sorted(root.rglob("*")):

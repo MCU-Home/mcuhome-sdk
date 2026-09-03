@@ -1,249 +1,193 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The invocation ABI of the build container contract, and its three actions.
+"""The builder program: two invocations, one build.
 
-``docs/design/build-container-contract.md`` §5 is frozen. A backend runs
+This module is what a MCUHome build environment runs when a step starts,
+and it answers two calling conventions.
 
-    /mcuhome/run <action> <absolute path of the request document>
+**The v3 invocation is the primary one**, and the one new work is written
+against. ``docs/spec/build-environment-specification.md`` fixes it: the
+entry point is run with **no arguments** (§6), everything the step is
+about is in ``mcuhome/invocation-request.json`` below the base directory
+``MCUHOME_BUILDER_BASE_DIR`` names (§4), the answer is one result document
+at ``mcuhome/out/result-<invocation_id>.json`` (§6.2), and the exit code
+is zero exactly when that document says ``success`` (§6.3). Which actions
+exist is deliberately not the specification's business;
+``docs/spec/build-actions.md`` documents MCUHome's, and ``build`` is the
+one an environment of this kind implements. :func:`step` is that
+invocation, and the section "The v3 invocation" below is all of it.
 
-and reads a JSON result document back from the path the request named.
-This module is that ABI: argv, the request document's five parsing rules
-(§5.2), the three exit codes (§5.3), and the atomic result document
-(§5.4). ``containers/build-container/run`` is the thin launcher the image
-installs at that fixed path; everything it does is call :func:`main`.
+**The legacy invocation belongs to the baked build container** and is kept
+working, unchanged, until the switchover retires that image. It is the
+two-operand form ``/mcuhome/run <action> <absolute path of the request
+document>``, with a request and a result document of its own and three
+actions — ``describe``, ``verify`` and ``build``. :func:`main` is that
+invocation. The design document it implements, the build container
+contract, has been retired and is no longer in this repository: the ``§``
+references in the legacy half of this module and of its test suite name
+sections of *that* document and resolve nowhere else. They are left as
+they are, because that half is deleted whole at switchover and nothing
+outside it reads them.
 
-**All three actions of contract v1 are implemented:** ``describe``
-(§7.1), ``build`` (§7.2) and ``verify`` (§7.3). ``generate`` is not one
-of them and never will be — §6.1 makes it "an action of the SDK entry
-point and **not** of the program: it is never invoked on ``/mcuhome/run``
-and never appears in ``program.actions``" — so it refuses the way §7 says
-an unimplemented action refuses: ``status: "unsupported"``, ``reason:
-"unsupported.action"``, exit 1, a legible answer a backend can reschedule
-on rather than a crash.
+**Both invocations end in the same builder** — :class:`_Build`, which
+applies the context's patches, reaches code generation through the SDK
+entry point, compiles with ``west build --sysbuild`` and delivers the
+artifacts. What differs is what each invocation knows before the build
+starts:
 
-``verify`` computes nothing itself. Every hash and the effective context
-ID come from :func:`~mcuhome.compiler.contextread.verify_context`, the one
-implementation of §3.3's normative rule in this project: "Implementations
-on both sides of the contract MUST compute the ID independently from the
-bytes they actually hold", which is only worth anything while each side
-has *one* implementation. A second one here is the failure ADR 0018 §6
-freezes the rule against.
+*Where the trees are.* The legacy invocation is told, per invocation, in
+its request document, and checks what it is told against the image's own
+workspace record. The v3 invocation is told nothing: the trees are the
+environment's own, and it reads its packages' record for them
+(:func:`environment_workspace`). Either way the answer is one path per
+layer, and a build against any other path is refused rather than
+attempted — west resolves project paths from ``.west/config`` plus the
+manifest, and nothing here can move them at invocation time. What would
+replace that is a west re-registration step: a manifest rewrite, or
+``west config`` per project. That is a design decision, not a
+translation.
 
-Where the contract is silent this module does the smallest thing, and
-says which line it is standing on. The full list:
+*What a step may keep.* The legacy contract gives a session a persistent
+``work`` directory, which is what makes its ``incremental`` mode mean
+anything, and the program writes a session marker there so it can tell
+its own state from another session's. The v3 specification is the
+opposite and simpler: ``work`` is empty at the start of every step (§3),
+nothing survives except ``out`` and the cache tiers, so every v3 step is a
+clean build and no marker is worth writing.
 
-*A document that is not RFC 8259 as this contract narrows it is exit 66.*
-§5.2 opens with "UTF-8 without BOM, one JSON object, RFC 8259. Duplicate
-keys are invalid. ``null`` never means 'absent'; it is invalid." — three
-sentences about the same thing, the document's own definition. Parsing
-rule 5 says exit 66 when the document "does not parse", so a duplicate
-key and a ``null`` are read as "does not parse" rather than as
-``unsupported.request``. The alternative would mean reading ``result``
-out of a document just declared invalid, which is unanswerable in the one
-case that matters: a document with two ``result`` keys.
+*Who measures the context.* The legacy contract makes the program compute
+the effective context ID and report it, which is why ``verify`` exists at
+all. Under the v3 specification the orchestrator creates the context,
+hashes it and delivers it, and ``docs/spec/build-actions.md`` §3 strikes
+the question outright: "there is nothing an environment could confirm
+that the orchestrator does not already know from its own bytes". A v3
+step therefore checks that the files it needs are there and builds.
 
-*A ``result`` that is absent, not a string, or not absolute is exit 66.*
-Rule 4 ("A path value that is not absolute ⇒ ``unsupported.request``")
-cannot be honoured for ``result`` itself: writing that answer needs a
-result path to write it to, and §5.1 forbids relying on a ``cwd`` to make
-a relative one absolute. Rule 5's "``result`` is missing or not writable"
-is the case that remains, and this is it.
+*Where the artifacts and the report go.* Both put ``firmware.hex``,
+``firmware.bin``, ``bootloader.hex`` (when the build produced one) and
+``build-report.json`` into ``out``, under exactly those names, and the
+build report is the same document — ``docs/spec/build-actions.md`` §2.1
+and §2.2 fix both, and the legacy contract fixed the same ones. The two
+invocations differ only in how they *declare* them: the legacy result
+document carries an object per artifact with its role and its hash, the
+v3 result document carries the file names relative to ``out``.
 
-*"Not writable" is found out by writing.* §5.4 makes the result document
-"the **last write action** of the invocation", so this module does not
-probe the directory first; it builds the whole document in memory and
-reports exit 66 when the atomic write fails. Nothing is left behind
-either way.
-
-*The order of the checks is the bootstrap chain of §5.1*, step for step:
-argv arity (3), parse (4), preamble (5), action (6), ``required`` (7),
-the remaining fields (8).
-
-*``program.actions`` lists what is implemented, not what is required.*
-§7.1.1 calls it "the action names the program implements" and in the same
-breath requires it to "include ``describe``, ``verify`` and ``build``".
-Both can hold now, and the list stays the honest one either way: it is
-what :data:`IMPLEMENTED_ACTIONS` says, never a constant copied out of the
-contract. A backend MUST NOT invoke what is absent from the list, so a
-list that ran ahead of the code would be the one lie a backend acts on.
-
-*What each action needs out of the request document.* §5.2 makes seven
-fields mandatory for every working action, and rule 3 refuses over a
-narrower thing: "A field the program needs for this action and does not
-find". ``verify`` needs two of the seven. ``context`` is the directory
-§7.3 defines the action over. ``session`` is needed because §5.4 has a
-``verify`` result carry it "in every conforming invocation" — the row is
-conditional on §5.2 making the request carry it, so a request without it
-is the backend's breach of §5.2, and refusing under rule 3 is how this
-program reports a breach it will not paper over by inventing the echo.
-The other five (``out``, ``work``, ``tmp``, ``trees.sdk``,
-``limits.jobs``) name work this action does not do: it "reads the context
-and nothing else" (§7.3), and §4.1 says "The program MUST NOT require an
-entry it does not need for the requested action". A backend that omits
-them is in breach of §5.2, but that is a defect in the backend's request
-and not in this invocation's answer, and this program is not the thing
-that reports it. ``build`` needs all seven, and acts on every one of
-them, which is why :data:`HONOURED_REQUIRED` is a table per action rather
-than one list: the same pointer is honourable for one action and a lie
-for another.
-
-*A manifest that cannot be read at all is ``error.context.unreadable``.*
-"found ``manifest.yaml`` and cannot read it as one: broken YAML, a
-missing section, or a hash in a spelling §3.3.1 refuses" — the reason
-§5.4's registry provides, distinct from ``error.context.mismatch`` so a
-backend can tell a corrupt manifest from a tampered context file by
-``reason`` alone. This implementation once answered ``mismatch`` here
-because the registry had no better value; the gap was recorded, taken to
-the product owner, and closed as an erratum (E36) — which is the working
-order of this contract: the reference implementation surfaces the gap,
-the registry gains the value, the implementation follows the registry.
-
-*A manifest that states no format version is unreadable too, not
-``unsupported.context``.* That reason means the program "found a
-``context`` format version it does not implement", and §3.2 explains the
-status by "nothing about this context is broken". A manifest with no
-``context`` key is broken — §7.3 now says it in as many words: "no other
-image would fare better with it, so there is nothing for a backend to
-reschedule onto".
-
-*The key names inside ``error.details``.* The contract fixes exactly one
-— "``error.details.required`` for ``unsupported.required``" (§5.4.1) —
-and otherwise says only which *facts* go there. So: ``context`` carries
-"the version it found" (§3.2), under the name the manifest key already
-has; ``missing`` carries "the missing path" (§7.2); ``paths`` carries
-"the offending paths" (§7.3). ``paths`` is empty when the disagreement
-names no content file — a spoofed ``id``, or a manifest that could not be
-read — because ``manifest.yaml`` is not a content file (§3.2) and naming
-it under "the offending paths" would put a file in that list that can
-never be in the integrity list.
-
-*A failing ``verify`` reports ``context`` exactly when it measured one.*
-§5.4's table qualifies the row with "MUST, on success" and the paragraph
-below it says what the qualification is for: "The rows qualified 'on
-success' are the ones that report *measured* work. An invocation that
-failed before it got that far reports what it measured and nothing more:
-… a ``verify`` that could not read ``manifest.yaml`` has no effective
-context ID." The criterion is measurement, not status — so an integrity
-mismatch, which measured the effective ID on the way to finding it,
-reports it, and a manifest this program refused to hash does not.
-``layers`` never appears at all: §5.4 forbids it for ``verify``, because
-"it reports work that was actually done, and ``verify`` does not do that
-work".
-
-*``trees`` is read from the image's own record.* The image writes
-``/mcuhome/workspace.json`` (``containers/builder/workspace-record.py``,
-whose docstring already anticipates "a later ``describe`` fills its
-``trees`` block by lookup rather than by translation"). Without that file
-— the ``subprocess`` profile, a foreign filesystem — every layer is
-reported with ``"path": null``, which §7.1.1 defines as "this tree is not
-in my image; put it wherever you like and name it in ``trees``". That is
-true of a program that carries no build environment of its own, and it is
-the answer that makes a backend supply what it would have had to supply
-anyway.
-
-**Where §7.2 is silent, and what ``build`` does instead.** Every entry
-below is a decision this module took, not a rule it found. Each names the
-line it stands on.
-
-*A ``params.mode`` value this program does not implement is
-``unsupported.required``.* §5.2 ("`required` and value granularity")
-already says so — "A program that knows ``/params/mode`` but not the
-value ``reproducible`` MUST refuse with ``unsupported.required``" — so
-the bare case answers the same reason a value NAMED in ``required``
-earns through :data:`_HONOURED_REQUIRED`. It is not
-``unsupported.request``: the field is present and well-formed, and
-refusing it as "missing" would misname a present-but-unimplemented
-value. Silently executing ``reproducible`` as ``clean`` stays forbidden
-— the §5.2 failure "accept the job and quietly deliver something else".
+Decisions this module took that no document made for it, and that both
+invocations inherit:
 
 *The generated application tree and the CMake tree live in ``work``.*
-§5.2 calls ``work`` "the session's persistent working area" and §7.2
-defines ``incremental`` as "an ``incremental`` for which the program finds
-no prior state of *this session* in ``work`` is executed as ``clean``".
-A tree in ``tmp`` is gone every invocation, so ``mode`` could not mean
-anything at all; ``work`` is the only place in the request document where
-it can. ``clean`` deletes both trees and passes ``--pristine always``;
-``incremental`` keeps them and lets
-:func:`~mcuhome.compiler.workspace.pristine_mode` decide. The contract defines
-``clean`` as "fresh workspace" and nothing more.
+They are the two directories a build produces that are worth keeping for
+the next step of a session, and a tree in a per-step scratch directory
+could never make an incremental build mean anything.
 
-*This program writes a session marker, so that ``incremental`` has a
-predicate.* §6.3 makes the marker optional and says an absent one "means
-nothing" — which leaves a marker-less program with no way to evaluate
-§7.2's "prior state of *this session*". Writing one is the only reading
-under which the mode parameter is implementable, and §6.3 permits it
-outright. It is therefore read on every invocation, before anything in
-``work`` is touched, as §6.3 requires of a program that writes one.
+*The code generator is a child, and it is handed an empty ``out``.* The
+generator ships in ``mcuhome/sdk``, which the orchestrator delivers per
+build context, so the generated application belongs to the SDK the
+context pinned rather than to the environment's vintage. It is invoked
+over the legacy two-operand ABI (``mcuhome-sdk.json`` declares the entry
+point and its runtime), and what it produced is then absorbed into
+``work/tree`` content-aware: a file whose bytes are already there is left
+alone, mtime and all, because CMake watches the tree and a rewritten
+unchanged ``CMakeLists.txt`` re-runs the whole Matter sub-build.
 
-*A marker that cannot be read is treated as foreign.* §6.3 types a marker
-"naming a different session" and nothing else. This program writes its
-own marker atomically, so a marker it cannot parse is not one it wrote —
-and §6.3 forbids using, deleting or overwriting state it cannot claim.
+*Sysbuild's combined hex never reaches ``out``.* On a build that never
+signs it is the *unsigned* application under a name that looks flashable,
+which is a hazard rather than an artifact. Nothing lands in ``out`` that
+this program did not put there deliberately.
 
-*A context whose materialized files disagree with ``manifest.yaml`` does
-not stop a ``build``.* §7.3 makes that ``verify``'s failure, and §5.4
-makes ``result.context`` "the effective context ID actually worked on …
-computed by the program from the context as materialized. It exists **for
-comparison only**". So the build proceeds and reports what it measured;
-the backend compares that against its own ID (§9.3) and is the party that
-decides. A ``verify`` is one invocation away for a backend that wants the
-check first.
+*A build never signs.* It is handed ``keys/signing.pub`` from the context
+as the bootloader's verification key and produces an unsigned image; the
+private half never enters a build environment. There is no fallback to
+MCUboot's own default key, because that default is MCUboot's demo key and
+its private half is published — a context without the file fails the step
+instead.
 
-*The key names inside ``error.details`` for the build reasons.* The
-contract fixes only ``error.details.required`` and otherwise names facts.
-So: ``missing`` carries "the missing path" (§7.2), ``layer`` names the
-layer for ``error.layer.unknown`` and ``error.patch.incomplete``, and
-``error.work.foreign`` carries "the two session IDs" as ``session`` (the
-one this invocation was given) and ``found`` (the one in ``work``).
+*``HOME`` and the west configuration are copied into ``work``.* A build
+runs as a user with no home directory of its own, and tools that cache in
+``$HOME`` fail obscurely without a writable one; west writes ``zephyr.base``
+back into ``.west/config`` on its first build, and the workspace it would
+write into is frozen input. So both live in ``work``, and the workspace is
+never written to incidentally either.
 
-*Two artifacts carry role ``firmware``, and §7.2.1 says so.* "The
-parameters apply to **every** artifact declared with role ``firmware``.
-There is one unsigned image, and a build may declare it in more than one
-encoding" — hex to flash, bin to sign, the same four ``imgtool``
-arguments describing each. The section once said "the artifact",
-singular, against §7.2's own two files; closed as an erratum (E36/D2).
+*``PATH`` is never composed here.* It arrives with the environment the
+caller stated, because it is the one variable naming things this program
+did not put anywhere: the toolchain, west, ``git``, the runtime the SDK
+declared. The tools it names are checked before anything is compiled, so
+an environment that cannot start ``west`` is a legible refusal rather than
+a child that fails to exec ten minutes in.
 
-*The bootloader is declared, and sysbuild's combined hex is not.* §7.2
-requires "at least two" artifacts and makes only ``firmware`` and
-``report`` mandatory. ``bootloader`` is measured output a client needs to
-bring a fresh device up, and it is in §5.4's role registry. The combined
-hex is not declared and never reaches ``out`` at all: on a build that
-never signs it is the *unsigned* application under a name that looks
-flashable, which is the hazard ``cli/mcuhome/cli/main.py`` deletes it for.
-Nothing in ``out`` is undeclared, so there is nothing to delete.
+This module reads no process state: ``argv`` and the environment arrive as
+arguments, and every path it touches comes out of a request document or
+out of the environment it was handed. The environment its **children** get
+is built here and passed to them, which is a different thing from reading
+one. That is what keeps this module off the exemption list of
+``tests/python/test_userpaths.py``, and the one place allowed to read the
+process is the ``__main__`` guard at the bottom, which is the process
+boundary itself.
 
-*``build.image.started`` and cancellation are not implemented.* §8 makes
-both optional — "a program that offers fewer names than the table is
-conforming", and cancellation is a SHOULD "so that a fifty-line
-third-party program stays possible". ``/cancel`` is therefore **not** an
-honoured pointer, and a backend that demands it is told so.
-``limits.deadline_seconds`` is likewise not honoured: it is advisory,
-"enforcement is the backend's", and ``error.deadline.exceeded`` never
-occurs here.
+What follows is the legacy half, and only what it decided for itself: the
+document that would justify the rest of it is gone, and the code below is
+the last thing in this repository that implements it.
 
-**And the one thing that is a refusal rather than a decision.** §6.1
-assigns the program the west workspace and names no mechanism for
-pointing an existing one at a ``trees.<layer>.path`` the backend chose:
-west resolves project paths from ``.west/config`` plus the manifest, and
-neither the contract nor this repository has a way to move them at
-invocation time. So :func:`_workspace` accepts a ``trees`` entry only
-where it names the path the image's own record already has for that layer
-— which is what a backend mounting a writable view *over* the baked tree
-produces, and what ``containers/builder/Dockerfile`` already anticipates
-("a file at the topdir would be shadowed the moment a backend bind-mounts
-a writable view over it"). Anything else fails the invocation with
-``error.build.failed``, naming the layer and both paths, rather than
-building against a tree the backend did not name. What would replace it
-is a west re-registration step — a manifest rewrite, or ``west config``
-per project — and that is a design decision, not a translation.
+*Exactly one thing produces no result document*: a request that cannot be
+read at all — the wrong argv arity, a relative request path, a document
+that is not one JSON object, one carrying a duplicate key or a ``null``,
+or one naming no absolute ``result`` path. That is exit 66 with nothing
+written. Everything after it is a result document, including an
+unimplemented request format version, because ``result`` is in the
+preamble that is read first. "Not writable" is found out by writing: the
+result document is the last write action of an invocation, so the whole
+document is built in memory and a failing atomic write is the same exit
+66, with neither a result nor a temporary file left behind.
 
-This module reads no process state: ``argv`` arrives as an argument, and
-every path it touches comes out of the request document. The environment
-its **children** get is built here and passed to them, which is a
-different thing from reading one — and it is built from nothing, exactly
-as the backend does for the other
-direction. That is what keeps this module off the exemption list of
-``tests/python/test_userpaths.py``.
+*The order of the checks is the invocation's bootstrap chain*: argv arity,
+parse, preamble, action, ``required``, the remaining fields.
+
+*``program.actions`` lists what is implemented*, never a constant copied
+out of a document: a backend must not invoke what is absent from the
+list, so a list that ran ahead of the code would be the one lie a backend
+acts on.
+
+*What a request must carry is per action, not per document.* ``describe``
+needs the preamble; ``verify`` needs ``context`` and ``session`` and is
+refused nothing else, because it reads the context and does nothing with
+``out``, ``work``, ``tmp``, ``trees`` or ``limits``; ``build`` needs all
+seven mandatory fields, because it acts on all seven. The same is true of
+the pointers a request may demand in ``required``: promising to honour a
+value nothing reads is the cheapest way to accept a job and quietly
+deliver something else.
+
+*A ``params.mode`` this program does not implement is
+``unsupported.required``*, not ``unsupported.request``: the field is
+present and well-formed, and it is its value that is not implemented.
+Executing ``reproducible`` as ``clean`` stays forbidden.
+
+*A session marker in ``work`` is what makes ``incremental`` decidable.*
+It is optional in the legacy contract, and without one there is no way to
+tell "no prior state of this session" from "somebody else's state". It is
+read on every invocation before anything in ``work`` is touched, and a
+marker this program cannot parse is treated as foreign — a marker it
+wrote is one it can read, and state it cannot claim is state it must not
+use, delete or overwrite.
+
+*A context whose files disagree with its own integrity list does not stop
+a ``build``.* That disagreement is what ``verify`` exists to report; a
+build reports the ID it measured and lets the backend, which has its own,
+decide.
+
+*The ``reason`` values and the keys inside ``error.details`` are the
+legacy contract's registry*, and the values this program puts under them
+are its own: the missing path under ``missing``, the offending pointers
+under ``required``, the layer name under ``layer``, the offending context
+paths under ``paths``, both session IDs under ``session`` and ``found``. A
+failing ``verify`` reports a ``context`` exactly when it measured one:
+what an invocation did not measure it does not report, because the
+backend compares both against its own values.
+
+*``build.image.started``, cancellation and ``limits.deadline_seconds`` are
+not implemented*, all three optional: events are written when the request
+names a file for them, ``/cancel`` is not polled, and enforcing a deadline
+is the backend's job.
 """
 
 from __future__ import annotations
@@ -251,17 +195,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from mcuhome.compiler import report, workspace
 from mcuhome.compiler.generate import APP_DIR
-from mcuhome.model import __version__, registry
+from mcuhome.model import __version__, jobs, registry
 from mcuhome.model.context import MANIFEST_FILE, MODEL_FILE, PATCHES_DIR
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
@@ -285,7 +230,9 @@ if TYPE_CHECKING:
     from mcuhome.compiler.contextread import ContextVerification
 
 __all__ = [
+    "BASE_DIR_VAR",
     "BOOTLOADER_ARTIFACT",
+    "CACHE_TIERS",
     "CONTRACT_VERSION",
     "EXIT_FAILURE",
     "EXIT_SUCCESS",
@@ -298,18 +245,36 @@ __all__ = [
     "REPORT_ARTIFACT",
     "REPORT_VERSION",
     "REQUEST_VERSIONS",
+    "RESULT_PREFIX",
+    "RESULT_SUFFIX",
     "RESULT_VERSION",
     "RESULT_VERSIONS",
     "SDK_METADATA_FILE",
     "SDK_METADATA_VERSIONS",
     "SIGNING_KEY_FILE",
+    "SPEC_GENERATION",
+    "STEP_ACTIONS",
+    "STEP_CACHE",
+    "STEP_CONTEXT",
+    "STEP_DIR",
+    "STEP_OUT",
+    "STEP_PATCHED",
+    "STEP_REQUEST",
+    "STEP_SDK",
+    "STEP_TMP",
+    "STEP_WORK",
+    "WORKSPACE_PACKAGE_MANIFEST",
+    "WORKSPACE_PACKAGE_VAR",
     "WORKSPACE_RECORD",
+    "CarriedWorkspace",
+    "environment_workspace",
     "honoured_required",
     "main",
     "run_invocation",
     "patchset",
     "program",
     "sdk_entry_point",
+    "step",
     "trees",
 ]
 
@@ -1009,20 +974,26 @@ def _record_layers(record: Path) -> dict[str, Any]:
     return layers if isinstance(layers, dict) else {}
 
 
-def _record_tree_paths(record: Path) -> dict[str, Path]:
-    """``<layer> -> <where this program builds it>``, from the record.
+def _tree_paths(document: dict[str, Any]) -> dict[str, Path]:
+    """``<layer> -> <where this environment builds it>``, from a record.
 
     The one answer to "which path can this program honour for this
-    layer", read by :func:`honoured_required` before a build starts and by
-    :meth:`_Build._workspace` while it runs. A layer whose entry names no
-    string path is absent from the result rather than present with a
-    guess.
+    layer", read by :func:`honoured_required` before a legacy build starts
+    and by :meth:`_Build._workspace` while any build runs. A layer whose
+    entry names no string path is absent from the result rather than
+    present with a guess.
     """
+    layers = document.get("layers")
     return {
         name: Path(entry["path"])
-        for name, entry in _record_layers(record).items()
+        for name, entry in (layers if isinstance(layers, dict) else {}).items()
         if isinstance(entry, dict) and isinstance(entry.get("path"), str)
     }
+
+
+def _record_tree_paths(record: Path) -> dict[str, Path]:
+    """:func:`_tree_paths` of the record at *record*."""
+    return _tree_paths(_record_document(record))
 
 
 def trees(record: Path = WORKSPACE_RECORD) -> dict[str, dict[str, Any]]:
@@ -1136,6 +1107,24 @@ class _Refused(Exception):
     def __init__(self, document: dict[str, Any]) -> None:
         super().__init__(document.get("reason"))
         self.document = document
+
+
+class _BuildFailed(Exception):
+    """A build that did not succeed, before it is a result document.
+
+    The builder (:class:`_Build`) is shared by two invocations whose result
+    documents have nothing in common, so it raises the *facts* and lets the
+    invocation that asked render them: the legacy shell into a ``failure``
+    with its ``reason`` and ``error.details``, a v3 step into a ``failure``
+    with its ``message``. Everything a build refuses is one of these, and
+    every raise site reads the same either way.
+    """
+
+    def __init__(self, reason: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+        self.details = details
 
 
 def _open_context(echo: dict[str, Any], root: Path) -> ContextVerification:
@@ -1467,13 +1456,16 @@ def sdk_entry_point(sdk_path: Path) -> tuple[Path, str]:
     except (OSError, ValueError) as failure:
         raise BuildError(
             f"code generation cannot be reached: {path} — {failure}",
-            hint=f"an SDK package declares its entry point in {SDK_METADATA_FILE} (§6.1)",
+            hint=f"an SDK package declares its entry point in {SDK_METADATA_FILE}",
         ) from failure
     generate = data.get("generate") if isinstance(data, dict) else None
     version = data.get("sdk") if isinstance(data, dict) else None
     program = generate.get("program") if isinstance(generate, dict) else None
     runtime = generate.get("runtime") if isinstance(generate, dict) else None
-    hint = "§6.1 fixes the file name and the three field names, and no values"
+    hint = (
+        f"{SDK_METADATA_FILE} declares sdk, generate.program and generate.runtime, "
+        "and nothing here interprets their values"
+    )
     if not _is_sdk_version(version):
         raise BuildError(
             f"{path} states sdk metadata version {version!r}; this program "
@@ -1488,107 +1480,112 @@ def sdk_entry_point(sdk_path: Path) -> tuple[Path, str]:
     relative = Path(program)
     if relative.is_absolute() or ".." in relative.parts:
         raise BuildError(
-            f"{path} declares generate.program as {program!r}, and §6.1 makes it "
-            "a path relative to the root of trees.sdk",
+            f"{path} declares generate.program as {program!r}, and it has to be "
+            "a path relative to the root of the SDK",
             hint=hint,
         )
     return sdk_path / relative, runtime
 
 
 class _Build:
-    """One ``build`` invocation (§7.2), in the order the contract states it.
+    """One build, whichever invocation asked for it.
 
     The steps, each a method below and each ending either in the next one
-    or in a ``reason`` from §5.4's registry:
+    or in a :class:`_BuildFailed`:
 
-    1. measure the context and its effective ID (§3.3, shared with
-       ``verify``);
-    2. refuse a context without ``keys/signing.pub`` (§7.2);
-    3. claim ``work`` against a foreign session marker (§6.3);
-    4. resolve the west workspace against the ``trees`` the backend named
-       (§6.1);
-    5. build the child environment (§6.1, §10);
-    6. apply the patches of every patched layer, once per session (§6.2);
-    7. reach code generation through the SDK entry point (§6.1);
-    8. compile with ``west build --sysbuild`` (stage 5, unchanged);
-    9. deliver the artifacts into ``out`` and write the build report
-       (§7.2, §7.2.1).
+    1. refuse a context without ``keys/signing.pub``;
+    2. resolve the west workspace, against the ``trees`` the caller named
+       where there are any;
+    3. build the child environment;
+    4. apply the patches of every patched layer, once per session;
+    5. reach code generation through the SDK entry point;
+    6. compile with ``west build --sysbuild``;
+    7. deliver the artifacts into ``out`` and write the build report.
 
-    Nothing here writes into the context: "Build outputs MUST NOT be
-    written into the context. The context is a read-only input for the
-    whole life of a session" (§3.1). The write scope is ``out``, ``work``,
-    ``tmp``, the writable trees and the three files the request names
-    (§9.2 point 1), and every path comes out of the request document.
+    Steps 2 to 7 are :meth:`execute` and are the same under both
+    invocations. What is *not* here is everything only one of them has:
+    the legacy contract's context measurement and its ``work`` claim are
+    the legacy shell's (:func:`_build`), because a v3 step has no context
+    ID to report and an empty ``work`` to start from.
+
+    Nothing here writes into the context — it is a read-only input for the
+    whole life of a session. The write scope is ``out``, ``work``, ``tmp``
+    and the writable trees, and every path was handed in.
     """
 
     def __init__(
         self,
-        echo: dict[str, Any],
-        document: dict[str, Any],
+        *,
+        context_root: Path,
+        out_dir: Path,
+        work_dir: Path,
+        tmp_dir: Path,
+        session: str,
+        jobs: int,
         record: Path,
-        env: dict[str, str] | None,
+        record_document: dict[str, Any],
+        given_trees: dict[str, Any] | None = None,
+        ccache: Any = None,
+        events: _Events | None = None,
+        env: dict[str, str] | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> None:
-        self.echo = echo
-        self.document = document
+        self.context_root = context_root
+        self.out_dir = out_dir
+        self.work_dir = work_dir
+        self.tmp_dir = tmp_dir
+        self.session = session
+        self.jobs = jobs
+        #: Where the workspace record came from, for a message that has to
+        #: name it, and what it said — already resolved for the profile in
+        #: use, which is why the document is passed rather than re-read.
         self.record = record
+        self.record_document = record_document
+        #: The trees the caller named, where the invocation has such a
+        #: field. Empty means "the environment's own", which is the v3
+        #: answer and the one a legacy request without ``trees`` gets too.
+        self.given_trees: dict[str, Any] = given_trees if isinstance(given_trees, dict) else {}
+        #: The legacy contract's ``ccache`` object, or ``None``. The v3
+        #: invocation states its cache in *extra_env* instead, from the
+        #: tiers the specification gives it.
+        self.ccache = ccache
+        self.events = events if events is not None else _Events(None)
         #: The environment the program was *told* it runs in, never read
         #: out of the process — see the module docstring. Empty means the
         #: children get only what this program derives.
         self.base_env = dict(env or {})
-        self.events = _Events(document.get("events"))
-        #: The effective context ID, once measured. Until then no result
-        #: document may carry one (§5.4).
+        #: What the invocation knows and the build environment does not:
+        #: applied last, so it wins over what is derived, and applied
+        #: before the tools are checked, so a variable that makes a tool
+        #: unnecessary counts (:data:`mcuhome.compiler.workspace.TOOLS`).
+        self.extra_env = dict(extra_env or {})
+        #: The effective context ID, once some caller measured one. The
+        #: legacy shell sets it; a v3 step never does.
         self.measured: str | None = None
-        self.context_root = Path(document["context"])
-        self.out_dir = Path(document["out"])
-        self.work_dir = Path(document["work"])
-        self.tmp_dir = Path(document["tmp"])
-        self.session = document["session"]
-        self.jobs = int(document["limits"]["jobs"])
-        self.mode = _requested_mode(document)
-        given = document.get("trees")
-        self.given_trees: dict[str, Any] = given if isinstance(given, dict) else {}
 
     # -- refusals ----------------------------------------------------------
 
-    def fail(self, reason: str, message: str, details: dict[str, Any] | None = None) -> _Refused:
-        """A ``failure`` result carrying whatever this invocation measured.
+    def fail(
+        self, reason: str, message: str, details: dict[str, Any] | None = None
+    ) -> _BuildFailed:
+        """The build did not succeed, said once and rendered by the caller.
 
-        §5.4: "An invocation that failed before it got that far reports
-        what it measured and nothing more" — so ``context`` is present
-        from the moment :attr:`measured` is set and absent before it, and
-        ``artifacts`` and ``layers`` never appear on a failure at all,
-        because both are rows qualified "on success".
+        *reason* and *details* are the legacy contract's vocabulary and are
+        carried through untouched for it; the v3 result document has no
+        field for either and reports *message*, which is what its
+        ``message`` is for — "free text for a human".
         """
-        return _Refused(
-            _failure(self.echo, reason, message, details=details, context=self.measured)
-        )
+        return _BuildFailed(reason, message, details)
 
     # -- the chain ---------------------------------------------------------
 
-    def run(self) -> dict[str, Any]:
-        """The whole invocation, and the one place a refusal is caught."""
-        self.events.emit("invocation.started", action="build")
-        try:
-            result = self._body()
-        except _Refused as refused:
-            result = refused.document
-        self.events.emit("invocation.finished", status=result["status"])
-        return result
+    def execute(self, mode: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Everything from the workspace to the delivered artifacts.
 
-    def _body(self) -> dict[str, Any]:
-        verification = _open_context(self.echo, self.context_root)
-        self.measured = verification.actual_id
-        self.events.emit("context.checked", context=self.measured)
-        self._require_signing_key()
-
-        warm = self._claim_work()
-        # §7.2: "An `incremental` for which the program finds no prior
-        # state of *this session* in `work` is executed as `clean`." The
-        # marker is the predicate — see the module docstring for why this
-        # program writes one at all.
-        mode = self.mode if warm else DEFAULT_MODE
-
+        Returns the artifact declarations and the patched-layer block; both
+        invocations render those into their own result document. Raises
+        :class:`_BuildFailed` for everything that goes wrong on the way.
+        """
         topdir, layer_paths = self._workspace()
         env = self._environment(topdir, layer_paths["sdk"])
         layers = self._apply_patches(layer_paths, env)
@@ -1597,18 +1594,11 @@ class _Build:
             self._discard_state()
         tree = self._generate(layer_paths["sdk"], env)
         scheme, build_dir, log = self._compile(topdir, tree, env, mode)
-        artifacts = self._collect(scheme, build_dir, log)
-        return _result_document(
-            self.echo,
-            _STATUS_SUCCESS,
-            context=self.measured,
-            artifacts=artifacts,
-            layers=layers,
-        )
+        return self._collect(scheme, build_dir, log), layers
 
-    # -- 2. the verification key (§7.2) ------------------------------------
+    # -- 1. the verification key -------------------------------------------
 
-    def _require_signing_key(self) -> None:
+    def require_signing_key(self) -> None:
         """No ``keys/signing.pub``, no build — and no fallback.
 
         "A context submitted to a ``build`` that does not carry it fails
@@ -1632,10 +1622,14 @@ class _Build:
                 {"missing": [SIGNING_KEY_FILE]},
             )
 
-    # -- 3. work (§6.3) ----------------------------------------------------
+    # -- work, and only under the legacy contract (§6.3) --------------------
 
-    def _claim_work(self) -> bool:
+    def claim_work(self) -> bool:
         """Read the session marker, then own it. Returns "warm".
+
+        Called by the legacy shell alone: under the v3 specification
+        ``work`` is empty at the start of every step, so there is no prior
+        state to tell apart from a stranger's and no marker worth writing.
 
         §6.3: "A program that records a marker **MUST read it before using
         anything in ``work``**, on every invocation. A guard that is
@@ -1689,36 +1683,33 @@ class _Build:
     # -- 4. the workspace (§6.1) -------------------------------------------
 
     def _workspace(self) -> tuple[Path, dict[str, Path]]:
-        """The west workspace this program carries, checked against ``trees``.
+        """The west workspace this environment carries, checked against ``trees``.
 
-        §6.1 assigns the program the whole build environment and names no
-        mechanism for pointing an existing west workspace at a path the
-        backend chose at invocation time. This is where that ends: the
-        image's own record (``containers/builder/workspace-record.py``)
-        says where each layer is, and a ``trees`` entry is accepted only
-        where it names that same path — which is exactly what a backend
-        mounting a writable view *over* the baked tree produces, and what
-        ``containers/builder/Dockerfile`` already anticipates. Anything
-        else is ``error.build.failed`` naming the layer and both paths.
-        See the module docstring for what would replace this.
+        The workspace record (``containers/build-container/workspace-record.py``
+        writes it, for the baked image and for the workspace package alike)
+        says where each layer is, and a ``trees`` entry the caller named is
+        accepted only where it names that same path — which is exactly what
+        a backend mounting a writable view *over* the tree produces.
+        Anything else fails the build, naming the layer and both paths;
+        the module docstring says why nothing here can move west's idea of
+        where a project lives, and what would replace it.
 
         A program with no record has no workspace at all, and says so
         rather than compiling against nothing. That is consistent with the
-        ``describe`` it would have given: every layer ``"path": null``,
-        which asks the backend to supply trees this program then could not
-        use — and with :func:`honoured_required`, which honours no
-        ``/trees/<layer>`` value at all in that case.
+        legacy ``describe`` it would have given: every layer ``"path":
+        null``, which asks the backend to supply trees this program then
+        could not use — and with :func:`honoured_required`, which honours
+        no ``/trees/<layer>`` value at all in that case.
         """
-        document = _record_document(self.record)
+        document = self.record_document
         topdir = document.get("topdir")
         recorded = document.get("layers")
         if not isinstance(topdir, str) or not isinstance(recorded, dict):
             raise self.fail(
                 _REASON_BUILD,
-                f"this program carries no west workspace: {self.record} names none, and "
-                "§6.1 makes assembling one the program's responsibility",
+                f"this build environment carries no west workspace: {self.record} names none",
             )
-        paths = _record_tree_paths(self.record)
+        paths = _tree_paths(document)
         missing = [name for name in LAYERS if name not in paths]
         if missing:
             raise self.fail(
@@ -1847,7 +1838,7 @@ class _Build:
         )
         env["WEST_CONFIG_LOCAL"] = str(west_config)
         env["XDG_CACHE_HOME"] = str(cache_home)
-        cache = self.document.get("ccache")
+        cache = self.ccache
         if isinstance(cache, dict):
             shared = cache.get("path")
             if cache.get("writable") is True:
@@ -1859,6 +1850,11 @@ class _Build:
                     # `|read-only` attribute is what makes the MUST above true
                     # rather than merely intended.
                     env["CCACHE_REMOTE_STORAGE"] = f"file:{shared}|read-only"
+        # Last, so that what the invocation knows beats what was derived —
+        # and before the tools are checked, because a pre-generated data
+        # model is exactly the kind of thing that decides whether a tool is
+        # needed at all.
+        env.update(self.extra_env)
         try:
             workspace.require_tools(env)
         except BuildError as unusable:
@@ -1919,20 +1915,20 @@ class _Build:
             if not isinstance(entry, dict):
                 raise self.fail(
                     _REASON_LAYER,
-                    f"the context patches the {name} layer and the request names no "
-                    f"trees entry for it (§4.1: the backend MUST supply one)",
+                    f"the context patches the {name} layer and this invocation names no "
+                    f"tree for it",
                     {"layer": name},
                 )
             if entry.get("writable") is not True:
-                # The third case, and §6.2 does not type it: the entry is
-                # there and does not assert what §4.1 makes the backend
-                # assert for a patched layer. It is not "no entry" and not
-                # "a layer this program does not know", so it is not
+                # The third case, and the legacy §6.2 does not type it: the
+                # entry is there and does not assert that the tree may be
+                # written. It is not "no entry" and not "a layer this
+                # program does not know", so it is not
                 # `error.layer.unknown`; it is the ordinary one.
                 raise self.fail(
                     _REASON_BUILD,
-                    f"the {name} layer carries patches and the request names no writable "
-                    "view of it (§4.1, §6.2)",
+                    f"the {name} layer carries patches and this invocation has no writable "
+                    "view of it",
                     {"layer": name},
                 )
             digest = patchset(root / name)
@@ -2098,7 +2094,7 @@ class _Build:
             raise self.fail(
                 _REASON_BUILD,
                 f"this builder has no MCUboot layout for {model.device.board}, so it "
-                "cannot state the signing parameters §7.2.1 makes mandatory",
+                "cannot state the signing parameters a build report has to carry",
             )
         app_dir = tree / APP_DIR
         build_dir = self.work_dir / WORK_BUILD
@@ -2276,8 +2272,62 @@ class _Build:
 def _build(
     echo: dict[str, Any], document: dict[str, Any], record: Path, env: dict[str, str] | None
 ) -> dict[str, Any]:
-    """``build`` (§7.2): the one entry point, so the class stays private."""
-    return _Build(echo, document, record, env).run()
+    """``build`` (§7.2) as the legacy contract asks for it.
+
+    The shell around :class:`_Build`: it reads the invocation out of the
+    request document, adds the two steps that are the legacy contract's
+    alone — the effective context ID (§3.3) and the ``work`` claim (§6.3)
+    — and renders whatever comes back into a result document of that
+    contract's shape.
+    """
+    events = _Events(document.get("events"))
+    given = document.get("trees")
+    builder = _Build(
+        context_root=Path(document["context"]),
+        out_dir=Path(document["out"]),
+        work_dir=Path(document["work"]),
+        tmp_dir=Path(document["tmp"]),
+        session=document["session"],
+        jobs=int(document["limits"]["jobs"]),
+        record=record,
+        record_document=_record_document(record),
+        given_trees=given if isinstance(given, dict) else {},
+        ccache=document.get("ccache"),
+        events=events,
+        env=env,
+    )
+    events.emit("invocation.started", action="build")
+    try:
+        verification = _open_context(echo, builder.context_root)
+        builder.measured = verification.actual_id
+        events.emit("context.checked", context=builder.measured)
+        builder.require_signing_key()
+        # §7.2: "An `incremental` for which the program finds no prior
+        # state of *this session* in `work` is executed as `clean`." The
+        # marker is the predicate — see the module docstring for why this
+        # program writes one at all.
+        warm = builder.claim_work()
+        mode = _requested_mode(document) if warm else DEFAULT_MODE
+        artifacts, layers = builder.execute(mode)
+        result = _result_document(
+            echo,
+            _STATUS_SUCCESS,
+            context=builder.measured,
+            artifacts=artifacts,
+            layers=layers,
+        )
+    except _Refused as refused:
+        result = refused.document
+    except _BuildFailed as failed:
+        result = _failure(
+            echo,
+            failed.reason,
+            failed.message,
+            details=failed.details,
+            context=builder.measured,
+        )
+    events.emit("invocation.finished", status=result["status"])
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -2477,15 +2527,574 @@ def run_invocation(
     return EXIT_SUCCESS if result["status"] == _STATUS_SUCCESS else EXIT_FAILURE
 
 
+# ==========================================================================
+# The v3 invocation (docs/spec/build-environment-specification.md)
+# ==========================================================================
+#
+# The primary invocation, and self-contained: nothing above this line
+# reaches into it, so it moves out whole the day the legacy half is
+# deleted. What it shares with that half is the builder (:class:`_Build`)
+# and the atomic write, and nothing else.
+
+#: The generation of the build environment specification this program
+#: implements (§12). A request stating another one is answered
+#: ``unsupported``, which is the specification's own instruction: "the
+#: side that notices refuses".
+SPEC_GENERATION = 3
+
+#: The one environment variable the specification defines (§4). It is
+#: "often ``/``, but never assume it", so every path of a step is resolved
+#: against it at the start of that step, and none is kept for the next one.
+BASE_DIR_VAR = "MCUHOME_BUILDER_BASE_DIR"
+
+#: Where the unpacked ``mcuhome-build-workspace`` package is. Not the
+#: specification's business — where an environment keeps its own content is
+#: deliberately its own affair — but MCUHome's own environment has to find
+#: it, and neither profile puts it at a path that could be a constant here
+#: (``packaging/build-environment/README.md``).
+WORKSPACE_PACKAGE_VAR = "MCUHOME_BUILD_ENV_WORKSPACE"
+
+#: What that package says about itself: where its workspace is, where its
+#: record is, and what a build hands CHIP as the pre-generated data model.
+WORKSPACE_PACKAGE_MANIFEST = "build-workspace.json"
+
+#: §4's tree, below the base directory: everything the orchestrator manages
+#: is in here, and everything outside it is the environment's own content.
+STEP_DIR = "mcuhome"
+STEP_REQUEST = "invocation-request.json"
+STEP_OUT = "out"
+STEP_WORK = "work"
+STEP_SDK = "sdk"
+STEP_CONTEXT = "build-context"
+STEP_CACHE = "cache"
+
+#: The scratch directory this program points ``TMPDIR`` at — §7: "Point
+#: ``TMPDIR`` at a directory inside it if the tools you drive need one".
+#: Inside ``work``, which is empty at the start of every step.
+STEP_TMP = "tmp"
+
+#: Where a tree that may not be written is copied to before its patches are
+#: applied — §10: "Materialize a patched copy of it under ``work``". One
+#: subdirectory per layer; today only ``sdk`` needs one, because it is the
+#: only tree of a step that belongs to the orchestrator.
+STEP_PATCHED = "patched"
+
+#: The four cache tiers (§8), most local first. ``local`` is the only one
+#: that is always writable, and is therefore the primary cache; every other
+#: one is read-only, may be missing entirely, and may be something else
+#: next step.
+CACHE_TIERS = ("local", "session", "project", "shared")
+
+#: Where a cache tier keeps the compiler cache — §8: "**ccache** goes in
+#: ``<tier>/ccache``".
+CCACHE_SUBDIR = "ccache"
+
+#: ``out/result-<invocation_id>.json`` (§6.2). Names matching
+#: ``result-*.json`` at the top of ``out`` are reserved for it (§7).
+RESULT_PREFIX = "result-"
+RESULT_SUFFIX = ".json"
+
+#: The actions this environment implements (``docs/spec/build-actions.md``).
+#: Every other one is answered ``unsupported``, which means "no environment
+#: of my kind can do this" and lets the orchestrator look for a different
+#: environment rather than report a broken build.
+STEP_ACTIONS = ("build",)
+
+#: An ``invocation_id`` this program is willing to put into a file name.
+#: §6.1 promises it is "safe to use directly in a filename"; a value that
+#: is not gets no result document at all, rather than one at a path
+#: composed out of somebody else's ``..``.
+_SAFE_INVOCATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+class _Step:
+    """§4's tree for one step, resolved against the base directory."""
+
+    def __init__(self, base: Path) -> None:
+        root = base / STEP_DIR
+        self.base = base
+        self.request = root / STEP_REQUEST
+        self.out = root / STEP_OUT
+        self.work = root / STEP_WORK
+        self.tmp = self.work / STEP_TMP
+        self.sdk = root / STEP_SDK
+        self.context = root / STEP_CONTEXT
+        self.cache = root / STEP_CACHE
+
+    def result(self, invocation_id: str) -> Path:
+        """Where this step's result document goes (§6.2)."""
+        return self.out / f"{RESULT_PREFIX}{invocation_id}{RESULT_SUFFIX}"
+
+    def tier(self, name: str) -> Path:
+        """One cache tier (§8), whether or not anything is mounted there."""
+        return self.cache / name
+
+
+class CarriedWorkspace(NamedTuple):
+    """What the environment's own packages provide a build with.
+
+    Read once per step, because a package is unpacked wherever the profile
+    put it and §4 forbids keeping an absolute path from one step to the
+    next.
+    """
+
+    #: The west workspace's top directory, where it actually is now.
+    topdir: Path
+    #: The workspace record, for a message that has to name it.
+    record: Path
+    #: What the record says, with its layer paths moved to *topdir*.
+    record_document: dict[str, Any]
+    #: What to hand CHIP as ``CHIP_CODEGEN_PREGEN_DIR``, or ``None`` when
+    #: the package carries no pre-generated data model.
+    pregen_chip_root: Path | None
+
+
+def _rebased(document: dict[str, Any], topdir: Path, record: Path) -> dict[str, Any]:
+    """*document*'s layer paths, moved to where the package actually is.
+
+    A workspace record is written while the workspace is being built, so it
+    names the paths of the machine that built it — and the package is then
+    unpacked somewhere else entirely: a store entry under the user's cache,
+    a directory in an image. The layers keep their place *inside* the
+    workspace, so moving the top directory moves every one of them, and a
+    record whose top directory is already the real one rebases to itself.
+
+    A record that names no workspace at all comes back empty, which is what
+    :meth:`_Build._workspace` refuses with the record's own path in the
+    message. A layer *outside* the recorded workspace is the one case that
+    cannot be moved with it, and it is a refusal rather than a guess.
+    """
+    recorded = document.get("topdir")
+    layers = document.get("layers")
+    if not isinstance(recorded, str) or not isinstance(layers, dict):
+        return {}
+    moved: dict[str, Any] = {}
+    for name, entry in layers.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            continue
+        try:
+            inside = Path(entry["path"]).relative_to(recorded)
+        except ValueError as outside:
+            raise BuildError(
+                f"{record} puts the {name} layer at {entry['path']}, outside the "
+                f"workspace it records at {recorded}",
+                hint="a packaged workspace carries its layers inside itself, or it "
+                "cannot be unpacked anywhere but the machine that built it",
+            ) from outside
+        moved[name] = {**entry, "path": str(topdir / inside)}
+    return {**document, "topdir": str(topdir), "layers": moved}
+
+
+def environment_workspace(root: Path) -> CarriedWorkspace:
+    """What the ``mcuhome-build-workspace`` package at *root* provides.
+
+    The package states where its own parts are
+    (``packaging/build-environment/README.md``), so this reads them rather
+    than reconstructing them: a layout the package and this program both
+    hardcode is a layout that breaks silently the day one of them changes.
+    Raises :class:`~mcuhome.model.errors.BuildError` when the package
+    cannot be read as one — which is a failed step, and never
+    ``unsupported``: the environment implements everything asked of it, and
+    no other environment would fare better with a broken package.
+    """
+    manifest_path = root / WORKSPACE_PACKAGE_MANIFEST
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as unreadable:
+        raise BuildError(
+            f"this build environment cannot read {manifest_path}: {unreadable}",
+            hint=f"{WORKSPACE_PACKAGE_VAR} names the unpacked mcuhome-build-workspace package",
+        ) from unreadable
+    workspace_dir = manifest.get("workspace") if isinstance(manifest, dict) else None
+    record_name = manifest.get("workspace-record") if isinstance(manifest, dict) else None
+    if not isinstance(workspace_dir, str) or not isinstance(record_name, str):
+        raise BuildError(
+            f"{manifest_path} does not say where its workspace and its record are",
+            hint="a mcuhome-build-workspace package states both in build-workspace.json",
+        )
+    topdir = root / workspace_dir
+    record = root / record_name
+    try:
+        document = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as unreadable:
+        raise BuildError(
+            f"this build environment cannot read its workspace record {record}: {unreadable}",
+        ) from unreadable
+    pregen = manifest.get("matter-pregen-chip-root")
+    return CarriedWorkspace(
+        topdir=topdir,
+        record=record,
+        record_document=_rebased(document if isinstance(document, dict) else {}, topdir, record),
+        pregen_chip_root=root / pregen if isinstance(pregen, str) else None,
+    )
+
+
+def _delivered_sdk(step: _Step, manifest_dir: Path) -> Path:
+    """The SDK this step builds against, wherever the profile put it.
+
+    §4 delivers it at ``mcuhome/sdk``, which is where this looks first. A
+    profile that mounts it straight into the workspace instead — the baked
+    image does — is the second place, and the only other one there is.
+    """
+    for candidate in (step.sdk, manifest_dir):
+        if (candidate / SDK_METADATA_FILE).is_file():
+            return candidate
+    raise BuildError(
+        f"there is no MCUHome SDK at {step.sdk}",
+        hint="the orchestrator delivers the SDK there, and no application can be "
+        "generated without it",
+    )
+
+
+def _patched_copy(source: Path, target: Path) -> Path:
+    """A copy of *source* under ``work``, for the patches to be applied to.
+
+    §10's rule for a tree that may not be written: "Materialize a patched
+    copy of it under ``work``, and build against a view of the environment
+    in which that copy stands in for the original. Trees no patch names
+    stay where they are; copying is the price of a patch and is paid only
+    for the trees a patch actually names."
+
+    The delivered SDK is the tree that always needs it, whatever the
+    profile: it is the orchestrator's input, shared with whoever else holds
+    those bytes, and §4 says to assume it cannot be written. The
+    environment's own trees are the profile's business — disposable in a
+    container, a read-only store in the subprocess profile — and are not
+    copied here.
+    """
+    try:
+        shutil.copytree(source, target, symlinks=True)
+    except OSError as failure:
+        raise BuildError(
+            f"this build environment cannot copy {source} to {target} to patch it: "
+            f"{failure.strerror}",
+            hint="a patched tree is materialized under work, so that what the "
+            "orchestrator delivered is never modified",
+        ) from failure
+    return target
+
+
+def _place_sdk(manifest_dir: Path, tree: Path, *, replace: bool = False) -> None:
+    """Make *tree* reachable where west looks for the manifest repository.
+
+    The SDK is delivered at ``mcuhome/sdk`` (§4) and west needs the manifest
+    repository *inside* the workspace, at the path ``.west/config`` names —
+    which the workspace package carries as an empty directory for exactly
+    this moment. So the two are joined here, by replacing that directory
+    with a symbolic link to *tree*. West's workspace containment check is
+    lexical and replacing a project directory with a link is a pattern west
+    documents itself.
+
+    *tree* is the delivered SDK, or the patched copy of it under ``work``
+    when the context patches the ``sdk`` layer: §10's "a view of the
+    environment in which that copy stands in for the original" is this
+    link, and it is what makes the copy win for everything downstream —
+    west, the code generator, every include path — without any of them
+    knowing there was a patch.
+
+    Nothing happens when an SDK is already at that path: a profile that
+    mounts it into the workspace has done this job, and the baked image
+    does exactly that. *replace* is how a patched copy overrules even that
+    — it is the only tree carrying the context's patches, so it has to be
+    the one the build reaches, whatever a profile put there.
+
+    This is the one write into the environment's own trees, and §11 says to
+    assume they are read-only. In the container profile they are not — the
+    tree is disposable and pristine again next step, which is what §3
+    promises — and in a read-only store this fails and says so. What such a
+    store needs instead is a view of the whole workspace assembled under
+    ``work``; that is the provisioner's half of the design and not this
+    program's.
+    """
+    if manifest_dir == tree:
+        return
+    if not replace and (manifest_dir / SDK_METADATA_FILE).is_file():
+        return
+    try:
+        if manifest_dir.is_symlink() or manifest_dir.is_file():
+            manifest_dir.unlink()
+        elif manifest_dir.is_dir():
+            manifest_dir.rmdir()
+        manifest_dir.symlink_to(tree)
+    except OSError as failure:
+        raise BuildError(
+            f"this build environment cannot put the SDK at {manifest_dir}: {failure.strerror}",
+            hint="west resolves the manifest repository inside the workspace, so the "
+            "SDK this step builds against has to be reachable there",
+        ) from failure
+
+
+def _step_extra_env(step: _Step, carried: CarriedWorkspace) -> dict[str, str]:
+    """What a step adds to the build environment: the caches and the pregen tree.
+
+    **The pre-generated data model** is what makes zap unnecessary: the tool
+    is deliberately not in the tools package, its output is a release
+    constant, and CHIP's own switch points at the copy the workspace package
+    carries.
+
+    **The caches** are §8's tiers, used the way it prescribes: ``local`` is
+    always writable and is the primary, the most local other tier that
+    exists is a read-only secondary, and a build is correct with none of
+    them — so a tier this step cannot even create is dropped rather than
+    reported.
+    """
+    extra: dict[str, str] = {}
+    if carried.pregen_chip_root is not None:
+        extra[workspace.PREGEN_DIR_VAR] = str(carried.pregen_chip_root)
+    primary = step.tier(CACHE_TIERS[0]) / CCACHE_SUBDIR
+    try:
+        primary.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return extra
+    extra["CCACHE_DIR"] = str(primary)
+    for name in CACHE_TIERS[1:]:
+        secondary = step.tier(name) / CCACHE_SUBDIR
+        if secondary.is_dir():
+            # ccache >= 4.8 spells a secondary store this way; `|read-only`
+            # is what keeps a tier the orchestrator owns untouched.
+            extra["CCACHE_REMOTE_STORAGE"] = f"file:{secondary}|read-only"
+            break
+    return extra
+
+
+def _step_build(
+    step: _Step, document: dict[str, Any], invocation_id: str, env: dict[str, str]
+) -> list[str]:
+    """The ``build`` action (``docs/spec/build-actions.md`` §2) as one step.
+
+    Everything it needs is where §4 puts it, plus the environment's own
+    workspace, which it finds through :data:`WORKSPACE_PACKAGE_VAR`. The
+    build itself is :class:`_Build`, and it runs in ``clean`` mode always:
+    ``work`` is empty at the start of every step (§3), so there is never
+    prior state of this session to keep.
+
+    Returns the artifacts as §6.2 declares them — paths relative to ``out``.
+
+    **Every layer is patchable, the ``sdk`` one included, and it is the one
+    that is not patched in place.** The environment's own trees are the
+    profile's to hand over — disposable in a container — while the SDK is
+    the orchestrator's input, delivered per build context and shared with
+    whoever else holds those bytes. So a context that patches ``sdk`` gets
+    §10's answer: a copy under ``work``, patched there, standing in for the
+    original through the link west follows. What was delivered at
+    ``mcuhome/sdk`` is never modified.
+    """
+    root = env.get(WORKSPACE_PACKAGE_VAR)
+    if not _is_absolute_path(root):
+        raise BuildError(
+            "this build environment does not know where its own workspace is",
+            hint=f"{WORKSPACE_PACKAGE_VAR} names the unpacked "
+            "mcuhome-build-workspace package, as an absolute path",
+        )
+    carried = environment_workspace(Path(str(root)))
+    paths = _tree_paths(carried.record_document)
+    for directory in (step.work, step.tmp, step.out):
+        directory.mkdir(parents=True, exist_ok=True)
+    if "sdk" in paths:
+        tree = _delivered_sdk(step, paths["sdk"])
+        # The copy is made before the link is placed, so that what the link
+        # points at is already the tree the patches will be applied to:
+        # nothing downstream ever sees the delivered one.
+        patched = (step.context / PATCHES_DIR / "sdk").is_dir()
+        if patched:
+            tree = _patched_copy(tree, step.work / STEP_PATCHED / "sdk")
+        _place_sdk(paths["sdk"], tree, replace=patched)
+    session = document.get("session_id")
+    builder = _Build(
+        context_root=step.context,
+        out_dir=step.out,
+        work_dir=step.work,
+        tmp_dir=step.tmp,
+        # Opaque, and never a path (§6.1). It reaches the code generator's
+        # own invocation and nothing else; an id-less request is answered
+        # with the one token this step is certain of.
+        session=session if isinstance(session, str) else invocation_id,
+        # Nobody states a job count: the orchestrator enforces its limits
+        # (§11) rather than negotiating them, so the environment sizes its
+        # own build.
+        jobs=jobs.resolve_jobs(env=env).value,
+        record=carried.record,
+        record_document=carried.record_document,
+        # Every tree is writable for a patch, because every one of them is
+        # either the profile's own disposable copy or the one this step
+        # materialized under `work` a moment ago. The paths are the record's
+        # throughout — for the SDK that is the link, and the link is what
+        # makes the patched copy stand in for the original.
+        given_trees={name: {"path": str(path), "writable": True} for name, path in paths.items()},
+        env=env,
+        extra_env=_step_extra_env(step, carried),
+    )
+    builder.require_signing_key()
+    artifacts, _layers = builder.execute(DEFAULT_MODE)
+    return [entry["path"] for entry in artifacts]
+
+
+def _step_result(
+    invocation_id: str, status: str, message: str, artifacts: list[str] | None = None
+) -> dict[str, Any]:
+    """§6.2's five fields, in the order it prints them.
+
+    ``artifacts`` is "the files **this step** wrote into ``out/``", so it is
+    empty on anything but a success: what a failed step left behind is not
+    an artifact it is declaring, and the result document itself is not one
+    either.
+    """
+    return {
+        "spec_generation": SPEC_GENERATION,
+        "invocation_id": invocation_id,
+        "status": status,
+        "message": message,
+        "artifacts": list(artifacts or []),
+    }
+
+
+def _step_answer(
+    step: _Step, document: dict[str, Any], invocation_id: str, env: dict[str, str]
+) -> dict[str, Any]:
+    """The result document for one request, whatever happens on the way.
+
+    The two refusals first, both ``unsupported`` and both §6.2's meaning of
+    it — *no environment of my kind can do this*: a generation this program
+    does not speak (§12), and an action it does not implement. Everything
+    else that goes wrong is a ``failure``, including a crash: a step that
+    wrote no readable result document failed anyway (§6.3), so it is better
+    to say so in the document that was going to be written regardless.
+    """
+    generation = document.get("spec_generation")
+    if generation != SPEC_GENERATION:
+        return _step_result(
+            invocation_id,
+            _STATUS_UNSUPPORTED,
+            f"this build environment implements specification generation "
+            f"{SPEC_GENERATION}, and this request states {generation!r}",
+        )
+    action = document.get("action")
+    if action not in STEP_ACTIONS:
+        return _step_result(
+            invocation_id,
+            _STATUS_UNSUPPORTED,
+            f"this build environment implements {', '.join(STEP_ACTIONS)}, "
+            f"and this request asks for {action!r}",
+        )
+    try:
+        artifacts = _step_build(step, document, invocation_id, env)
+    except _BuildFailed as failed:
+        return _step_result(invocation_id, _STATUS_FAILURE, failed.message)
+    except BuildError as failed:
+        return _step_result(
+            invocation_id,
+            _STATUS_FAILURE,
+            "\n".join(part for part in (failed.message, failed.hint) if part),
+        )
+    except Exception as died:  # noqa: BLE001 - a crash is a failure, not a lost answer
+        return _step_result(
+            invocation_id,
+            _STATUS_FAILURE,
+            f"this build environment failed inside the step: {died}",
+        )
+    return _step_result(invocation_id, _STATUS_SUCCESS, "", artifacts)
+
+
+def _without_a_result(problem: str) -> int:
+    """The one outcome that is not a result document, said where it can be.
+
+    §6.3 distinguishes zero from non-zero and nothing else — "a step that
+    produced no readable result document failed, whatever it exited with" —
+    so the value is spent on legibility instead: :data:`EXIT_UNUSABLE` says
+    "there was nowhere to put an answer", and the one line on standard error
+    says why, because nobody will find a reason that was never written.
+    """
+    sys.stderr.write(f"MCUHome build environment: {problem}\n")
+    return EXIT_UNUSABLE
+
+
+def step(env: dict[str, str]) -> int:
+    """One step of a session (§6). The return value is the exit code.
+
+    *env* is the environment the step was started in, **stated by whoever
+    started this program and never read out of the process** — the invariant
+    ``tests/python/test_userpaths.py`` enforces on every module here. It
+    carries the base directory the whole tree is resolved against, whatever
+    else the orchestrator set, and the ``PATH`` the build's children need.
+
+    The sequence is short because the specification is: resolve §4's tree,
+    read the request document, name the result document after the
+    invocation, answer, write. Only the first three can end without a result
+    document, and each for the same reason — there is nowhere to write one
+    or nothing to call it.
+
+    Exit ``0`` exactly when a result document was written that says
+    ``success`` (§6.3).
+    """
+    base = env.get(BASE_DIR_VAR)
+    if not _is_absolute_path(base):
+        return _without_a_result(
+            f"{BASE_DIR_VAR} is not set to an absolute path. The orchestrator sets it "
+            f"to the directory that {STEP_DIR}/ sits in."
+        )
+    layout = _Step(Path(str(base)))
+    document = _step_request(layout.request)
+    if document is None:
+        return _without_a_result(f"there is no readable request document at {layout.request}.")
+    invocation_id = _invocation_id(document)
+    if invocation_id is None:
+        return _without_a_result(
+            f"the request document at {layout.request} states no invocation_id that a "
+            f"result document could be named after."
+        )
+    result = _step_answer(layout, document, invocation_id, env)
+    try:
+        layout.out.mkdir(parents=True, exist_ok=True)
+        _write_atomically(layout.result(invocation_id), result)
+    except OSError as unwritable:
+        return _without_a_result(
+            f"the result document could not be written to {layout.out}: {unwritable}."
+        )
+    return EXIT_SUCCESS if result["status"] == _STATUS_SUCCESS else EXIT_FAILURE
+
+
+def _step_request(path: Path) -> dict[str, Any] | None:
+    """The request document at *path* (§6.1), or ``None`` if there is none.
+
+    One JSON object, UTF-8, and nothing else is checked: "ignore fields you
+    do not know" is the whole parsing rule, and a document that is not an
+    object is not a request at all. A step that cannot read one has no
+    ``invocation_id`` either, which is why this is the one thing that ends
+    without a result document.
+    """
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def _invocation_id(document: dict[str, Any]) -> str | None:
+    """The ``invocation_id`` a result document may be named after (§6.1)."""
+    value = document.get("invocation_id")
+    if isinstance(value, str) and _SAFE_INVOCATION_ID.match(value):
+        return value
+    return None
+
+
 if __name__ == "__main__":  # pragma: no cover - the launcher's entry point
     import os
     import sys
 
     # THE process boundary, and the one place that may read process
     # state: when this module is the process, it is "whoever started
-    # this program", and the environment it hands over is the image's
-    # own — PATH with the toolchain and west, exactly what
-    # :func:`main`'s docstring says the launcher owes its children.
+    # this program", and the environment it hands over is the one the
+    # step was started in — PATH with the toolchain and west, and the
+    # base directory everything is resolved against.
     # ``tests/python/test_userpaths.py`` exempts this guard by shape and
-    # pins the handover itself; library imports never execute it.
+    # pins both handovers; library imports never execute it.
+    #
+    # **The argv is the discriminator, and it can only be read here.** The
+    # v3 invocation passes no arguments at all
+    # (packaging/build-environment/build-environment-entry runs this
+    # module that way); the legacy one passes exactly two operands
+    # (containers/build-container/run). Nothing else is either, and a
+    # legacy launcher's wrong arity keeps the answer it always had.
+    if len(sys.argv) == 1:
+        raise SystemExit(step(dict(os.environ)))
     raise SystemExit(main(sys.argv, env=dict(os.environ)))

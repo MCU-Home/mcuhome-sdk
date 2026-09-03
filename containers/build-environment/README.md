@@ -1,0 +1,129 @@
+# containers/build-environment/
+
+MCUHome's build environment as a **container image** — the container
+profile of the
+[build environment specification](../../docs/spec/build-environment-specification.md)
+(generation 3). The image is an *assembly* of the two packages
+[`packaging/build-environment/`](../../packaging/build-environment/README.md)
+describes, and it adds nothing to them that a build compiles with.
+
+The image is `ghcr.io/mcu-home/build-environment`, tagged
+`<workspace package version>-r<n>` — the version of the workspace package it
+delivers, plus an assembly revision counted from 1 for rebuilds from the
+same packages. The version half is read out of the package, never typed, so
+a tag cannot name a version the image does not contain.
+
+> **A tag is a location, not an identity.** An orchestrator finds this image
+> by its `org.mcuhome.build-environment.packages.<name>` labels (§5.2), and
+> two tags on one package set are the same environment. Never resolve an
+> environment by tag.
+
+This is **not** the image `containers/build-container/` builds. That one
+bakes its own workspace and its own toolchain and implements the legacy
+invocation; it is untouched, still published, and both run side by side
+until the switchover.
+
+## Building one
+
+```
+scripts/build_env_image.py \
+    --workspace <dir>/mcuhome-build-workspace-<version>.tar.zst \
+    --tools <dir>/mcuhome-build-tools_linux-amd64-<version>.tar.zst
+```
+
+The script derives the tag; `--revision <n>` sets the assembly counter and
+`--tag` overrides the whole reference for a local experiment. Building does
+not publish — pushing is a separate, deliberate act.
+
+Through the script, not with a bare `docker build`. Specification §5.2 asks
+an image to repeat every member of its packages' declaration as an OCI
+label, and a `LABEL` instruction cannot read a file — so the script reads
+the declaration out of the workspace package, passes one `--label` per
+member, and reads the built image back to check that the two agree. An image
+built straight from the `Dockerfile` carries none of those labels, and "the
+`packages.` labels are what make an image findable": no orchestrator would
+ever select it.
+
+**The declaration is read from both copies and they must agree.** §5 has the
+orchestrator read it "from the package metadata when it provisions packages,
+from the image configuration when it runs an image. Both must say the same
+thing" — and the package itself writes it twice, beside the archive for a
+reader that has not unpacked anything and inside it for an unpacked store
+entry. The script compares the two byte for byte and refuses on a
+difference; either one alone is a complete answer.
+
+**The package labels are the concrete set, not a copy of the package's.**
+The declaration a package carries is abstract (§5.1): the carrier cannot
+state its own hash, and the tools entry names the family because the other
+platforms' bytes differ on purpose. An image is a delivery of exact bytes,
+so the script hashes both archives and labels the image with
+
+```
+org.mcuhome.build-environment.packages.mcuhome-build-workspace=<version>@sha256:…
+org.mcuhome.build-environment.packages.mcuhome-build-tools_linux-amd64=<version>@sha256:…
+```
+
+— the carrier's entry completed, and the family replaced by the one
+platform's package the image really contains. It refuses before building if
+the archives are not the set the declaration names, or if a hash the
+declaration already stated does not match the bytes it was handed.
+
+## What is in it
+
+```
+/opt/mcuhome/build-environment/
+  workspace/                   the mcuhome-build-workspace package, unpacked
+    build-environment.json     the §5 declaration the labels mirror
+    workspace/                 the west workspace — writable, see below
+    matter-pregen/             the pre-generated Matter data model
+  tools/                       the mcuhome-build-tools package, unpacked
+    venv/                      created here, offline, from tools/wheels
+/mcuhome/
+  bin/build-environment-entry  a relative link into the tools package
+  work/ out/ sdk/ build-context/ cache/{local,session,project,shared}
+                               empty mount points for the orchestrator
+```
+
+Everything under `/opt` is the environment's own content, which §4 leaves
+entirely to the environment; the two paths are stated to the builder in
+`MCUHOME_BUILD_ENV_TOOLS` and `MCUHOME_BUILD_ENV_WORKSPACE`, because the
+entry point can check those but not derive them.
+
+`PATH`, `VIRTUAL_ENV`, `ZEPHYR_SDK_INSTALL_DIR` and
+`ZEPHYR_TOOLCHAIN_VARIANT` are deliberately *not* in the image: the entry
+point sets them, so that both profiles get the same environment out of the
+same file.
+
+**The west workspace is world-writable.** §3 promises pristine source trees
+at the start of every step, and the container profile keeps that promise by
+throwing the container away — so the trees in here are disposable by
+construction, which is what §10 allows to be patched in place. Two things
+need the permission and neither can know which UID the orchestrator will
+run the container as: a build context that patches `zephyr`, `chip` or
+`mcuboot`, and the manifest-repository link a step places to join the
+delivered SDK to the workspace.
+
+**No network is needed at run time, and none at build time beyond the base
+distribution.** No `west update`, no source tree fetched, no index reached:
+the wheel set installs with `--no-index` out of the tools package. A step
+runs fine with `--network none`.
+
+## Running a step by hand
+
+The orchestrator does this; by hand it looks like:
+
+```
+docker run --rm --network none \
+    --user "$(id -u):$(id -g)" \
+    --env MCUHOME_BUILDER_BASE_DIR=/ \
+    --volume "$PWD/request.json:/mcuhome/invocation-request.json:ro" \
+    --volume "$PWD/sdk:/mcuhome/sdk:ro" \
+    --volume "$PWD/context:/mcuhome/build-context:ro" \
+    --volume "$PWD/out:/mcuhome/out" \
+    ghcr.io/mcu-home/build-environment:<version>-r<n>
+```
+
+`MCUHOME_BUILDER_BASE_DIR` is `/` in this profile, the entry point takes no
+arguments, and the answer is `out/result-<invocation_id>.json` (§6). The
+SDK is **not** environment content: each build context pins its own, and
+the orchestrator delivers it at `mcuhome/sdk`.

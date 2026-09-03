@@ -80,11 +80,8 @@ build_environment:
   tools:
     name: mcuhome-build-tools
     version: 1.2.0
-    platforms:
-      linux-amd64:
-        sha256: b90a…
-      linux-arm64:
-        sha256: 4e77…
+    sha256: b90a…
+    url: https://packages.mcuhome.org/build-tools/
 target:
   board: nrf7002dk/nrf5340/cpuapp
 ```
@@ -97,16 +94,43 @@ target:
 | `mcuhome.version` | What the constraint resolved to. |
 | `mcuhome.package.url` | Where those bytes were found. A hint; may be empty. |
 | `mcuhome.package.sha256` | The bytes themselves — this is what identifies the SDK. |
-| `build_environment.workspace` | The architecture-neutral package carrying the environment's source world: `name`, `version`, `sha256`, and `url` as a hint. The `sha256` is what identifies it. |
-| `build_environment.tools` | The architecture-specific tools package: `name` — the family name, without the platform suffix — and `version`. Together they are the identity; there is no single hash, because there are no single bytes. |
-| `build_environment.tools.platforms` | The concrete per-platform packages of that version, keyed `<os>-<arch>`, each with its `sha256` and optionally a `url`. Informational: which entry a host needs depends on the host, and a host that needs none of them cannot run this environment at all. |
+| `build_environment.workspace` | The architecture-neutral package carrying the environment's source world: `name`, `version`, `sha256`, and `url` as a hint. |
+| `build_environment.tools` | The tools package: `name`, `version`, `sha256`, and `url` as a hint. The same fields as the workspace entry, and they mean the same thing. |
 | `target.board` | The Zephyr board. |
+
+Both environment entries are a plain `(name, version, sha256)` triple. The
+tools entry names **either** a meta package — the family, whose hash is
+derived from the per-platform packages it points at — **or** one concrete
+per-platform package. Which of the two it is, is not written in the
+context: the package host's index entry for that name says it, and it says
+it in a form neither side can misread. A meta package's hash is the
+SHA-256 of the UTF-8 encoding of the RFC 8785 canonical JSON of the
+`meta` object with every referenced package expanded to `{"name",
+"sha256"}`; the meta version equals its members' version by definition.
+**This rule is frozen**, the same way §6 freezes the ID rule: once
+stated, it is computed this one way for good.
+
+- A **meta** entry resolves: the orchestrator looks up the host's own
+  platform in it and fetches the concrete package the index names there.
+  This is the normal case, and it is what makes one context build the same
+  firmware on an amd64 host and on an arm64 host.
+- A **concrete** entry does not resolve: it is that one platform's bytes,
+  and a host of another platform refuses legibly rather than substituting
+  something. That is the case for an explicitly architecture-targeted
+  build, and it exists because "test exactly these bytes" is a real
+  request.
+
+Either way the context states a hash, and either way the hash is checked
+against what was fetched — a meta hash against the index entry the
+platform was resolved through, a concrete hash against the archive.
 
 The build environment is referenced **by its packages**, which is what
 the specification says an environment is: a package set, not an image.
-Whoever runs this context finds an environment whose own `packages`
-declaration states these packages — a container image that declares them,
-or a store provisioned from them. Both are the same environment.
+Whoever runs this context finds an environment whose own `packages.`
+members state these packages — a container image that declares them, or a
+store provisioned from them. Both are the same environment. A meta pin is
+resolved to its platform's concrete package first, because that is what an
+environment actually contains.
 
 The environment is **pinned, not requested**. The party that created the
 context already chose the packages, hash and all; nobody downstream picks
@@ -114,11 +138,11 @@ anything. That is what lets one context mean one firmware: a context that
 named a requirement could be answered by two different package sets, and
 two different package sets are two different builds.
 
-The one thing deliberately left open is the platform. The tools package
-exists once per architecture, and the context pins the version they share
-rather than one platform's bytes, so the same context builds the same
-firmware on an amd64 host and on an arm64 host. Pinning one platform's
-hash would make a context that is only nominally portable.
+The one thing a meta pin leaves open is the platform, and it leaves it
+open without giving anything up: the meta hash is derived from the hashes
+of every platform's package, so pinning the family still pins the exact
+bytes each platform will get. A host does not choose a package — it looks
+up the one entry that was already decided for it.
 
 ## 5. `manifest.yaml` — the lock
 
@@ -141,11 +165,7 @@ build_environment:
   tools:
     name: mcuhome-build-tools
     version: 1.2.0
-    platforms:
-      linux-amd64:
-        sha256: b90a…
-      linux-arm64:
-        sha256: 4e77…
+    sha256: b90a…
 target:
   board: nrf7002dk/nrf5340/cpuapp
 files:
@@ -172,8 +192,8 @@ anywhere, so nothing can disagree with the patches actually present.
 document in RFC 8785 canonical JSON:
 
 ```json
-{"build_environment":{"tools":{"name":"…","version":"…"},
-                      "workspace":{"sha256":"…"}},
+{"build_environment":{"tools":{"name":"…","sha256":"…","version":"…"},
+                      "workspace":{"name":"…","sha256":"…","version":"…"}},
  "files":[{"path":"…","sha256":"…"}],
  "sdk":{"sha256":"…"},
  "target":{"board":"…"}}
@@ -182,25 +202,31 @@ document in RFC 8785 canonical JSON:
 `files` is sorted by `path` in ascending byte order of its UTF-8
 encoding, which for these names is a plain string sort.
 
-Five things are hashed and nothing else: the SDK's content hash, the
-workspace package's content hash, the tools package's name and version,
-the board, and every file with its own hash.
+Four things are hashed and nothing else: the SDK's content hash, both
+environment packages as the full `(name, version, sha256)` triple §4
+gives them, the board, and every file with its own hash.
+
+The two environment entries are hashed **the same way**, and that is the
+point rather than a tidiness. A tools pin's `name` decides what the hash
+means — the family name says "resolve this per platform", a suffixed name
+says "these exact bytes, on this platform only" — so the name has to be
+inside the ID or two different builds would share one. Once the name is in
+for one entry there is no reason to leave it out of the other, and one
+shape for both is one rule to implement twice rather than two.
 
 Deliberately outside it are `created`, `mcuhome.constraint`,
-`mcuhome.version`, `mcuhome.package.url`, and the workspace package's
-name, version and url — a timestamp, an intent, and names for bytes the
-hash already pins. The tools package is in the hash the other way round,
-by name and version and without a hash, for the reason §4 gives: its
-bytes are per platform, its version is not, and an ID that changed with
-the host architecture would say two identical builds were different
-builds.
+`mcuhome.version` and every `url` — a timestamp, an intent, and hints
+about where bytes were found rather than which bytes they are.
 
-**The rule is frozen.** Everything that ever names a context depends on
-computing the same ID from the same inputs forever, so a field can join
-the hashed document only together with a new format version, and this
-version's rule never changes. Both parties to a build compute the ID
-independently, from the bytes they actually hold; a declared `id` is
-advisory, like every declared value.
+**The rule is frozen with format version 4.** Everything that ever names a
+context depends on computing the same ID from the same inputs forever, so
+a field can join the hashed document only together with a new format
+version. Version 4 is still an unreleased draft and this rule was changed
+inside it, when the environment reference became a package set and then a
+pair of triples; nothing that shipped ever computed the older shape. From
+the moment version 4 is released, this is what it means. Both parties to a
+build compute the ID independently, from the bytes they actually hold; a
+declared `id` is advisory, like every declared value.
 
 ## 7. `model/device-model.json`
 
@@ -256,3 +282,12 @@ Version 4 is where the environment reference became a package set. That
 moved `build_environment` from one string to a structure and changed what
 the context ID hashes, and a reader of version 3 would get both wrong —
 which is precisely when the number goes up.
+
+Version 4 is a **draft** and has not been released. It has already changed
+within itself: the tools entry lost its `platforms` map and became the
+same `(name, version, sha256)` triple as the workspace entry, and the
+context ID's hashed document changed with it. The number did not move for
+that, because a draft has no readers to get anything wrong — but it is
+worth saying plainly rather than leaving a reader of an intermediate copy
+to work it out. Once version 4 is released, §6's rule is fixed for good
+and the next change is version 5.

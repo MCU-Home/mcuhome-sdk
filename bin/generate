@@ -2,7 +2,9 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The SDK package's entry point (build-container-contract.md §6.1).
+# The SDK package's entry point — a role fixed by the legacy container
+# contract this image still implements, kept until the build environment
+# switchover.
 # `mcuhome-sdk.json` at the SDK root names this file as
 # `generate.program`, and a build container invokes it as
 #

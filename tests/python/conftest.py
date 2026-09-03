@@ -196,8 +196,11 @@ def context_files(root: Path) -> tuple[ContextFile, ...]:
     Neither context document — ``manifest.yaml`` (the list itself) nor
     ``context.yaml`` (the request, whose never-hashed fields would leak
     into the identity through the back door) — is content, and neither is
-    the backend-written ``.mcuhome/`` runtime directory
-    (build-container-contract.md §3.2).
+    the backend-written ``.mcuhome/`` runtime directory: a holdover
+    exclusion from an earlier design (see
+    :data:`mcuhome.model.context.BACKEND_DIR`) that never actually
+    occurs under the v3 specification set, where the per-invocation
+    request document lives outside the build context entirely.
     """
     entries = []
     for path in sorted(root.rglob("*")):

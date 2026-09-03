@@ -26,9 +26,10 @@
 # outside the container). Switching the run-time side over is a separate
 # change; until it lands, this workspace is carried and not read.
 #
-# Since r4 there is a third thing: the PROGRAM of the build-container
-# contract at /mcuhome/run (docs/design/build-container-contract.md §2.2),
-# a thin launcher over mcuhome.compiler.abi, which is where the invocation ABI and
+# Since r4 there is a third thing: the PROGRAM of the legacy container
+# contract this image still implements, kept until the build environment
+# switchover, at /mcuhome/run — a thin launcher over mcuhome.compiler.abi,
+# which is where the invocation ABI and
 # all three actions of §7 live. The abi module arrives with the SDK mount,
 # not with this image, so what the image contributes here is the launcher
 # and the fixed path. Since r5 the image also carries the labels of §2.1
@@ -493,15 +494,19 @@ COPY --from=fetch /opt/zap /opt/zap
 
 # The baked west workspace, the record of what it is, and since r7 the
 # static `describe` answer computed from that record. One COPY: the whole
-# /mcuhome namespace is ours (build-container-contract.md §2.2), and
-# nothing else in the image writes there.
+# /mcuhome namespace is ours (a rule of the legacy container contract this
+# image still implements, kept until the build environment switchover),
+# and nothing else in the image writes there.
 COPY --from=workspace /mcuhome /mcuhome
 
-# The program of the build-container contract (§2.2): a fixed absolute
-# path, never looked up on PATH, and a thin launcher over mcuhome.compiler.abi.
+# The program of the legacy container contract this image still
+# implements, kept until the build environment switchover: a fixed
+# absolute path, never looked up on PATH, and a thin launcher over
+# mcuhome.compiler.abi.
 #
-# 0755 rather than the mode git happens to carry, because §2.2 requires it
-# to be executable by EVERY user the backend may exec as — the backend
+# 0755 rather than the mode git happens to carry, because the legacy
+# container contract this image still implements requires it to be
+# executable by EVERY user the backend may exec as — the backend
 # runs the program as the calling user where it can (the `--user` argument
 # in mcuhome/model/buildimage.py), and that user owns nothing in this image and
 # has no /etc/passwd entry here. Set with a RUN rather than with COPY

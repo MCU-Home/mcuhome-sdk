@@ -54,7 +54,7 @@ MCUHome's own environment is two packages:
 | Package | Architecture | Content |
 |---|---|---|
 | `mcuhome-build-workspace` | neutral | The materialized source world: the framework and its dependencies at pinned revisions, the base patches already applied, binary blobs already fetched, generated code that is a release constant already generated, plus a record of what was resolved. |
-| `mcuhome-build-tools-<os>-<arch>` | one per platform | The host tools: compiler toolchain, build system, workspace tool, and the Python wheel set the build's virtual environment is created from. |
+| `mcuhome-build-tools_<os>-<arch>` | one per platform | The host tools: compiler toolchain, build system, workspace tool, and the Python wheel set the build's virtual environment is created from. |
 
 The split is by cadence, not by taste: the source world moves with every
 release, the tools move rarely and are large.
@@ -157,16 +157,22 @@ declaration is one JSON object; every member is a string:
 | `zephyr.version` | yes | The Zephyr version your environment builds against, as SemVer 2.0.0 — for example `4.4.0` or `4.5.0-rc.1`. |
 | `build-context.generator-constraint` | yes | Which build contexts you accept. See §9. |
 | `build-context.generator-constraint-mode` | no | `strict` (default) or `chain`. See §9. |
-| `packages` | yes | The package set your environment consists of. See §5.1. |
+| `packages.<package name>` | one per package, at least one | One package of the set: its version, and its content hash where the declaring side knows it. See §5.1. |
 
 ```json
 {
   "spec-generation": "3",
   "zephyr.version": "4.4.0",
   "build-context.generator-constraint": "mcuhome-workbench:~=1.0.5",
-  "packages": "mcuhome-build-tools:1.2.0;mcuhome-build-workspace:2.4.0@sha256:7c31…"
+  "packages.mcuhome-build-tools": "1.2.0",
+  "packages.mcuhome-build-workspace": "2.4.0"
 }
 ```
+
+There is deliberately no list. One member per package means a package can
+be named, added or looked up on its own — in a JSON object, in an image's
+labels, in a query — without anybody having to parse a string that packs
+several packages into one value.
 
 One package of the set carries the declaration and it speaks for the whole
 set. For MCUHome's own environment that is `mcuhome-build-workspace`, the
@@ -176,45 +182,90 @@ that does not.
 Member names not defined here are reserved, exactly as §5.2 reserves
 their label mirrors; names prefixed `x-` are free.
 
-### 5.1 The package set value
+### 5.1 The package members
 
-`packages` is a list of `<name>:<version>` entries separated by
-semicolons, sorted by name in ascending byte order, each optionally
-followed by `@sha256:<64 lowercase hex digits>`:
+A member `packages.<package name>` names exactly one package, and its
+value states that package's version and — where the declaring side knows
+them — its bytes:
 
 ```
-mcuhome-build-tools:1.2.0;mcuhome-build-workspace:2.4.0@sha256:7c31…
+<version>
+<version>@sha256:<64 lowercase hex digits>
 ```
 
-`<name>` is lowercase, `[a-z0-9][a-z0-9._-]*`. `<version>` is a PEP 440
-version.
+`<version>` is a PEP 440 version.
 
-An entry carries its hash when its bytes are the same everywhere, which is
-what an architecture-neutral package means. An architecture-specific
-package is named at version level only, because its bytes differ per
-platform on purpose and the version is what the platforms have in common;
-such an entry names the family (`mcuhome-build-tools`), not one platform's
-package (`mcuhome-build-tools-linux-amd64`). Whoever matches a set matches
-what is stated: hashes where they are given, name and version otherwise.
+**The package name.** Lowercase alphanumerics and `-`, optionally followed
+by an architecture suffix introduced by `_`:
+
+```
+<name>    ::= <part> [ "_" <part> ]
+<part>    ::= [a-z0-9] [a-z0-9-]*
+```
+
+`_` appears in a package name for that one purpose, so the first `_`
+unambiguously splits the family name from the platform it was built for:
+`mcuhome-build-tools_linux-amd64` is the `linux-amd64` build of the
+`mcuhome-build-tools` family. A reader that wants the family takes what
+is in front of the first `_`; one that wants the exact package takes the
+whole name. Where the members are written out one after another — as a
+label list, as a rendering of the declaration — they are sorted by member
+name in ascending byte order, so that two writers of one set produce one
+text.
+
+**A declaration in package metadata states the abstract set.** It is
+written when the package is built, and two things are then unknowable:
+
+- The carrier cannot state its own hash. The declaration is inside the
+  archive it would be describing, so the hash would have to cover bytes
+  that contain it. Its own entry carries the version alone.
+- An architecture-specific package is named by its **family**
+  (`mcuhome-build-tools`), at version level only. Its bytes differ per
+  platform on purpose, the version is what the platforms have in common,
+  and the sibling platforms' archives may not exist yet when the carrier
+  is built.
+
+**A delivery states the concrete resolved set, hashes and all.** An image
+(§5.2), or any other assembly of exact bytes, knows precisely what it
+unpacked: it **must** carry a hash on every member, it completes the
+carrier's own entry with the hash of the archive it took, and it replaces
+the family entry with the one concrete package it actually contains —
+
+```
+packages.mcuhome-build-workspace   = 2.4.0@sha256:7c31…
+packages.mcuhome-build-tools_linux-amd64 = 1.2.0@sha256:b90a…
+```
+
+— which is also why an image is per platform while a package set is not.
+
+Whoever matches a set matches what is stated: hashes where they are given,
+name and version otherwise. So the abstract declaration matches every
+delivery of that set, and a concrete one matches only its own bytes.
 
 ### 5.2 Container images mirror the declaration
 
 An image delivering the environment repeats every member of the
 declaration as an OCI label `org.mcuhome.build-environment.<member>`, with
-the identical value:
+the identical value — the package members included, one label per package:
 
 ```dockerfile
 LABEL org.mcuhome.build-environment.spec-generation="3" \
       org.mcuhome.build-environment.zephyr.version="4.4.0" \
       org.mcuhome.build-environment.build-context.generator-constraint="mcuhome-workbench:~=1.0.5" \
-      org.mcuhome.build-environment.packages="mcuhome-build-tools:1.2.0;mcuhome-build-workspace:2.4.0@sha256:7c31…"
+      org.mcuhome.build-environment.packages.mcuhome-build-workspace="2.4.0@sha256:7c31…" \
+      org.mcuhome.build-environment.packages.mcuhome-build-tools_linux-amd64="1.2.0@sha256:b90a…"
 ```
 
-The `packages` label is what makes an image findable. A build context
+An image is a delivery, so §5.1's second rule applies to it in full: every
+`packages.` label carries a hash, and the tools family is named as the one
+concrete package the image contains rather than as a family. The image
+builder is the party that can do this — it is holding the archives.
+
+The `packages.` labels are what make an image findable. A build context
 references packages, never an image; the orchestrator looks for the image
-that declares exactly those packages and starts it. An image whose
-`packages` label says something else is a different environment, whatever
-is otherwise inside it — and an image assembled from packages it does not
+whose package labels are the set it wants and starts it. An image whose
+package labels say something else is a different environment, whatever is
+otherwise inside it — and an image assembled from packages it does not
 declare is simply lying about what it is.
 
 **Every other name under `org.mcuhome.build-environment.` is reserved.**

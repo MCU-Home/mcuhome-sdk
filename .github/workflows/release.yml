@@ -1,18 +1,49 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-# The SDK package as a release artifact: `scripts/build_sdk_archive.py`
-# builds it from the tagged *commit* — never a working tree — and it is
-# attached to the GitHub release of that tag. The package host
-# (mcu-home/mcuhome-packagetool) then pulls it from here and records it
-# in a signed index; nothing in this repository pushes anywhere, and no
-# cross-repository credential exists.
+# What a tag of this repository produces. Three artifacts, three jobs:
+#
+#   package                  — the SDK package, `mcuhome-sdk-<version>`:
+#                              the source a build compiles from.
+#   build-workspace-package  — `mcuhome-build-workspace`: the build
+#                              environment's pinned source world.
+#   build-tools-package      — `mcuhome-build-tools_<os>-<arch>`: the
+#                              build environment's host tools, one
+#                              package per platform.
+#
+# Together they are the release chain of `docs/design/build-environment.md`
+# section 3. Every job builds from the tagged *commit* — never a working
+# tree — and attaches the archive and its sidecars to the GitHub release
+# of that tag. The package host (mcu-home/mcuhome-packagetool) then pulls
+# them from here and records them in a signed index; nothing in this
+# repository pushes anywhere, and no cross-repository credential exists.
+# Publication stays one deliberate, manually dispatched act over there.
+#
+# The three do not share a cadence, which is what the `if:` conditions
+# below say:
+#
+# * The SDK package and the workspace package are named after the version
+#   the tagged commit declares, so both belong to every release.
+# * The tools package is not. It carries the toolchain, CMake, Ninja, gn
+#   and the wheel set, it has its own version counter
+#   (`TOOLS_VERSION` in `scripts/build_env_package.py`), and a release
+#   that did not touch any of those would republish gigabytes of
+#   identical binaries — under a version that already names other bytes,
+#   or under a new one that means nothing. It runs when a dispatch asks
+#   for it, which is what "only when the toolchain generation changes"
+#   is in practice.
+#
+# Only `package` ever creates the release; the other two require it to
+# exist and upload into it. Two jobs racing for `gh release create` would
+# otherwise be a coin flip.
 #
 # Why zstandard is pinned: two parties building the same tag must reach
 # the same sha256, because that hash is a hashed input of the build
-# context ID. Everything else the script does is deterministic by
+# context ID. Everything else the scripts do is deterministic by
 # construction; the compressor library is the one residual variable, so
 # it is fixed here and a bump is a deliberate change with a new release.
+#
+# All actions are pinned to commit SHAs, not tags.
 
 name: Release
 
@@ -24,6 +55,14 @@ on:
       tag:
         description: "The tag to package (must exist)"
         required: true
+      workspace:
+        description: "Also build the build-workspace package"
+        type: boolean
+        default: true
+      tools:
+        description: "Also build the build-tools packages (the toolchain generation changed)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,6 +75,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      # The one place the tag is resolved. The jobs below take it from
+      # here rather than repeating the dispatch-or-push expression, so
+      # three artifacts of one release cannot end up naming two tags.
+      tag: ${{ steps.build.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,6 +97,10 @@ jobs:
         # commit would silently produce a package whose name contradicts
         # the release it hangs on. Checked before anything is built, and
         # with no third-party import, so it runs on a bare python.
+        #
+        # It guards the workspace package too, which takes the same
+        # version from the same file; the jobs below need it, `needs:`
+        # this job, and do not repeat it.
         run: python scripts/release.py --check-tag "${{ inputs.tag || github.ref_name }}"
 
       - name: Install the pinned compressor
@@ -84,3 +132,374 @@ jobs:
           # source, and a source is signed. Only the package and its
           # sidecar travel.
           gh release upload "$tag" dist/mcuhome-sdk-*.tar.zst dist/mcuhome-sdk-*.tar.zst.sha256 --clobber
+
+  # --------------------------------------------------------------------
+  # The build environment's source world.
+  # --------------------------------------------------------------------
+  #
+  # Architecture-neutral, and built on one runner for exactly that
+  # reason: what goes in is sources, patches, fetched blobs and generated
+  # code, none of which is a host binary. `scripts/build_env_package.py`
+  # does the work; this job supplies what the script cannot bring itself —
+  # a checkout of the tag, a compressor, disk, and the pinned build
+  # container the workspace is laid out inside.
+  #
+  # It runs the full materialization: `west update` over the manifest, the
+  # tag refs fetched back, `patches/` applied, `west blobs fetch`, the
+  # workspace record, and the Matter pre-generation. The materialization
+  # wants the network, which a runner has; the pre-generation deliberately
+  # does not get it, and proves with every release that the generated code
+  # in the package was produced offline.
+  #
+  # No byte-identity check here, unlike the tools job below. A second full
+  # materialization is a second set of clones, and what a remote decides
+  # per clone (pack file names, and the stat data in `.git/index`) is not
+  # a property of this repository's revision. The published archive's
+  # hash in the signed index is the identity anchor for this package; the
+  # packer's determinism is proven by `tests/python/test_env_package.py`,
+  # which packs one tree twice.
+  build-workspace-package:
+    name: Build (workspace package)
+    needs: package
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.workspace }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Pull only — the build container is published by ci-build.yml.
+      packages: read
+    env:
+      # Empty on purpose, and not pointless: `build_env_package.py` takes
+      # the archive's single mtime from SOURCE_DATE_EPOCH when it is set
+      # and from the packaged commit's own committer date when it is not.
+      # The commit is what should decide it, so nothing a runner image
+      # happens to export may reach the script.
+      SOURCE_DATE_EPOCH: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `git archive` reads the commit, so the tag has to be here.
+          fetch-depth: 0
+          ref: ${{ needs.package.outputs.tag }}
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install the pinned compressor
+        run: pip install "zstandard==${ZSTANDARD_VERSION}"
+
+      # The workspace, the build container and the archive are on this
+      # disk at the same time and each of them is gigabytes. Free what
+      # nothing here uses, and print the result — `rm -rf` on an absent
+      # path is not an error, so the same list serves any runner image.
+      - name: Make room, and say how much there is
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+
+      # The builder decides what the image is called, nothing else does.
+      # The checkout is this job's working directory, so the import
+      # resolves against it.
+      - name: Resolve the builder image reference
+        id: image
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          from mcuhome.model.buildimage import IMAGE
+
+          print(f"reference={IMAGE}")
+          PY
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pulled, never built as a fallback: an image that is not published
+      # is one nobody else can reproduce this package with, and a release
+      # artifact laid out by it would be a package whose provenance stops
+      # at this runner. A missing image means the image build has not run
+      # for this revision yet, and that is a release blocker, not
+      # something to paper over.
+      - name: Pull the pinned build container
+        run: |
+          set -euo pipefail
+          reference='${{ steps.image.outputs.reference }}'
+          docker pull --quiet "$reference" || {
+            echo "::error::$reference is not published — run the Build workflow for this revision first" >&2
+            exit 1
+          }
+
+      - name: Build the workspace package
+        run: |
+          set -euo pipefail
+          python scripts/build_env_package.py workspace \
+            --output-dir dist \
+            --work-dir "$RUNNER_TEMP/env-work" \
+            --revision "${{ needs.package.outputs.tag }}"
+          df -h /
+
+      - name: Show what was built
+        run: |
+          set -euo pipefail
+          ls -l dist/
+          cat dist/*.build-environment.json
+          cd dist && sha256sum -c ./*.sha256
+
+      # GitHub's documented ceiling for one release asset is 2 GiB, and it
+      # does not refuse a larger one legibly — reported failures range
+      # from a bare HTTP 500 to an empty asset. This package is the one
+      # that can grow into that wall, so the wall is named here rather
+      # than discovered on a release evening.
+      - name: The archive has to fit a release asset
+        run: |
+          set -euo pipefail
+          limit=$((2 * 1024 * 1024 * 1024))
+          for archive in dist/*.tar.zst; do
+            size="$(stat -c%s "$archive")"
+            echo "$(basename "$archive")  $size bytes"
+            test "$size" -lt "$limit" || {
+              echo "::error::$(basename "$archive") is $size bytes and a GitHub release asset has to stay below 2 GiB — this package needs a carrier the release page is not" >&2
+              exit 1
+            }
+          done
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ needs.package.outputs.tag }}'
+          # `package` creates the release; this job only ever uploads
+          # into it, so the two cannot race for it.
+          gh release view "$tag" >/dev/null
+          # index.json stays here: it belongs to a source, and a source
+          # is signed by the package host. The archive, the checksum
+          # sidecar and the declaration beside it are what travel — the
+          # declaration because a provisioner reads it before it unpacks
+          # anything.
+          gh release upload "$tag" \
+            dist/mcuhome-build-workspace-*.tar.zst \
+            dist/mcuhome-build-workspace-*.tar.zst.sha256 \
+            dist/mcuhome-build-workspace-*.tar.zst.build-environment.json \
+            --clobber
+
+  # --------------------------------------------------------------------
+  # The build environment's host tools, per platform.
+  # --------------------------------------------------------------------
+  #
+  # One package per architecture, each built on a runner of that
+  # architecture. Natively, and it could not be otherwise: the package is
+  # host binaries — the Zephyr SDK toolchain, CMake, Ninja, gn — plus a
+  # wheel set whose compiled members are built by the pinned container's
+  # interpreter for the machine it runs on. A Home Assistant box is an
+  # arm64 machine, so an amd64-only tools package is one no HA user could
+  # ever provision from.
+  #
+  # This is where the determinism check lives. The tools package is built
+  # out of hash-pinned downloads and one wheel build, with no clone in
+  # sight, so two builds of it on one runner must produce one file — and
+  # if they ever stop doing so, this is the job that says which
+  # architecture and which release it started at.
+  build-tools-package:
+    name: Build (tools package)
+    needs: package
+    if: ${{ inputs.tools }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Both architectures are reported even when one fails: "arm64 broke"
+      # and "the tools package broke" are different news.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            # Free for public repositories, and native — an emulated
+            # wheel build would be hours and would still be the right
+            # bytes for the wrong reason.
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: write
+      # Pull only — the build container is published by ci-build.yml.
+      packages: read
+    env:
+      # See the workspace job: the packaged commit decides the mtime, not
+      # the runner image.
+      SOURCE_DATE_EPOCH: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `git archive` reads the commit, so the tag has to be here.
+          fetch-depth: 0
+          ref: ${{ needs.package.outputs.tag }}
+
+      # A matrix entry is a label, and a label is a promise somebody else
+      # keeps. This package is named after an architecture and filled with
+      # binaries for one; built on the wrong runner it would be a file
+      # whose name lies, and nothing downstream could tell.
+      - name: The runner is the architecture the matrix claims
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) actual=amd64 ;;
+            aarch64) actual=arm64 ;;
+            *) actual="$(uname -m)" ;;
+          esac
+          test "$actual" = '${{ matrix.arch }}' || {
+            echo "this runner is $actual, not ${{ matrix.arch }}" >&2
+            exit 1
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install the pinned compressor
+        run: pip install "zstandard==${ZSTANDARD_VERSION}"
+
+      # The package refuses to be built when one of its binaries needs a
+      # newer glibc than the host baseline — but only where objdump
+      # exists, and it skips with a notice where it does not. A release
+      # artifact must not be the one that skipped it.
+      - name: objdump must be here, or the host baseline is not checked
+        run: |
+          set -euo pipefail
+          command -v objdump || {
+            echo "::error::no objdump on this runner — the package build would skip the glibc baseline check and ship a package nobody measured" >&2
+            exit 1
+          }
+
+      - name: Make room, and say how much there is
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+
+      - name: Resolve the builder image reference
+        id: image
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          from mcuhome.model.buildimage import IMAGE
+
+          print(f"reference={IMAGE}")
+          PY
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Same rule as the workspace job: pulled, never built here. The
+      # wheel set's ABI is the pinned image's interpreter, so an image
+      # built on this runner would decide it locally.
+      - name: Pull the pinned build container
+        run: |
+          set -euo pipefail
+          reference='${{ steps.image.outputs.reference }}'
+          docker pull --quiet "$reference" || {
+            echo "::error::$reference is not published — run the Build workflow for this revision first" >&2
+            exit 1
+          }
+
+      - name: Build the tools package
+        run: |
+          set -euo pipefail
+          python scripts/build_env_package.py tools \
+            --output-dir dist \
+            --work-dir "$RUNNER_TEMP/env-work" \
+            --arch '${{ matrix.arch }}' \
+            --revision "${{ needs.package.outputs.tag }}"
+          df -h /
+
+      # The same package again, into a second directory. The work
+      # directory is shared on purpose: the package tree is deleted and
+      # rebuilt inside it, while the downloads stay — they are verified
+      # against their pinned hashes on every use, so re-fetching a
+      # gigabyte to compare it with itself would prove nothing.
+      - name: Build it a second time
+        run: |
+          set -euo pipefail
+          python scripts/build_env_package.py tools \
+            --output-dir dist-again \
+            --work-dir "$RUNNER_TEMP/env-work" \
+            --arch '${{ matrix.arch }}' \
+            --revision "${{ needs.package.outputs.tag }}"
+          df -h /
+
+      # What "deterministic" means for this package, checked rather than
+      # asserted. Same runner, same revision, same bytes — a difference
+      # here is a defect in the package build, and finding it in CI is the
+      # difference between a bad release and a bad release nobody noticed.
+      - name: Two builds, one digest
+        run: |
+          set -euo pipefail
+          set -- dist/mcuhome-build-tools_*.tar.zst
+          test "$#" -eq 1 && test -f "$1" || {
+            echo "expected exactly one archive in dist/, found: $*" >&2
+            exit 1
+          }
+          name="$(basename "$1")"
+          first="$(sha256sum "dist/$name" | cut -d' ' -f1)"
+          second="$(sha256sum "dist-again/$name" | cut -d' ' -f1)"
+          echo "first   $first"
+          echo "second  $second"
+          test "$first" = "$second" || {
+            echo "::error::two builds of $name on this runner produced different bytes" >&2
+            exit 1
+          }
+          # The comparison is done and the disk is wanted for the upload.
+          rm -rf dist-again "$RUNNER_TEMP/env-work"
+
+      - name: Show what was built
+        run: |
+          set -euo pipefail
+          ls -l dist/
+          cd dist && sha256sum -c ./*.sha256
+
+      # The same 2 GiB ceiling the workspace job explains. Far away for a
+      # toolchain and a wheel set, checked anyway: the two packages should
+      # fail the same way when they fail.
+      - name: The archive has to fit a release asset
+        run: |
+          set -euo pipefail
+          limit=$((2 * 1024 * 1024 * 1024))
+          for archive in dist/*.tar.zst; do
+            size="$(stat -c%s "$archive")"
+            echo "$(basename "$archive")  $size bytes"
+            test "$size" -lt "$limit" || {
+              echo "::error::$(basename "$archive") is $size bytes and a GitHub release asset has to stay below 2 GiB — this package needs a carrier the release page is not" >&2
+              exit 1
+            }
+          done
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ needs.package.outputs.tag }}'
+          # `package` creates the release; this job only ever uploads
+          # into it, so the matrix legs cannot race for it.
+          gh release view "$tag" >/dev/null
+          # index.json stays here, as everywhere in this file: it belongs
+          # to a source, and a source is signed by the package host. The
+          # declaration is the workspace package's to carry — it speaks
+          # for the whole set, and a set that spans architectures needs a
+          # carrier that does not.
+          # One archive per runner and the step above proved there is
+          # exactly one, so the family pattern names this architecture's
+          # package and nothing else. Spelling the architecture out here
+          # would have to repeat the operating system too — the file is
+          # `mcuhome-build-tools_<os>-<arch>-<version>.tar.zst`, and the
+          # script owns that name.
+          gh release upload "$tag" \
+            dist/mcuhome-build-tools_*.tar.zst \
+            dist/mcuhome-build-tools_*.tar.zst.sha256 \
+            --clobber

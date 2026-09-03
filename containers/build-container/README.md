@@ -21,7 +21,7 @@ mcuhome device build <device>                                 # uses it by defau
 | `zap-cli` — Matter root-node data model | `v2025.10.23-nightly` |
 | ccache | Debian 13 stock |
 | **a west workspace at `/mcuhome/workspace`** (since r3) | the revisions [`west.yml`](../../west.yml) pins |
-| **the contract program at `/mcuhome/run`** (since r4) | [`run`](run), a launcher over `mcuhome.compiler.abi` |
+| **the legacy invocation program at `/mcuhome/run`** (since r4) | [`run`](run), a launcher over `mcuhome.compiler.abi` |
 
 Not in it, on purpose: the Zephyr SDK's other ~20 target toolchains and
 its host-tool bundle (qemu, openocd — flashing does not happen in a
@@ -74,10 +74,10 @@ Three consequences worth knowing:
   `v4.4.0` and not a commit — that fetch costs no measurable space.
 - **`/mcuhome/workspace.json`** records the resolved 40-character commit
   per layer plus the SHA-256 of each applied patch, under the layer names
-  the build-container contract defines (`zephyr`, `sdk`, `chip`,
-  `mcuboot`). An image digest says "the same", not "what"; two revisions
-  in `west.yml` are movable tags, so a rebuild is checkable rather than
-  merely trusted. Written by `workspace-record.py`, which is in this
+  the builder program uses (`zephyr`, `sdk`, `chip`, `mcuboot` —
+  `mcuhome/compiler/abi.py`). An image digest says "the same", not
+  "what"; two revisions in `west.yml` are movable tags, so a rebuild is
+  checkable rather than merely trusted. Written by `workspace-record.py`, which is in this
   directory.
 
 **Nothing uses it yet.** `mcuhome build` still bind-mounts the host's west
@@ -87,7 +87,7 @@ no build output. Switching the run-time side over — `ZEPHYR_BASE`,
 `imgtool`, which `mcuhome sign` resolves out of the *host* workspace
 today — is a separate change.
 
-## The contract program at `/mcuhome/run` (r4)
+## The legacy invocation program at `/mcuhome/run` (r4)
 
 `/mcuhome/run` is invoked as `/mcuhome/run <action> <absolute path of the
 request document>`. It is [`run`](run) in this directory, installed mode
@@ -107,30 +107,32 @@ the one piece of *image* content that spells it. The module it launches
 is not image content — it arrives with the SDK mount — so nothing else
 about r6 differs from r5.
 
-**All three actions of §7 are implemented** — `describe`, `verify` and
-`build` — which is what let the image start claiming conformance in r5.
-The claim was withheld through r4 on purpose: the contract label
-claims conformance, conformance means all three actions, and a label the
-program cannot back is a false claim to exactly the third parties the
-contract is written for.
+**All three actions of the legacy container contract this image still
+implements (kept until the build environment switchover) are
+implemented** — `describe`, `verify` and `build` — which is what let the
+image start claiming conformance in r5. The claim was withheld through r4
+on purpose: the label claims conformance, conformance means all three
+actions, and a label the program cannot back is a false claim to exactly
+the third parties the legacy contract is written for.
 
 ## The static self-description at `/mcuhome/describe.json` (r7)
 
-§2.2.1 of the contract lets an image carry its `describe` answer as a
-file, and this image does. It holds "exactly what a `describe`
-invocation answers", and the Dockerfile keeps that true the only way that
-needs no discipline: it **runs** `describe` at image build time, with the
-program body borrowed from the build context and the baked
-`/mcuhome/workspace.json` as its record, and stores the result document
-unread at mode 0644. There is no second implementation of the `program`
-block to drift away from the first.
+The legacy container contract this image still implements (kept until
+the build environment switchover) lets an image carry its `describe`
+answer as a file, and this image does. It holds "exactly what a
+`describe` invocation answers", and the Dockerfile keeps that true the
+only way that needs no discipline: it **runs** `describe` at image build
+time, with the program body borrowed from the build context and the
+baked `/mcuhome/workspace.json` as its record, and stores the result
+document unread at mode 0644. There is no second implementation of the
+`program` block to drift away from the first.
 
-It exists because this image is §6.1's own split: the launcher is image
-content, the program *body* arrives with the SDK mount. A backend that
-has not yet chosen a mount point therefore cannot ask this image
-anything — while `trees` in the answer is precisely what tells it where
-the mount has to go. `describe` stays authoritative (§7.1); the file is
-pre-start data, like the labels.
+It exists because this image splits the launcher from the program body:
+the launcher is image content, the program *body* arrives with the SDK
+mount. A backend that has not yet chosen a mount point therefore cannot
+ask this image anything — while `trees` in the answer is precisely what
+tells it where the mount has to go. `describe` stays authoritative; the
+file is pre-start data, like the labels.
 
 The three coupling labels were repaired in the same revision, because
 they are the other half of what a backend may learn before it starts a
@@ -138,8 +140,8 @@ container:
 
 | Label | r5 and r6 | since r7 |
 |---|---|---|
-| name | `org.mcuhome.model.toolchain` | `org.mcuhome.toolchain` (§2.1 as it then read) |
-| `org.mcuhome.zephyr` | `v4.4.0` | `4.4.0` — §2.1.1 asks for the version *without* west's leading `v` |
+| name | `org.mcuhome.model.toolchain` | `org.mcuhome.toolchain` (as the legacy contract's label rule then read) |
+| `org.mcuhome.zephyr` | `v4.4.0` | `4.4.0` — the legacy contract asked for the version *without* west's leading `v` |
 | `org.mcuhome.toolchain` | `zephyr-sdk-1.0.1/arm-zephyr-eabi` | `zephyr-sdk-1.0.1` — `<identity>-<version>`, and `/` is outside the permitted character class |
 
 The label *names* in that table are the ones r7 fixed and are not the
@@ -309,10 +311,9 @@ prints it before it runs. In short:
 
 ## ccache
 
-ccache is a hard requirement of the builder, not an optimization
-(builder-pipeline.md §5): on a Raspberry-class Home Assistant host it is
-the difference between usable and painful. Both halves of the build go
-through it:
+A build is correct without any cache and slow without this one: on a
+Raspberry-class Home Assistant host ccache is the difference between
+usable and painful. Both halves of the build go through it:
 
 - **Zephyr/CMake** finds ccache by itself (`zephyr/cmake/modules/
   ccache.cmake` sets the global `RULE_LAUNCH_COMPILE` property).

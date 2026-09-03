@@ -44,12 +44,28 @@ packages, distributed like the SDK package through packagetool
   trees), the pre-generated Matter data-model code, and the workspace
   record of resolved commits and patch hashes. Carries the environment's
   self-description (specification §5).
-- **`mcuhome-build-tools-<os>-<arch>`** (one per platform, per toolchain
+- **`mcuhome-build-tools_<os>-<arch>`** (one per platform, per toolchain
   generation): Zephyr SDK toolchain, cmake, ninja, west, gn, the Python
-  wheel set for the build venv, and the entry point. cmake and ninja are
-  built against the host baseline (section 6), never taken naively from
-  upstream release binaries (recent upstream ninja binaries require
-  glibc 2.38 and would silently raise the floor).
+  wheel set for the build venv, and the entry point. cmake and ninja must
+  satisfy the host baseline (section 6), and no upstream release binary is
+  taken on trust — recent upstream ninja binaries require glibc 2.38 and
+  would silently raise the floor. The pinned ones are measured instead,
+  together with everything else in the package: the package build reads the
+  versioned glibc symbol references out of every host binary it packs and
+  refuses to produce a package whose highest one is above the baseline.
+  Building from source is the fallback when no release binary passes; for
+  the versions pinned today none does worse than the toolchain itself.
+
+**How the platform is resolved.** The per-platform tools packages are
+published individually and, in addition, as a *meta* package under the
+family name `mcuhome-build-tools`: its index entry maps each `<os>-<arch>`
+to the concrete package name and carries a hash derived from the hashes of
+the packages it points at. A build context pins the meta package, and
+whoever executes it resolves its own platform through that entry — so one
+context stays portable and still pins exact bytes, because the meta hash
+covers every platform's package. Pinning a concrete per-platform package
+directly remains possible for an architecture-targeted build; a host of
+another platform then refuses legibly instead of substituting something.
 
 **Why the venv ships as wheels, not as a ready venv.** Python virtual
 environments are not relocatable (absolute interpreter paths, absolute
@@ -94,13 +110,18 @@ SDK git tag
 The image is a thin assembly: a base providing the host baseline
 (section 6), the two packages unpacked, provisioning finalization baked
 in, and the specification's labels mirroring the packages' declaration —
-including the `packages` label the orchestrator matches images by.
+including one `packages.<package name>` label per package, which is what
+the orchestrator matches images by. An image states the *concrete* set
+(specification §5.1): every one of those labels carries the archive's
+hash, and the tools family is named as the one platform's package the
+image actually contains.
 
 ## 4. The container profile
 
 The build context references the package set (context format v4); the
-orchestrator resolves a container image whose `packages` label declares
-exactly that set, checks it against the operator's repository allowlist,
+orchestrator resolves the tools pin to this host's platform, looks for a
+container image whose `packages.` labels declare exactly the resulting
+set, checks it against the operator's repository allowlist,
 and starts **one fresh container per step** — which is how the
 specification's pristine-tree guarantee is met for free. Mounts provide
 `mcuhome/` (request document, sdk, build-context, out, cache tiers);
@@ -240,6 +261,33 @@ incorporate their consequences.
   linked (not static, as its download page suggests) but needs only
   GLIBC_2.18. CHIP's pre-generation switch (`CHIP_CODEGEN_PREGEN_DIR`)
   is present and branching correctly in the pinned CHIP version.
+- **Matter pre-generation**: the pinned CHIP version already carries the
+  fix for the pre-generation-under-Ninja report
+  (project-chip/connectedhomeip issue 39787, fixed by pull request 39788 —
+  the fix commit is an ancestor of the pinned tag, and the corrected
+  `rebase_path(target_gen_dir, root_build_dir)` is present in
+  `build/chip/chip_codegen.gni`). **No local patch is needed.**
+
+  What did need solving is a different property of the same mechanism.
+  CHIP's CMake glue indexes the pre-generation directory by the path of the
+  data-model file *relative to `CHIP_ROOT`* (`build/chip/chip_codegen.cmake`),
+  and MCUHome's data model lives in the SDK, outside CHIP — so that relative
+  path climbs out of the CHIP tree and back down into the manifest
+  repository's directory. The workspace package therefore lays the
+  pre-generated output out as a shadow of the workspace and hands the build
+  the shadow's CHIP root, which has to exist as an empty directory because
+  the kernel resolves `..` by walking. `codepregen.py` is bypassed for two
+  reasons of its own: it derives its output paths from the root it walked,
+  which does not agree with what the consumer computes for an out-of-tree
+  data model, and its ZAP step passes no `--zcl`, which an out-of-tree
+  `.zap` needs. The two documented `generate.py`/`codegen.py` invocations
+  are used directly instead.
+
+  Verified end to end, 2026-09-02: the reference Matter sample builds from
+  the packaged workspace with `CHIP_CODEGEN_PREGEN_DIR` set, **no network**
+  and **no zap** (an empty directory mounted over the zap install,
+  `ZAP_INSTALL_PATH` unset, zap absent from `PATH`) — all four pre-generated
+  translation units are compiled out of the package and the firmware links.
 - **ccache across build directories**: full direct-mode hits with
   `CCACHE_BASEDIR` over the build-dir parent plus `hash_dir = false`;
   neither alone suffices once `-g` and build-local include paths are in
@@ -248,6 +296,8 @@ incorporate their consequences.
 
 ## 10. Open points
 
-- Matter pre-generation validation against the pinned CHIP version
-  (section 8, item 2).
 - Symlink-view verification with the provisioner (section 8, item 3).
+- Which Python ABI the bundled wheel set targets. It is built by the
+  container base's interpreter today, so a host whose Python is a different
+  minor version cannot install the compiled wheels in it — which the
+  container profile never notices and the subprocess profile will.

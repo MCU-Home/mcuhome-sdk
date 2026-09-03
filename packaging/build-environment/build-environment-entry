@@ -1,0 +1,143 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The entry point of MCUHome's build environment
+# (docs/spec/build-environment-specification.md §4 and §6). The profile in
+# use puts this file at
+#
+#     $MCUHOME_BUILDER_BASE_DIR/mcuhome/bin/build-environment-entry
+#
+# and runs it there, as the calling user, with **no arguments**. Everything
+# the step is about is in $MCUHOME_BUILDER_BASE_DIR/mcuhome/invocation-request.json
+# (§6.1); the answer goes to mcuhome/out/result-<invocation_id>.json (§6.2).
+#
+# It ships in the `mcuhome-build-tools_<os>-<arch>` package. Which package
+# carries the entry point is the environment's business (§2); the tools one
+# does, because the interpreter it hands over to lives there too.
+#
+# What this file does is set the environment up and hand over. The ABI — the
+# request document, the actions, the result document, the exit codes — lives
+# in `mcuhome.compiler.abi`, which arrives with the SDK the orchestrator
+# delivers at mcuhome/sdk (§4) and is therefore *not* environment content.
+# That split is deliberate: each build context chooses its own SDK version,
+# and an environment builds whatever SDK it is handed.
+#
+# /bin/sh rather than a Python shebang, because the two things this file has
+# to work out are where the interpreter is and where the SDK is, and a
+# shebang can only carry the first. No extension, because §4 fixes the file
+# name — a third party may ship a compiled binary at this path and `.sh`
+# would then be a lie.
+
+set -eu
+
+# --------------------------------------------------------------------------
+# Where the environment's two packages are
+# --------------------------------------------------------------------------
+#
+# The packages unpack wherever the profile puts them — a store entry under
+# the user's cache in the subprocess profile, fixed paths in an image in the
+# container profile — so neither root can be a constant here. Each is taken
+# from its environment variable, and the tools root falls back to this
+# file's own location, which is right whenever the entry point was left
+# inside its package.
+#
+# `build-tools.json` and `build-workspace.json` are each package's statement
+# of what it is; they are what makes the fallback a check rather than a
+# guess.
+
+if [ -z "${MCUHOME_BUILD_ENV_TOOLS:-}" ]; then
+    self="$0"
+    # Follow the file if the profile linked rather than copied it, so the
+    # fallback still finds the package the link points into. A relative
+    # target is resolved against the directory the link is in; an absolute
+    # one is already the answer and must not be joined onto anything, or a
+    # link to /opt/... would resolve to /mcuhome/bin//opt/... and the tools
+    # root would silently become the directory the link was in.
+    # The hop count is the kernel's own: a link cycle is a broken layout,
+    # and saying so beats looping until the build times out.
+    hops=0
+    while [ -L "$self" ]; do
+        hops=$((hops + 1))
+        if [ "$hops" -gt 40 ]; then
+            echo "build-environment-entry: $0 leads through more than 40 symbolic links." >&2
+            echo "Set MCUHOME_BUILD_ENV_TOOLS to the unpacked mcuhome-build-tools package." >&2
+            exit 70
+        fi
+        target="$(readlink "$self")"
+        case "$target" in
+            /*) self="$target" ;;
+            *) self="$(cd "$(dirname "$self")" && pwd)/$target" ;;
+        esac
+    done
+    MCUHOME_BUILD_ENV_TOOLS="$(cd "$(dirname "$self")/.." && pwd)"
+fi
+
+if [ ! -f "$MCUHOME_BUILD_ENV_TOOLS/build-tools.json" ]; then
+    echo "build-environment-entry: no MCUHome build tools at $MCUHOME_BUILD_ENV_TOOLS." >&2
+    echo "Set MCUHOME_BUILD_ENV_TOOLS to the unpacked mcuhome-build-tools package." >&2
+    exit 70
+fi
+
+if [ -n "${MCUHOME_BUILD_ENV_WORKSPACE:-}" ] &&
+   [ ! -f "$MCUHOME_BUILD_ENV_WORKSPACE/build-workspace.json" ]; then
+    echo "build-environment-entry: no MCUHome build workspace at $MCUHOME_BUILD_ENV_WORKSPACE." >&2
+    echo "Set MCUHOME_BUILD_ENV_WORKSPACE to the unpacked mcuhome-build-workspace package." >&2
+    exit 70
+fi
+
+export MCUHOME_BUILD_ENV_TOOLS
+
+# --------------------------------------------------------------------------
+# The tools, on PATH and in the variables Zephyr reads them from
+# --------------------------------------------------------------------------
+#
+# Stated here rather than in an image's ENV, so that both profiles get the
+# same environment from the same file. The build virtual environment comes
+# first: `python3` inside a build has to mean one thing, and that thing is
+# the interpreter the wheel set was installed into.
+
+VENV="$MCUHOME_BUILD_ENV_TOOLS/venv"
+if [ ! -x "$VENV/bin/python3" ]; then
+    echo "build-environment-entry: no build environment at $VENV." >&2
+    echo "Provisioning creates it from $MCUHOME_BUILD_ENV_TOOLS/wheels before the first step." >&2
+    exit 70
+fi
+
+PATH="$VENV/bin:$MCUHOME_BUILD_ENV_TOOLS/cmake/bin:$MCUHOME_BUILD_ENV_TOOLS/ninja:$MCUHOME_BUILD_ENV_TOOLS/gn:$PATH"
+export PATH
+VIRTUAL_ENV="$VENV"
+export VIRTUAL_ENV
+
+ZEPHYR_TOOLCHAIN_VARIANT=zephyr
+export ZEPHYR_TOOLCHAIN_VARIANT
+for candidate in "$MCUHOME_BUILD_ENV_TOOLS"/zephyr-sdk-*; do
+    if [ -d "$candidate" ]; then
+        ZEPHYR_SDK_INSTALL_DIR="$candidate"
+        export ZEPHYR_SDK_INSTALL_DIR
+    fi
+done
+
+# --------------------------------------------------------------------------
+# Hand over to the SDK's program
+# --------------------------------------------------------------------------
+#
+# Exit 70 and not 1: a non-zero exit promises a result document (§6.3), and
+# there is no program here to write one. Saying so on stderr is worth more
+# than a Python traceback about an import.
+
+# The trailing slash is stripped because the base directory is "often /,
+# but never assume it" (§4) — and "//mcuhome/sdk" in a message a user has
+# to act on reads like a bug in the message rather than a missing mount.
+BASE="${MCUHOME_BUILDER_BASE_DIR:-/}"
+SDK="${BASE%/}/mcuhome/sdk"
+
+if [ ! -f "$SDK/mcuhome/compiler/abi.py" ]; then
+    echo "build-environment-entry: no MCUHome SDK at $SDK — the orchestrator did not deliver it." >&2
+    exit 70
+fi
+
+PYTHONPATH="$SDK${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+
+exec "$VENV/bin/python3" -m mcuhome.compiler.abi

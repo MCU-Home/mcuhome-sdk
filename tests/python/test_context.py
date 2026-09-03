@@ -9,13 +9,12 @@ server recomputes an ID with while carrying no build logic at all (ADR
 :mod:`mcuhome.workbench.contextdir`, and it is tested next door in
 ``test_context_workbench.py``.
 
-The context ID rule (build-container-contract.md §3.3, ADR 0018) is
-locked with ``context`` format version 1 and can never change
-afterwards — every archived context, every artifact attribution and
-every server-side integrity check depends on the same inputs hashing to
-the same ID forever. That makes :data:`GOLDEN_ID` the contract of this
-file, not a regression convenience: if it ever fails, the fix is in the
-code, never in the constant.
+The context ID rule is locked with ``context`` format version 3 and can
+never change afterwards — every archived context, every artifact
+attribution and every server-side integrity check depends on the same
+inputs hashing to the same ID forever. That makes :data:`GOLDEN_ID` the
+contract of this file, not a regression convenience: if it ever fails,
+the fix is in the code, never in the constant.
 """
 
 from __future__ import annotations

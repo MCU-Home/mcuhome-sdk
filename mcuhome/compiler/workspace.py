@@ -119,6 +119,14 @@ def image_output(build_dir: Path, image: str) -> Path:
 #: exists to avoid, just one process tree down.
 CHIP_JOBS_VAR = "MCUHOME_CHIP_JOBS"
 
+#: CHIP's own switch for a pre-generated data model: the root of a tree
+#: holding the code its `.zap`/`.matter` inputs would otherwise be turned
+#: into at build time (`build/chip/chip_codegen.cmake` in the Matter SDK).
+#: The name is CHIP's, not this project's. A build environment that sets it
+#: needs no zap, which is why it is what :data:`TOOLS` measures the zap
+#: requirement against.
+PREGEN_DIR_VAR = "CHIP_CODEGEN_PREGEN_DIR"
+
 #: CMake's own cap on ``cmake --build`` parallelism. Under sysbuild the
 #: ``-o=-j{jobs}`` below only reaches the *outer* ninja: each image is an
 #: ExternalProject whose build step is a fresh ``cmake --build .``, and
@@ -153,6 +161,11 @@ class ToolNeed:
     why: str
     #: Where it comes from, for the fix line.
     source: str
+    #: Environment variables whose presence makes this tool unnecessary —
+    #: because what it would have produced is already there. Distinct from
+    #: :attr:`env_vars`, which says *where the tool is*: this one says the
+    #: build never has to run it.
+    obviated_by: tuple[str, ...] = ()
 
     def satisfied_by(self, env: dict[str, str]) -> bool:
         # The default is "", never None: which(path=None) answers from
@@ -160,6 +173,8 @@ class ToolNeed:
         # **stated** one — the env a build's children will actually run
         # in. A caller that states no PATH has no tools, and hears so as
         # a typed refusal instead of a child that fails to exec.
+        if any(env.get(name) for name in self.obviated_by):
+            return True
         path = env.get("PATH", "")
         if any(shutil.which(command, path=path) for command in self.commands):
             return True
@@ -193,6 +208,13 @@ TOOLS: tuple[ToolNeed, ...] = (
             "https://github.com/project-chip/zap/releases (put the install "
             "directory on PATH, or point ZAP_INSTALL_PATH at it)"
         ),
+        # MCUHome's data model is a single static root-node configuration
+        # that changes only with a release, so its generated form is a
+        # release constant: a build environment may ship it pre-generated
+        # and point CHIP's own switch at it. Then nothing in the build ever
+        # runs zap, and demanding it would refuse an environment that is
+        # complete — see docs/design/build-environment.md section 2.
+        obviated_by=(PREGEN_DIR_VAR,),
     ),
 )
 
@@ -218,10 +240,10 @@ def build_environment(
 
     **This is the one definition of a Matter build environment**, and both
     callers reach it: the workbench's orchestrator for the ``docker run``,
-    and :class:`mcuhome.compiler.abi` for the build-container contract's
-    ``build`` action. Each adds what only it knows — a ccache location,
-    the contract's ``TMPDIR`` — and neither restates what is here. A
-    second copy is how one of them silently lost ``HOME``.
+    and :mod:`mcuhome.compiler.abi` for the builder program's ``build``.
+    Each adds what only it knows — a ccache location, the directory the
+    step was told to keep its scratch in — and neither restates what is
+    here. A second copy is how one of them silently lost ``HOME``.
 
     ``ZEPHYR_BASE`` is filled in only when it is not already set: west
     would follow a value someone set on purpose too, and a builder that
@@ -231,10 +253,10 @@ def build_environment(
     at — a build environment states the workspace it baked.
 
     ``TMPDIR`` and ``HOME`` are set unconditionally when given, and both
-    override an inherited value on purpose. The contract's ``tmp`` is per
-    invocation and emptied by the backend, which is exactly what a child
-    process should be scribbling in (build-container-contract.md §4); and
-    an inherited ``HOME`` inside a container belongs to whoever built the
+    override an inherited value on purpose. The scratch directory a step
+    is handed is per step and nobody else's, which is exactly what a child
+    process should be scribbling in; and an inherited ``HOME`` inside a
+    container belongs to whoever built the
     image, not to the UID the build runs as — see
     :data:`mcuhome.model.buildimage.CONTAINER_HOME` for what that costs when it
     is missing.

@@ -16,10 +16,10 @@ that from something to trust into something to check. The same argument
 ADR 0018 makes with ``sdk.sha256``, and the reason a build container is
 recorded by digest rather than by tag once a backend has chosen one.
 
-**Why the layer names are the contract's.** ``zephyr``, ``sdk``, ``chip``
-and ``mcuboot`` are the layer registry of
-``docs/design/build-container-contract.md`` §2.1, so a later ``describe``
-fills its ``trees`` block by lookup rather than by translation.
+**Why the layer names are the builder program's.** ``zephyr``, ``sdk``,
+``chip`` and ``mcuboot`` are the layer names the builder program uses
+(``mcuhome/compiler/abi.py``), so a later ``describe`` fills its
+``trees`` block by lookup rather than by translation.
 
 **Why patches are identified by digest.** ``patches/README.md`` says to
 regenerate a patch *in place*, keeping its file name — so the name is not

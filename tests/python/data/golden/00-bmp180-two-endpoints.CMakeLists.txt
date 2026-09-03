@@ -74,8 +74,8 @@ endif()
 
 list(APPEND ZEPHYR_EXTRA_MODULES ${CHIP_ROOT}/config/zephyr/chip-module)
 
-# ccache for the Matter half of the build as well (builder-pipeline.md §5:
-# ccache is a hard requirement of the builder, not an optimization).
+# ccache for the Matter half of the build as well. A build is correct
+# without any cache and slow without this one.
 # Zephyr finds ccache by itself and sets the global RULE_LAUNCH_COMPILE
 # property, but CHIP's inner GN build is a second build system that never
 # sees it — without the two lines below, every clean build directory
@@ -96,6 +96,19 @@ if(NOT USE_CCACHE STREQUAL "0")
     if(MCUHOME_CCACHE)
         set(MATTER_GN_ARGS "--arg-string\npw_command_launcher\nccache\n")
     endif()
+endif()
+
+# A build environment that ships the Matter data model already generated
+# points CHIP at it with CHIP_CODEGEN_PREGEN_DIR — and CHIP reads that name
+# only as a CMake cache variable (build/chip/chip_codegen.cmake), never from
+# the environment. The value has to travel in the environment all the same,
+# because this file is configured as one image of a sysbuild build and
+# sysbuild forwards only the variables it knows by name. So it is put into
+# the cache here, before anything includes CHIP's code generation. Without
+# it the build generates the data model itself and needs zap, which a build
+# environment carrying the pre-generated code has no reason to contain.
+if(DEFINED ENV{CHIP_CODEGEN_PREGEN_DIR})
+    set(CHIP_CODEGEN_PREGEN_DIR "$ENV{CHIP_CODEGEN_PREGEN_DIR}" CACHE PATH "" FORCE)
 endif()
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})

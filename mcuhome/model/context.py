@@ -30,10 +30,14 @@ costs the identity.
 and it can never change afterwards.** Everything that ever names a
 context — integrity verification, artifact attribution ("built from
 *this*"), archival references — depends on computing the same ID from
-the same inputs forever. The rule is stated in
-``docs/design/build-container-contract.md`` §3.3 (ADR 0018); this
-module implements it. The ID is the SHA-256 over the canonical JSON
-(RFC 8785) of exactly this document::
+the same inputs forever. The rule is stated here, in this module, rather
+than in a separate document: it is what the workbench and the build
+environment program agree on today, under context format version 3,
+which pins a build environment by image digest.
+``docs/spec/build-context-format.md`` (format version 4, where the
+environment becomes a package set rather than an image) supersedes it
+once the workbench migrates to that format. The ID is the SHA-256 over
+the canonical JSON (RFC 8785) of exactly this document::
 
     {"build_environment": {"digest": ...},
      "files": [{"path": ..., "sha256": ...}, ...],
@@ -181,18 +185,20 @@ MODEL_FILE = "model/device-model.json"
 #: Where patches live: ``patches/<layer>/NNNN-name.patch``.
 PATCHES_DIR = "patches"
 
-#: The backend-written runtime directory inside a mounted context
-#: (``.mcuhome/command.json``), as contract v1 was first drafted.
-#: Plumbing, not content: never an integrity entry, never identity.
+#: The backend-written runtime directory that could once appear inside a
+#: mounted context (``.mcuhome/command.json``), from an earlier design of
+#: this project's own build-container contract. Plumbing, not content:
+#: never an integrity entry, never identity.
 #:
-#: **The contract has moved on and this constant has not yet.** The
-#: per-invocation request document now lives in a backend-owned
-#: directory outside the context, and there is no ``.mcuhome/`` in a
-#: context at all (build-container-contract.md §3.1, §5.2) — which is
-#: what makes the context a genuinely read-only mount. Removing the
-#: directory from the exclusion rules is migration work; keeping it
-#: excluded in the meantime is harmless, because a context that never
-#: contains one cannot be affected by the exclusion.
+#: **That design has moved on and this constant has not yet.** Under the
+#: v3 specification set (``docs/spec/build-environment-specification.md``
+#: §4, §6.1) the per-invocation request document lives outside the build
+#: context entirely, at ``mcuhome/invocation-request.json``, sibling to
+#: the context directory rather than inside it — so there is no
+#: ``.mcuhome/`` in a context at all, exactly as this constant already
+#: assumes. Removing the directory from the exclusion rules is migration
+#: work; keeping it excluded in the meantime is harmless, because a
+#: context that never contains one cannot be affected by the exclusion.
 BACKEND_DIR = ".mcuhome"
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
@@ -486,10 +492,10 @@ class ContextManifest:
 class ContextRequest:
     """``context.yaml``, as an object — the pinning *request* (ADR 0018 amendment).
 
-    The client-written half of the split ADR 0018 decision 6's single
-    document became: the ``lock-context`` freeze splits the manifest into
-    a *request* and a *result* (build-container-contract.md §3.2), and
-    this is the request. It carries the ``context`` format version, the
+    The client-written half of a single document that a later design
+    split in two: the ``lock-context`` freeze splits the manifest into
+    a *request* and a *result*, and this is the request. It carries the
+    ``context`` format version, the
     resolved SDK pin, the pinned build environment and the original
     intent the session is admitted on — and deliberately **nothing that
     depends on the final file set**: no ``files`` list and no ``id``.
@@ -647,8 +653,7 @@ def _require_files(entries: Iterable[ContextFile]) -> None:
                 f'The integrity list must not name "{entry.path}".',
                 hint=(
                     "manifest.yaml describes the list and .mcuhome/ is backend "
-                    "plumbing — the contract keeps both out of the context's "
-                    "identity (build-container-contract.md §3.2)"
+                    "plumbing — neither belongs in the context's integrity list"
                 ),
             )
         if entry.path in seen:

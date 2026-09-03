@@ -55,12 +55,12 @@ workbench's modules — see
 |---|---|---|
 | `compiler/generate.py` | 4 | the per-device build tree: Matter/channel tables, overlay, Kconfig fragment, CMakeLists, the sysbuild half |
 | `compiler/workspace.py` | 5 | west-workspace discovery, prerequisites, the `west build --sysbuild` invocation, per-image artifacts and memory reports |
-| `compiler/abi.py` | — | the build container's invocation ABI, and the SDK-side adapter behind it |
+| `compiler/abi.py` | — | the builder program: the build environment's invocation ([specification](../docs/spec/build-environment-specification.md) §6) and the baked image's legacy one, the build behind both, and the SDK-side adapter |
 | `model/pairing.py` | — | commissioning credentials: SPAKE2+ verifier, QR and manual code, the atomic Kconfig group |
 | `model/p256.py` | — | the curve arithmetic `pairing.py` and the workbench's `signing.py` share, and nothing more |
 | `model/model.py` | — | the canonical device model and its JSON form |
 | `model/registry.py` | — | static tables: clusters, device types, drivers, boards, per-board update scheme and flash layout |
-| `model/hashes.py` | — | the one file hash both sides of the build-container contract compute |
+| `model/hashes.py` | — | the one file hash every party to a build computes |
 | `model/toolchain.py` | — | Zephyr line and blob resolution — the ADR 0013 seam, and the constraint this SDK release states over a build environment |
 | `model/imageref.py` | — | how an external input is named: `[registry/]path[:tag][@sha256:…]`, for the SDK package and the build environment alike |
 | `model/errors.py` | — | the error type and its plain-language rendering |

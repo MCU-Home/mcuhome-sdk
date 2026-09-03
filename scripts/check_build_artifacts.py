@@ -16,20 +16,23 @@ Usage::
 where ``<build-dir>`` is what ``mcuhome build --build-dir`` was given.
 
 **One build shape.** ``mcuhome device build`` compiles in a build
-container and delivers ``build-report.json`` (the §7.2.1 report) beside
-the unsigned artifacts, which the host then signs. The artifact set is
-flat: ``firmware.{hex,bin}`` (unsigned), ``bootloader.hex`` when the build
-produced one, ``firmware.signed.{hex,bin}`` (host-signed) and one
+container and delivers ``build-report.json`` (the build report,
+``docs/spec/build-actions.md`` §2.2) beside the unsigned artifacts, which
+the host then signs. The artifact set is flat: ``firmware.{hex,bin}``
+(unsigned), ``bootloader.hex`` when the build produced one,
+``firmware.signed.{hex,bin}`` (host-signed) and one
 ``<device>-<version>.ota`` wrapped from the signed image.
 
-**Why the artifacts are checked by presence, not by hash.** The §7.2.1
+**Why the artifacts are checked by presence, not by hash.** The §2.2
 report carries no per-artifact hash list, so there is no recorded value to
 re-hash against. There is also no need for one here: the build container
-already re-hashed every artifact on egress against the report it emits
-(build-container-contract §5.3), so a second hash oracle in CI would only
-re-check what the container already guaranteed. CI's job here is therefore
+already re-hashed every artifact on egress against the report it emits —
+a guarantee of the legacy container contract this image still
+implements, kept until the build environment switchover — so a second
+hash oracle in CI would only re-check what the container already
+guaranteed. CI's job here is therefore
 narrow and exactly right — "the flashable files exist and are non-empty,
-and the report is a well-formed §7.2.1 document" — which is what catches a
+and the report is a well-formed §2.2 document" — which is what catches a
 build that silently produced nothing, or a report a signer would refuse.
 
 What is required (each present and non-empty):
@@ -37,20 +40,22 @@ What is required (each present and non-empty):
 * ``build-report.json`` — and it must parse, carry ``report`` == 1, a
   ``signing`` block whose ``signature_type`` is ``ecdsa-p256`` and whose
   ``arguments`` is an object holding all four imgtool keys (``version``,
-  ``header-size``, ``align``, ``slot-size``). Without it a detached signer
-  has nothing to read, and §7.2 requires exactly one report.
+  ``header-size``, ``align``, ``slot-size``) — the report §2.2 defines.
+  Without it a detached signer has nothing to read, and it is one of the
+  artifacts the build always produces (§2.1).
 * ``firmware.hex`` and ``firmware.bin`` — the unsigned firmware the
-  container declared with role ``firmware`` (§7.2).
+  container declared (the legacy container contract the baked image
+  still implements).
 * ``firmware.signed.hex`` and ``firmware.signed.bin`` — what the host
   signer produced; an unsigned application is one MCUboot refuses to
   chain-load.
 * exactly one ``*.ota`` — the Matter update image wrapped from the signed
   binary.
 * ``bootloader.hex`` is checked non-empty *when present*, but a missing
-  bootloader is not a failure by itself: §7.2 requires at least one
-  firmware artifact and exactly one report, and makes the bootloader
-  optional (a board without an MCUboot member, a build that does not
-  deliver one).
+  bootloader is not a failure by itself: the build's artifact set always
+  includes the firmware and the report, and makes the bootloader the one
+  optional entry (§2.1; a board without an MCUboot member, a build that
+  does not deliver one).
 
 The image and file names below are written out rather than imported from
 the code under test: this is an independent oracle for a regression gate,
@@ -68,18 +73,18 @@ import json
 import sys
 from pathlib import Path
 
-#: Delivered beside the unsigned firmware: the §7.2.1 report a host signer
-#: consumes, and what says a build directory is a finished one.
+#: Delivered beside the unsigned firmware: the build report (§2.2) a host
+#: signer consumes, and what says a build directory is a finished one.
 BUILD_REPORT_FILE = "build-report.json"
 
-#: The one report format version this gate understands (§7.2.1).
+#: The one report format version this gate understands (§2.2).
 REPORT_VERSION = 1
 
 #: The one signature algorithm MCUHome images carry
 #: (``mcuhome.model.registry.SIGNATURE_TYPE``).
 SIGNATURE_TYPE = "ecdsa-p256"
 
-#: imgtool's own option names, the keys a §7.2.1 ``signing.arguments``
+#: imgtool's own option names, the keys a §2.2 ``signing.arguments``
 #: object must carry so a detached signer can turn it back into a command
 #: (``mcuhome.model.signing.SigningParameters.to_dict``).
 SIGNING_ARGUMENT_KEYS = ("version", "header-size", "align", "slot-size")
@@ -93,7 +98,7 @@ REPORT_REQUIRED_FILES = (
     "firmware.signed.bin",
 )
 
-#: The bootloader image, when the build delivered one. Optional: §7.2
+#: The bootloader image, when the build delivered one. Optional: §2.1
 #: requires firmware + report, not a bootloader.
 BOOTLOADER_FILE = "bootloader.hex"
 
@@ -112,7 +117,7 @@ def _nonempty(path: Path, *, what: str) -> list[str]:
 
 
 def _check_report_document(report_path: Path) -> list[str]:
-    """The §7.2.1 ``build-report.json`` itself: parses, version, signing block."""
+    """The §2.2 ``build-report.json`` itself: parses, version, signing block."""
     try:
         report = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:

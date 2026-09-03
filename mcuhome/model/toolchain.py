@@ -91,11 +91,18 @@ class ResolvedToolchain:
 
 
 #: A Zephyr release as an image may spell it: dotted decimal components,
-#: optionally followed by an upstream suffix after a hyphen. It is the
-#: value range build-container-contract.md §2.1.1 fixes for the
-#: ``org.mcuhome.build-environment.zephyr.version`` coupling label, minus the label's wider
-#: character class — what does not parse as a version cannot be *in* a
-#: line, which is the only question :func:`satisfies_line` asks.
+#: optionally followed by an upstream suffix after a hyphen. The
+#: ``org.mcuhome.build-environment.zephyr.version`` label's own value
+#: range is SemVer 2.0.0 (``docs/spec/build-environment-specification.md``
+#: §5, §5.2) — a stricter grammar than this pattern accepts: SemVer fixes
+#: the numeric part at exactly three components and splits what follows a
+#: hyphen into a dash-prefixed pre-release part and a separate
+#: plus-prefixed build-metadata part, while this pattern accepts any
+#: number of dot-separated numeric components and folds everything after
+#: one hyphen into a single opaque suffix. That is deliberate: this
+#: pattern only has to tell which line a release is *in*, not enforce the
+#: label's full grammar — what does not parse as a version cannot be *in*
+#: a line, which is the only question :func:`satisfies_line` asks.
 _RELEASE = re.compile(r"(?P<numbers>[0-9]+(\.[0-9]+)*)(?P<suffix>-[A-Za-z0-9._+-]+)?\Z")
 
 
@@ -118,16 +125,16 @@ def satisfies_line(version: str, *, line: str) -> bool:
     always taken".
 
     A release carrying an upstream suffix (``4.5.0-rc1``) satisfies **no**
-    line, including its own. Contract §2.1.1 says the same of its
-    constraint syntax — such a value "is not ordered at all: it satisfies
-    only ``=``, and it never satisfies a range" — and a line is a range.
+    line, including its own. As PEP 440 itself states of such a value, it
+    is not ordered at all: it satisfies only ``=``, and it never satisfies
+    a range — and a line is a range.
     A pre-release is a container an operator chose to build; asking for a
     line is asking for the released ones.
 
     A *version* that is not a Zephyr release at all — a label somebody
     filled in by hand, an empty string, a value with the leading ``v``
-    west uses — satisfies nothing. Absence is never read as compatible
-    (§2.1.1), and neither is nonsense.
+    west uses — satisfies nothing. Absence is never read as compatible,
+    and neither is nonsense.
     """
     found = _RELEASE.fullmatch(version.strip()) if isinstance(version, str) else None
     asked = _RELEASE.fullmatch(line.strip()) if isinstance(line, str) else None
@@ -149,8 +156,9 @@ def line_of(version: str) -> str | None:
     ``version.builder-unsatisfiable`` amendment and the build server's
     own error table call those values "the lines available". They are
     read off ``org.mcuhome.build-environment.zephyr.version`` labels, and a label states a
-    *release* (§2.1.1) — so reporting the labels verbatim reports
-    releases under the name of lines, and a client that echoed one back
+    *release* (``docs/spec/build-environment-specification.md`` §5, §5.2)
+    — so reporting the labels verbatim reports releases under the name of
+    lines, and a client that echoed one back
     as its ``zephyr`` would pin a frozen point release (which ADR 0013
     forbids) or, for a pre-release, send a value no image can ever
     satisfy.

@@ -1,29 +1,46 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The invocation ABI, which is frozen, and the actions implemented on it.
+"""The builder program's two invocations, and the build behind both.
 
-``docs/design/build-container-contract.md`` §5 is the one interface in
-this project that can never be changed: a third party writes a build
-container against it, in a language nobody here chose, and every future
-version of MCUHome has to keep talking to it. That is why this suite is
-mostly about *refusals*. A program that builds firmware and answers a
-malformed request with a traceback is not usable by a backend; a program
-that answers it with exit 66 and nothing on disk is.
+:mod:`mcuhome.compiler.abi` answers two calling conventions, and this
+suite is in two halves that match them.
 
-Three properties carry most of the file:
+**The v3 invocation** — the primary one, at the bottom of this file — is
+``docs/spec/build-environment-specification.md``: the entry point is run
+with no arguments, the request document is at a fixed path below
+``MCUHOME_BUILDER_BASE_DIR``, the answer is
+``mcuhome/out/result-<invocation_id>.json``, and the exit code is zero
+exactly when that document says ``success``. The actions are
+``docs/spec/build-actions.md``'s, and this environment implements
+``build``.
+
+**The legacy invocation** — everything above it — is the two-operand form
+of the retired build container contract, which the baked image still
+uses. The design document it implements is no longer in this repository;
+the ``§`` references in that half name sections of it and resolve nowhere
+else, and they are left as they are because the half is deleted whole at
+switchover.
+
+Either way this suite is mostly about *refusals*, and for the same reason
+in both: a program that builds firmware and answers a malformed request
+with a traceback is not usable by whoever drives it; one that answers with
+a typed refusal and nothing half-written on disk is. The properties that
+carry most of the file:
 
 * **Exactly one thing produces no result document** — a request that
-  cannot be read at all (§5.1 step 4). Everything else, an unimplemented
-  request format version included, is a result document, because
-  ``result`` is in the immortal preamble.
-* **The result document is the last write action, and it is atomic**
-  (§5.4). A backend reads it "if it exists, regardless of the exit code"
-  (§5.3), so a half-written one is worse than none.
-* **A program echoes what it was given, and only that** (§5.4). Inventing
-  a ``session`` is what makes an invocation attributable to the wrong one.
+  cannot be read at all. In the legacy half that is exit 66; in the v3
+  half it is a request with no ``invocation_id`` a result could be named
+  after. Everything else is a document, because a refusal nobody can read
+  is not a refusal.
+* **The result document is the last write action, and it is atomic.** It
+  is read whenever it exists, whatever the exit code, so a half-written
+  one is worse than none.
+* **Nothing is invented.** The legacy half echoes what it was given and no
+  more; the v3 half declares the artifacts it actually wrote.
 
-Every test arranges what a backend arranges: a per-invocation directory
-with the request document in it (§5.1 step 1), never inside a context.
+Every test arranges what the other side arranges: the legacy half a
+per-invocation directory with a request document in it, the v3 half the
+filesystem tree of §4 plus the environment's own packages.
 """
 
 from __future__ import annotations
@@ -1177,7 +1194,98 @@ def device_model_json() -> str:
     return resolve_file(EXAMPLE).to_json()
 
 
-class BuildSetup:
+class BuildStubs:
+    """The two child processes of a build, stubbed, and the failures they can have.
+
+    Shared by both invocations, because the build behind them is one
+    builder: a real Matter compile is a quarter of an hour and this suite
+    promises one second. The generate half is a real backend of the legacy
+    ABI seen from the other side — it reads the request document the
+    builder wrote, puts an application tree where that document says, and
+    answers with a result document — because anything less would let the
+    builder's own checking of that answer go untested.
+    """
+
+    def __init__(self, monkeypatch) -> None:
+        #: Every child process the program started, in order.
+        self.children: list[dict[str, Any]] = []
+        #: Every :class:`~mcuhome.compiler.workspace.BuildPlan` it would have run.
+        self.plans: list[Any] = []
+        self.child_code = 0
+        self.build_code = 0
+        #: What a stubbed ``git apply`` leaves in the tree it was pointed
+        #: at, so a test can see *which* tree was patched rather than only
+        #: which path was named. Off by default: a patch that changes
+        #: nothing is what every other test here wants.
+        self.patch_marker: str | None = None
+        #: The failure modes a build can have, drivable one at a time: a
+        #: generate child that dies without a result document, one that
+        #: answers a non-``success``, a compiler that cannot even start,
+        #: and a sysbuild that leaves no tree to report the signing
+        #: parameters from.
+        self.generate_writes_result = True
+        self.generate_status = "success"
+        self.build_raises: str | None = None
+        self.omit_app_hex = False
+        self.omit_config = False
+        monkeypatch.setattr(abi, "_run_child", self._run_child)
+        monkeypatch.setattr(abi.workspace, "run_build", self._run_build)
+
+    def _run_child(self, command, *, env, directory):
+        """Stands in for ``git apply`` and for the SDK's ``generate``."""
+        record = {"command": list(command), "env": dict(env), "directory": Path(directory)}
+        if len(command) == 3 and command[1] == abi.GENERATE_ACTION:
+            handed = Path(json.loads(Path(command[2]).read_text(encoding="utf-8"))["out"])
+            # What the child sees the moment it starts — asserted empty by
+            # the invocation test, because the ABI promises it emptiness.
+            record["out_entries"] = sorted(p.name for p in handed.iterdir())
+        self.children.append(record)
+        if self.patch_marker is not None and command[0] == "git":
+            # `git -C <tree> apply …` — command[2] is the tree, and the
+            # marker lands in it exactly as a real patch's changes would.
+            (Path(command[2]) / self.patch_marker).write_text("patched\n", encoding="utf-8")
+        if len(command) == 3 and command[1] == abi.GENERATE_ACTION:
+            request = json.loads(Path(command[2]).read_text(encoding="utf-8"))
+            tree = Path(request["out"]) / "app"
+            tree.mkdir(parents=True, exist_ok=True)
+            (tree / "CMakeLists.txt").write_text("# generated\n", encoding="utf-8")
+            if self.generate_writes_result:
+                Path(request["result"]).write_text(
+                    json.dumps(
+                        {
+                            "result": 1,
+                            "status": self.generate_status,
+                            "action": abi.GENERATE_ACTION,
+                            "session": request["session"],
+                            "reason": None if self.generate_status == "success" else "x-test.made",
+                            "error": None,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+        return self.child_code, "" if self.child_code == 0 else "the child refused"
+
+    def _run_build(self, plan, *, stream=None):
+        """Stands in for stage 5, leaving behind exactly what sysbuild does."""
+        self.plans.append(plan)
+        if self.build_raises is not None:
+            raise BuildError(self.build_raises)
+        if self.build_code != 0:
+            return self.build_code, BUILD_LOG
+        for image in ("app", "mcuboot"):
+            output = plan.build_dir / image / "zephyr"
+            output.mkdir(parents=True, exist_ok=True)
+            if not (image == "app" and self.omit_app_hex):
+                (output / "zephyr.hex").write_text(f":00000001FF {image}\n", encoding="utf-8")
+            (output / "zephyr.bin").write_bytes(image.encode("utf-8"))
+        if not self.omit_config:
+            (plan.build_dir / "app" / "zephyr" / ".config").write_text(
+                BUILD_KCONFIG, encoding="utf-8"
+            )
+        return 0, BUILD_LOG
+
+
+class BuildSetup(BuildStubs):
     """Everything a backend arranges around one ``build`` (§5.2, §6, §9.1).
 
     A per-invocation directory, an emptied ``out``, a session-persistent
@@ -1191,6 +1299,7 @@ class BuildSetup:
     """
 
     def __init__(self, backend: Backend, root: Path, model_json: str, monkeypatch) -> None:
+        super().__init__(monkeypatch)
         self.backend = backend
         self.root = root
         self.context = root / "ctx"
@@ -1258,24 +1367,6 @@ class BuildSetup:
             executable.chmod(0o755)
         self.env = {"PATH": str(bindir)}
 
-        #: Every child process the program started, in order.
-        self.children: list[dict[str, Any]] = []
-        #: Every :class:`~mcuhome.compiler.workspace.BuildPlan` it would have run.
-        self.plans: list[Any] = []
-        self.child_code = 0
-        self.build_code = 0
-        #: The failure modes §6.1 and §7.2 name, drivable one at a time:
-        #: a generate child that dies without a result document, one that
-        #: answers a non-``success``, a compiler that cannot even start,
-        #: and a sysbuild that leaves the tree §7.2.1 cannot report from.
-        self.generate_writes_result = True
-        self.generate_status = "success"
-        self.build_raises: str | None = None
-        self.omit_app_hex = False
-        self.omit_config = False
-        monkeypatch.setattr(abi, "_run_child", self._run_child)
-        monkeypatch.setattr(abi.workspace, "run_build", self._run_build)
-
     # -- arranging ---------------------------------------------------------
 
     def write_sdk_metadata(self, document: Any) -> None:
@@ -1314,64 +1405,6 @@ class BuildSetup:
 
     def document(self) -> dict[str, Any]:
         return self.backend.document()
-
-    # -- the two stubbed children ------------------------------------------
-
-    def _run_child(self, command, *, env, directory):
-        """Stands in for ``git apply`` and for the SDK's ``generate``.
-
-        The generate half is a real backend of §5.1's ABI seen from the
-        other side: it reads the request document the program wrote, puts
-        an application tree where that document says, and answers with a
-        result document. Anything less would let the program's own
-        checking of that answer go untested.
-        """
-        record = {"command": list(command), "env": dict(env), "directory": Path(directory)}
-        if len(command) == 3 and command[1] == abi.GENERATE_ACTION:
-            handed = Path(json.loads(Path(command[2]).read_text(encoding="utf-8"))["out"])
-            # What the child sees the moment it starts — asserted empty by
-            # the invocation test, because §4 promises it emptiness.
-            record["out_entries"] = sorted(p.name for p in handed.iterdir())
-        self.children.append(record)
-        if len(command) == 3 and command[1] == abi.GENERATE_ACTION:
-            request = json.loads(Path(command[2]).read_text(encoding="utf-8"))
-            tree = Path(request["out"]) / "app"
-            tree.mkdir(parents=True, exist_ok=True)
-            (tree / "CMakeLists.txt").write_text("# generated\n", encoding="utf-8")
-            if self.generate_writes_result:
-                Path(request["result"]).write_text(
-                    json.dumps(
-                        {
-                            "result": 1,
-                            "status": self.generate_status,
-                            "action": abi.GENERATE_ACTION,
-                            "session": request["session"],
-                            "reason": None if self.generate_status == "success" else "x-test.made",
-                            "error": None,
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-        return self.child_code, "" if self.child_code == 0 else "the child refused"
-
-    def _run_build(self, plan, *, stream=None):
-        """Stands in for stage 5, leaving behind exactly what sysbuild does."""
-        self.plans.append(plan)
-        if self.build_raises is not None:
-            raise BuildError(self.build_raises)
-        if self.build_code != 0:
-            return self.build_code, BUILD_LOG
-        for image in ("app", "mcuboot"):
-            output = plan.build_dir / image / "zephyr"
-            output.mkdir(parents=True, exist_ok=True)
-            if not (image == "app" and self.omit_app_hex):
-                (output / "zephyr.hex").write_text(f":00000001FF {image}\n", encoding="utf-8")
-            (output / "zephyr.bin").write_bytes(image.encode("utf-8"))
-        if not self.omit_config:
-            (plan.build_dir / "app" / "zephyr" / ".config").write_text(
-                BUILD_KCONFIG, encoding="utf-8"
-            )
-        return 0, BUILD_LOG
 
 
 @pytest.fixture
@@ -2588,3 +2621,684 @@ def test_a_crash_in_a_non_build_action_is_also_error_internal(backend: Backend) 
     document = backend.document()
     assert document["action"] == "verify"
     assert document["reason"] == "error.internal"
+
+
+# --------------------------------------------------------------------------
+# The v3 invocation (docs/spec/build-environment-specification.md)
+# --------------------------------------------------------------------------
+#
+# The primary invocation, and a different subject from everything above:
+# no arguments, a fixed request path below a base directory that is never
+# assumed, a result document named after the invocation, and one action.
+
+#: What the record inside a workspace package says, and what nothing on
+#: the machine that unpacks it can possibly find: the paths of the
+#: machine that *built* it. Every step resolves them against where the
+#: package actually is, which is why this is deliberately not a tmp path.
+PACKED_TOPDIR = "/build/workspace"
+
+
+class StepSetup(BuildStubs):
+    """What an orchestrator and the environment's own packages arrange around a step.
+
+    §4's tree below a base directory that is emphatically not ``/``, plus
+    the two things the specification says nothing about because they are
+    the environment's own: the unpacked workspace package (its manifest,
+    its west workspace, its record, its pre-generated Matter code) and the
+    variable that says where it is.
+    """
+
+    def __init__(self, tmp_path: Path, model_json: str, monkeypatch) -> None:
+        super().__init__(monkeypatch)
+        # -- what the orchestrator arranges (§4) ---------------------------
+        self.base = tmp_path / "base"
+        root = self.base / abi.STEP_DIR
+        self.request_path = root / abi.STEP_REQUEST
+        self.out = root / abi.STEP_OUT
+        self.work = root / abi.STEP_WORK
+        self.sdk = root / abi.STEP_SDK
+        self.context = root / abi.STEP_CONTEXT
+        self.cache = root / abi.STEP_CACHE
+        for path in (self.out, self.work, self.context, self.cache):
+            path.mkdir(parents=True)
+        self.files = {
+            "model/device-model.json": model_json,
+            "keys/signing.pub": "-----BEGIN PUBLIC KEY-----\nnot-a-real-key\n",
+        }
+        self.manifest = locked_context(self.context, self.files)
+        # The SDK the context pinned, delivered where §4 puts it — not
+        # inside the environment's workspace, which is the whole reason a
+        # step has to join the two.
+        (self.sdk / "bin").mkdir(parents=True)
+        (self.sdk / "bin" / "generate").write_text("#!/bin/sh\n", encoding="utf-8")
+        (self.sdk / abi.SDK_METADATA_FILE).write_text(json.dumps(SDK_METADATA), encoding="utf-8")
+
+        # -- what the environment's packages provide -----------------------
+        self.package = tmp_path / "env"
+        self.topdir = self.package / "workspace"
+        self.manifest_dir = self.topdir / "mcuhome-sdk"
+        self.layers = {
+            "zephyr": self.topdir / "zephyr",
+            "chip": self.topdir / "modules" / "lib" / "connectedhomeip",
+            "mcuboot": self.topdir / "bootloader" / "mcuboot",
+        }
+        for path in (*self.layers.values(), self.manifest_dir):
+            path.mkdir(parents=True)
+        (self.topdir / ".west").mkdir()
+        (self.topdir / ".west" / "config").write_text(
+            "[manifest]\npath = mcuhome-sdk\nfile = west.yml\n", encoding="utf-8"
+        )
+        self.pregen = self.package / "matter-pregen" / "modules" / "lib" / "connectedhomeip"
+        self.pregen.mkdir(parents=True)
+        self.write_package_manifest(
+            {
+                "package": "mcuhome-build-workspace",
+                "version": "0.1.0",
+                "workspace": "workspace",
+                "workspace-record": "workspace.json",
+                "manifest-directory": "workspace/mcuhome-sdk",
+                "matter-pregen-chip-root": "matter-pregen/modules/lib/connectedhomeip",
+            }
+        )
+        self.write_record(self.packed_record())
+
+        #: The environment the step was started in. No ``zap`` on it, on
+        #: purpose: the tools package does not carry one, and the
+        #: pre-generated data model is what makes that correct.
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        for tool in ("west", "gn"):
+            executable = bindir / tool
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o755)
+        self.env = {
+            abi.BASE_DIR_VAR: str(self.base),
+            abi.WORKSPACE_PACKAGE_VAR: str(self.package),
+            "PATH": str(bindir),
+        }
+
+    # -- arranging ---------------------------------------------------------
+
+    def packed_record(self) -> dict[str, Any]:
+        """The record as the package build wrote it: the builder's paths."""
+        return {
+            "workspace": 1,
+            "topdir": PACKED_TOPDIR,
+            "manifest": {"path": "mcuhome-sdk", "file": "west.yml"},
+            "layers": {
+                "zephyr": {"path": f"{PACKED_TOPDIR}/zephyr", "revision": "v4.4.0"},
+                "chip": {"path": f"{PACKED_TOPDIR}/modules/lib/connectedhomeip"},
+                "mcuboot": {"path": f"{PACKED_TOPDIR}/bootloader/mcuboot"},
+                "sdk": {"path": f"{PACKED_TOPDIR}/mcuhome-sdk", "mounted": True},
+            },
+        }
+
+    def write_record(self, document: Any) -> None:
+        (self.package / "workspace.json").write_text(json.dumps(document), encoding="utf-8")
+
+    def write_package_manifest(self, document: Any) -> None:
+        (self.package / abi.WORKSPACE_PACKAGE_MANIFEST).write_text(
+            json.dumps(document), encoding="utf-8"
+        )
+
+    def patch(self, layer: str, name: str, body: str) -> None:
+        """Put a patch into the context and re-lock it over the new file set."""
+        path = self.context / "patches" / layer / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.files[f"patches/{layer}/{name}"] = body
+        self.manifest = locked_context(self.context, self.files)
+
+    def request(self, **fields: Any) -> dict[str, Any]:
+        """The request document of §6.1, with *fields* replacing its own."""
+        document = {
+            "spec_generation": abi.SPEC_GENERATION,
+            "session_id": "9f2c1a",
+            "invocation_id": "9f2c1a-3",
+            "action": "build",
+            "parameters": {},
+        }
+        document.update(fields)
+        return document
+
+    def run(self, *, text: str | None = None, **fields: Any) -> int:
+        """Write the request document and take one step. Returns the exit code."""
+        if text is None:
+            text = json.dumps(self.request(**fields))
+        self.request_path.write_text(text, encoding="utf-8")
+        return abi.step(self.env)
+
+    def result(self, invocation_id: str = "9f2c1a-3") -> dict[str, Any]:
+        """The result document §6.2 named."""
+        path = self.out / f"{abi.RESULT_PREFIX}{invocation_id}{abi.RESULT_SUFFIX}"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def out_entries(self) -> list[str]:
+        return sorted(entry.name for entry in self.out.iterdir())
+
+    def build_env(self) -> dict[str, str]:
+        """The environment the compile would have run in."""
+        return self.plans[0].env
+
+
+@pytest.fixture
+def stepped(tmp_path: Path, device_model_json: str, monkeypatch) -> StepSetup:
+    return StepSetup(tmp_path, device_model_json, monkeypatch)
+
+
+# -- the invocation (§6) ---------------------------------------------------
+
+
+def test_a_step_takes_no_arguments_and_answers_in_out(stepped: StepSetup) -> None:
+    """§6: run with no arguments, request at a fixed path, result in ``out``.
+
+    The whole invocation in one test: nothing is passed, everything is
+    found, and the answer is at the one name §6.2 fixes.
+    """
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert "result-9f2c1a-3.json" in stepped.out_entries()
+    assert stepped.result()["status"] == "success"
+
+
+def test_the_base_directory_is_never_assumed(stepped: StepSetup) -> None:
+    """§4: "often ``/``, but never assume it".
+
+    Every path of the step is resolved against the variable — nothing in
+    this test lives at an absolute path this program could have guessed —
+    and an environment without it gets no step at all.
+    """
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert (stepped.base / abi.STEP_DIR / abi.STEP_OUT / "firmware.bin").is_file()
+
+    without = dict(stepped.env)
+    del without[abi.BASE_DIR_VAR]
+    assert abi.step(without) == abi.EXIT_UNUSABLE
+    relative = {**stepped.env, abi.BASE_DIR_VAR: "base"}
+    assert abi.step(relative) == abi.EXIT_UNUSABLE
+
+
+def test_a_request_document_that_cannot_be_read_writes_nothing(stepped: StepSetup) -> None:
+    """The one outcome that is not a result document.
+
+    A step that cannot read the request has no ``invocation_id`` either,
+    so there is no name to write an answer under. §6.3 covers it from the
+    other side: "a step that produced no readable result document failed,
+    whatever it exited with".
+    """
+    assert abi.step(stepped.env) == abi.EXIT_UNUSABLE
+    assert stepped.out_entries() == []
+
+    assert stepped.run(text="[1, 2, 3]") == abi.EXIT_UNUSABLE
+    assert stepped.out_entries() == []
+
+    assert stepped.run(text="{not json") == abi.EXIT_UNUSABLE
+    assert stepped.out_entries() == []
+
+
+@pytest.mark.parametrize("value", [None, 7, "", "../escape", ".", "with space", "a/b"])
+def test_an_invocation_id_no_file_can_be_named_after_is_refused(
+    stepped: StepSetup, value: Any
+) -> None:
+    """§6.1 promises the id is "safe to use directly in a filename".
+
+    A value that is not gets no result document at all, rather than one at
+    a path this program composed out of somebody else's ``..``.
+    """
+    document = stepped.request()
+    if value is None:
+        del document["invocation_id"]
+    else:
+        document["invocation_id"] = value
+    assert stepped.run(text=json.dumps(document)) == abi.EXIT_UNUSABLE
+    assert stepped.out_entries() == []
+
+
+def test_unknown_fields_are_ignored(stepped: StepSetup) -> None:
+    """ "Ignore fields you do not know" (§6.1) — what makes a change additive."""
+    assert stepped.run(x_vendor="anything", unknown={"deep": [1, 2]}) == abi.EXIT_SUCCESS
+    assert stepped.result()["status"] == "success"
+
+
+# -- the two refusals (§6.2, §12) ------------------------------------------
+
+
+@pytest.mark.parametrize("generation", [2, 4, "3", None, True])
+def test_a_generation_this_environment_does_not_speak_is_unsupported(
+    stepped: StepSetup, generation: Any
+) -> None:
+    """§12: "your entry point answers ``unsupported`` to a request
+    generation it does not implement"."""
+    document = stepped.request()
+    if generation is None:
+        del document["spec_generation"]
+    else:
+        document["spec_generation"] = generation
+    assert stepped.run(text=json.dumps(document)) == abi.EXIT_FAILURE
+    result = stepped.result()
+    assert result["status"] == "unsupported"
+    assert result["spec_generation"] == abi.SPEC_GENERATION
+    assert result["artifacts"] == []
+    assert stepped.plans == []
+
+
+@pytest.mark.parametrize("action", ["describe", "verify", "sign", "x-vendor-thing", "", 4])
+def test_an_action_this_environment_does_not_implement_is_unsupported(
+    stepped: StepSetup, action: Any
+) -> None:
+    """``docs/spec/build-actions.md`` §1: an environment "answers
+    ``unsupported`` to every other one".
+
+    ``describe`` and ``verify`` are in the list on purpose: they were
+    actions of the legacy contract and are none of this one's — the
+    environment describes itself in its package metadata, and verifying
+    the context is the orchestrator's own business.
+    """
+    assert stepped.run(action=action) == abi.EXIT_FAILURE
+    result = stepped.result()
+    assert result["status"] == "unsupported"
+    assert result["message"]
+    assert stepped.plans == []
+
+
+# -- the result document (§6.2) --------------------------------------------
+
+
+def test_the_result_document_carries_the_five_fields_and_no_others(stepped: StepSetup) -> None:
+    """§6.2's table, read as a whole."""
+    assert stepped.run() == abi.EXIT_SUCCESS
+    result = stepped.result()
+    assert list(result) == [
+        "spec_generation",
+        "invocation_id",
+        "status",
+        "message",
+        "artifacts",
+    ]
+    assert result["spec_generation"] == 3
+    assert result["invocation_id"] == "9f2c1a-3"
+    assert result["status"] == "success"
+    assert result["message"] == ""
+
+
+def test_the_artifacts_are_the_names_build_actions_fixes(stepped: StepSetup) -> None:
+    """``docs/spec/build-actions.md`` §2.1, and §6.2's "paths relative to ``out/``".
+
+    The names are fixed because "the result document lists artifacts by
+    name and nothing else: whoever signs has to find the image, and it
+    finds it by knowing what it is called".
+    """
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert stepped.result()["artifacts"] == [
+        "firmware.hex",
+        "firmware.bin",
+        "bootloader.hex",
+        "build-report.json",
+    ]
+    for name in stepped.result()["artifacts"]:
+        assert (stepped.out / name).is_file()
+        assert "/" not in name
+
+
+def test_the_result_document_is_not_one_of_the_artifacts(stepped: StepSetup) -> None:
+    """§7 reserves ``result-*.json`` at the top of ``out`` for the answer itself."""
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert not any(name.startswith("result-") for name in stepped.result()["artifacts"])
+    assert "result-9f2c1a-3.json" in stepped.out_entries()
+
+
+def test_the_build_report_is_the_document_build_actions_describes(stepped: StepSetup) -> None:
+    """``docs/spec/build-actions.md`` §2.2: the report a signer reads.
+
+    Same document as the legacy invocation writes, because it is the same
+    build: the report version, the ``signing`` block with the four
+    ``imgtool`` arguments, and the memory report the sysbuild log carried.
+    """
+    assert stepped.run() == abi.EXIT_SUCCESS
+    report = json.loads((stepped.out / "build-report.json").read_text(encoding="utf-8"))
+    assert report["report"] == abi.REPORT_VERSION
+    assert report["signing"]["arguments"] == SIGNING_ARGUMENTS
+    assert {entry["image"] for entry in report["memory"]} == {"app", "mcuboot"}
+
+
+def test_a_steps_exit_code_and_its_status_say_the_same_thing(stepped: StepSetup) -> None:
+    """§6.3: exit ``0`` when a result document says ``success``, non-zero otherwise."""
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert stepped.result()["status"] == "success"
+
+    (stepped.context / "keys" / "signing.pub").unlink()
+    assert stepped.run(invocation_id="9f2c1a-4") == abi.EXIT_FAILURE
+    assert stepped.result("9f2c1a-4")["status"] == "failure"
+
+
+def test_a_failure_says_what_went_wrong_and_declares_nothing(stepped: StepSetup) -> None:
+    """§6.2: ``message`` is "free text for a human", ``artifacts`` is what
+    this step wrote — and a step that failed wrote none."""
+    (stepped.context / "keys" / "signing.pub").unlink()
+    assert stepped.run() == abi.EXIT_FAILURE
+    result = stepped.result()
+    assert result["status"] == "failure"
+    assert "signing.pub" in result["message"]
+    assert result["artifacts"] == []
+
+
+def test_a_crash_inside_a_step_is_still_a_result_document(stepped: StepSetup, monkeypatch) -> None:
+    """A step that produced no readable result document failed anyway (§6.3).
+
+    So an unexpected error is answered on the channel that was going to be
+    written regardless, rather than as a traceback the orchestrator has to
+    guess from.
+    """
+
+    def explode(self, mode):
+        raise RuntimeError("the builder blew up")
+
+    monkeypatch.setattr(abi._Build, "execute", explode)
+    assert stepped.run() == abi.EXIT_FAILURE
+    result = stepped.result()
+    assert result["status"] == "failure"
+    assert "the builder blew up" in result["message"]
+
+
+# -- the environment's own half --------------------------------------------
+
+
+def test_the_record_is_read_where_the_package_actually_is(stepped: StepSetup) -> None:
+    """A package is unpacked somewhere else than it was built.
+
+    The record names the paths of the machine that built the workspace;
+    the step resolves them against where the package is now. Nothing here
+    exists at :data:`PACKED_TOPDIR`, so a step that used the record
+    verbatim could not build at all.
+    """
+    assert stepped.run() == abi.EXIT_SUCCESS
+    plan = stepped.plans[0]
+    assert plan.topdir == stepped.topdir
+    assert PACKED_TOPDIR not in str(plan.env.get("ZEPHYR_BASE"))
+    assert plan.env["ZEPHYR_BASE"] == str(stepped.topdir / "zephyr")
+
+
+def test_a_layer_outside_the_recorded_workspace_is_a_typed_failure(stepped: StepSetup) -> None:
+    """The one path that cannot be moved with the workspace it is not in."""
+    record = stepped.packed_record()
+    record["layers"]["chip"]["path"] = "/elsewhere/connectedhomeip"
+    stepped.write_record(record)
+    assert stepped.run() == abi.EXIT_FAILURE
+    assert "/elsewhere/connectedhomeip" in stepped.result()["message"]
+
+
+def test_an_environment_that_cannot_say_where_its_workspace_is(stepped: StepSetup) -> None:
+    """Both halves of it: the variable, and the package's own manifest."""
+    without = {key: value for key, value in stepped.env.items() if key != abi.WORKSPACE_PACKAGE_VAR}
+    stepped.request_path.write_text(json.dumps(stepped.request()), encoding="utf-8")
+    assert abi.step(without) == abi.EXIT_FAILURE
+    assert abi.WORKSPACE_PACKAGE_VAR in stepped.result()["message"]
+
+    stepped.write_package_manifest({"package": "mcuhome-build-workspace"})
+    assert stepped.run(invocation_id="9f2c1a-4") == abi.EXIT_FAILURE
+    assert "build-workspace.json" in stepped.result("9f2c1a-4")["message"]
+
+
+def test_the_delivered_sdk_is_placed_where_west_looks_for_it(stepped: StepSetup) -> None:
+    """§4 delivers the SDK at ``mcuhome/sdk``; west wants it in the workspace.
+
+    The workspace package carries the manifest repository's directory
+    empty for exactly this, and the step joins the two.
+    """
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert stepped.manifest_dir.is_symlink()
+    assert stepped.manifest_dir.resolve() == stepped.sdk.resolve()
+    assert (stepped.manifest_dir / abi.SDK_METADATA_FILE).is_file()
+
+
+def test_a_step_without_a_delivered_sdk_says_so(stepped: StepSetup) -> None:
+    """ "Assume nothing exists. Check what your step needs **before** you
+    start long work" (§7)."""
+    (stepped.sdk / abi.SDK_METADATA_FILE).unlink()
+    assert stepped.run() == abi.EXIT_FAILURE
+    assert str(stepped.sdk) in stepped.result()["message"]
+    assert stepped.plans == []
+
+
+def test_an_sdk_the_profile_already_mounted_is_left_alone(stepped: StepSetup) -> None:
+    """A profile that mounts the SDK into the workspace has done this job."""
+    (stepped.manifest_dir / abi.SDK_METADATA_FILE).write_text(
+        json.dumps(SDK_METADATA), encoding="utf-8"
+    )
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert not stepped.manifest_dir.is_symlink()
+
+
+def test_no_zap_is_needed_when_the_package_carries_the_data_model(stepped: StepSetup) -> None:
+    """zap is deliberately absent from the tools package.
+
+    Its output is a release constant, generated when the workspace package
+    was built, and CHIP's own switch points the build at it. The
+    environment in this suite has no ``zap`` on ``PATH`` at all, which is
+    what makes this a test rather than a claim.
+    """
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert stepped.build_env()[abi.workspace.PREGEN_DIR_VAR] == str(stepped.pregen)
+    assert abi.workspace.missing_tools(stepped.build_env()) == []
+
+
+def test_a_package_without_a_pre_generated_model_still_needs_zap(stepped: StepSetup) -> None:
+    """The other side of the same rule, so it is not a coincidence."""
+    stepped.write_package_manifest({"workspace": "workspace", "workspace-record": "workspace.json"})
+    assert stepped.run() == abi.EXIT_FAILURE
+    assert "zap" in stepped.result()["message"]
+
+
+# -- work, out and the caches (§7, §8) -------------------------------------
+
+
+def test_the_step_works_in_work_and_delivers_into_out(stepped: StepSetup) -> None:
+    """§7: build in ``work``, copy the finished file into ``out``.
+
+    ``TMPDIR`` points inside ``work`` as §7 advises, and nothing but the
+    artifacts and the result document reaches ``out``.
+    """
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert Path(stepped.build_env()["TMPDIR"]) == stepped.work / abi.STEP_TMP
+    assert stepped.plans[0].build_dir.is_relative_to(stepped.work)
+    assert stepped.out_entries() == [
+        "bootloader.hex",
+        "build-report.json",
+        "firmware.bin",
+        "firmware.hex",
+        "result-9f2c1a-3.json",
+    ]
+
+
+def test_a_step_is_clean_and_writes_no_session_marker(stepped: StepSetup) -> None:
+    """§3: ``work`` is empty at the start of every step.
+
+    So there is no prior state of this session to find, no marker worth
+    writing, and the build is the clean one — ``--pristine always``.
+    """
+    assert stepped.run() == abi.EXIT_SUCCESS
+    command = stepped.plans[0].command
+    assert command[command.index("--pristine") + 1] == "always"
+    assert not (stepped.work / "session.json").exists()
+
+
+def test_the_local_cache_tier_is_the_primary_one(stepped: StepSetup) -> None:
+    """§8: ``local`` "is yours, it is writable, and it is gone afterwards",
+    and ccache goes in ``<tier>/ccache``."""
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert stepped.build_env()["CCACHE_DIR"] == str(stepped.cache / "local" / "ccache")
+    assert "CCACHE_REMOTE_STORAGE" not in stepped.build_env()
+
+
+def test_a_tier_the_orchestrator_mounted_is_a_read_only_secondary(stepped: StepSetup) -> None:
+    """§8: "Assume every tier except ``local`` is read-only" — so it is used
+    as a secondary and never written."""
+    shared = stepped.cache / "session" / "ccache"
+    shared.mkdir(parents=True)
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert stepped.build_env()["CCACHE_REMOTE_STORAGE"] == f"file:{shared}|read-only"
+    assert stepped.build_env()["CCACHE_DIR"] == str(stepped.cache / "local" / "ccache")
+
+
+# -- patches (§10) ---------------------------------------------------------
+
+
+def test_a_patched_layer_is_applied_to_the_environments_own_tree(stepped: StepSetup) -> None:
+    """§10: applying the context's patches is the environment's job,
+    because it is the only one who knows where the trees are."""
+    stepped.patch("zephyr", "0001-fix.patch", "--- a\n+++ b\n")
+    assert stepped.run() == abi.EXIT_SUCCESS
+    applied = [child for child in stepped.children if child["command"][0] == "git"]
+    assert len(applied) == 1
+    assert applied[0]["command"][:4] == ["git", "-C", str(stepped.layers["zephyr"]), "apply"]
+    assert "-p1" in applied[0]["command"]
+
+
+def test_a_patch_that_does_not_apply_fails_the_step(stepped: StepSetup) -> None:
+    """§10: "A patch that does not apply fails the step. Do not retry at
+    another strip level and do not apply it partially"."""
+    stepped.patch("zephyr", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.child_code = 1
+    assert stepped.run() == abi.EXIT_FAILURE
+    assert "0001-fix.patch" in stepped.result()["message"]
+    assert stepped.plans == []
+
+
+def test_a_patched_sdk_layer_is_applied_to_a_copy_under_work(stepped: StepSetup) -> None:
+    """§10: a tree that may not be written is copied under ``work`` first.
+
+    The SDK is the orchestrator's input — delivered per build context,
+    shared with whoever else holds those bytes — so this is the one tree a
+    step copies before patching it. "Materialize a patched copy of it
+    under ``work``, and build against a view of the environment in which
+    that copy stands in for the original."
+    """
+    stepped.patch("sdk", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.patch_marker = "patched.txt"
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    copy = stepped.work / abi.STEP_PATCHED / "sdk"
+    assert (copy / abi.SDK_METADATA_FILE).is_file()
+    assert (copy / "patched.txt").is_file()
+    applied = [child for child in stepped.children if child["command"][0] == "git"]
+    assert len(applied) == 1
+    assert Path(applied[0]["command"][2]).resolve() == copy.resolve()
+
+
+def test_a_patched_sdk_layer_never_touches_what_was_delivered(stepped: StepSetup) -> None:
+    """The point of the copy: ``mcuhome/sdk`` comes out of the step as it
+    went in, byte for byte and file for file."""
+    before = {
+        path.relative_to(stepped.sdk): path.read_bytes()
+        for path in sorted(stepped.sdk.rglob("*"))
+        if path.is_file()
+    }
+    stepped.patch("sdk", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.patch_marker = "patched.txt"
+    assert stepped.run() == abi.EXIT_SUCCESS
+    after = {
+        path.relative_to(stepped.sdk): path.read_bytes()
+        for path in sorted(stepped.sdk.rglob("*"))
+        if path.is_file()
+    }
+    assert after == before
+    assert not (stepped.sdk / "patched.txt").exists()
+
+
+def test_the_patched_copy_is_what_the_build_actually_uses(stepped: StepSetup) -> None:
+    """The view §10 asks for: the copy stands in for the original.
+
+    The link west follows points at the copy, so everything downstream —
+    west, the code generator the SDK declares, every include path — reaches
+    the patched tree without knowing there was a patch. A copy nothing
+    built against would be a copy for nothing.
+    """
+    stepped.patch("sdk", "0001-fix.patch", "--- a\n+++ b\n")
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    copy = stepped.work / abi.STEP_PATCHED / "sdk"
+    assert stepped.manifest_dir.is_symlink()
+    assert stepped.manifest_dir.resolve() == copy.resolve()
+    generated = [child for child in stepped.children if child["command"][1] == abi.GENERATE_ACTION]
+    assert Path(generated[0]["command"][0]).resolve() == (copy / "bin" / "generate").resolve()
+
+
+def test_an_unpatched_sdk_is_not_copied_at_all(stepped: StepSetup) -> None:
+    """§10: "Trees no patch names stay where they are; copying is the price
+    of a patch and is paid only for the trees a patch actually names"."""
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert not (stepped.work / abi.STEP_PATCHED).exists()
+    assert stepped.manifest_dir.resolve() == stepped.sdk.resolve()
+
+
+# -- the generator, and what it is handed ----------------------------------
+
+
+def test_the_code_generator_comes_from_the_delivered_sdk(stepped: StepSetup) -> None:
+    """``docs/spec/build-actions.md`` §2: "the code generator ships in
+    ``mcuhome/sdk``, so the generated application belongs to the SDK the
+    context pinned rather than to the environment's own vintage"."""
+    assert stepped.run() == abi.EXIT_SUCCESS
+    generated = [child for child in stepped.children if child["command"][1] == abi.GENERATE_ACTION]
+    assert len(generated) == 1
+    assert generated[0]["command"][0] == str(stepped.manifest_dir / "bin" / "generate")
+    assert generated[0]["out_entries"] == []
+
+
+def test_the_session_id_reaches_the_generator_and_nothing_else(stepped: StepSetup) -> None:
+    """§6.1: ``session_id`` is opaque — "never build a path from it"."""
+    assert stepped.run(session_id="../../not-a-path") == abi.EXIT_SUCCESS
+    generated = [child for child in stepped.children if child["command"][1] == abi.GENERATE_ACTION]
+    request = json.loads(Path(generated[0]["command"][2]).read_text(encoding="utf-8"))
+    assert request["session"] == "../../not-a-path"
+    assert stepped.out_entries() == [
+        "bootloader.hex",
+        "build-report.json",
+        "firmware.bin",
+        "firmware.hex",
+        "result-9f2c1a-3.json",
+    ]
+
+
+def test_the_step_never_writes_into_the_build_context(stepped: StepSetup) -> None:
+    """§9: "Never modify anything in it"."""
+    before = {
+        path: path.read_bytes() for path in sorted(stepped.context.rglob("*")) if path.is_file()
+    }
+    assert stepped.run() == abi.EXIT_SUCCESS
+    after = {
+        path: path.read_bytes() for path in sorted(stepped.context.rglob("*")) if path.is_file()
+    }
+    assert after == before
+
+
+# -- the entry point the environment ships ---------------------------------
+
+
+def test_the_entry_point_runs_this_module_with_no_arguments() -> None:
+    """The other side of §6, and the reason the argv shape can be the
+    discriminator: the environment's entry point passes nothing.
+
+    ``packaging/build-environment/build-environment-entry`` is what a
+    profile puts at ``mcuhome/bin/build-environment-entry``; everything it
+    does is set the environment up and hand over to this module.
+    """
+    entry = (REPO_ROOT / "packaging" / "build-environment" / "build-environment-entry").read_text(
+        encoding="utf-8"
+    )
+    assert "-m mcuhome.compiler.abi" in entry
+    assert not re.search(r"-m mcuhome\.compiler\.abi\s+\S", entry)
+    assert f"${{{abi.BASE_DIR_VAR}:-/}}" in entry
+
+
+def test_a_step_does_not_verify_the_context_it_was_handed(stepped: StepSetup) -> None:
+    """``docs/spec/build-actions.md`` §3: verifying the context is not an action.
+
+    "The orchestrator creates the context, hashes it, and delivers it …
+    There is nothing an environment could confirm that the orchestrator
+    does not already know from its own bytes." So a step reads what it
+    needs — the model, the key, the patches — and builds; the integrity
+    list it is not responsible for is not even required to be there.
+    """
+    (stepped.context / "manifest.yaml").unlink()
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert stepped.result()["status"] == "success"
+    assert "context" not in stepped.result()

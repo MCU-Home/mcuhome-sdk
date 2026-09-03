@@ -654,6 +654,14 @@ _SHARED_CHIP_GLUE = (
         set(MATTER_GN_ARGS "--arg-string\npw_command_launcher\nccache\n")
     endif()
 endif()""",
+    # The one place the pre-generated data model reaches the build: CHIP
+    # reads this name as a cache variable only, and sysbuild forwards no
+    # `-D` of its own to this image, so the value arrives in the
+    # environment and is put into the cache before CHIP's code generation
+    # is included. A build environment without zap depends on it.
+    """if(DEFINED ENV{CHIP_CODEGEN_PREGEN_DIR})
+    set(CHIP_CODEGEN_PREGEN_DIR "$ENV{CHIP_CODEGEN_PREGEN_DIR}" CACHE PATH "" FORCE)
+endif()""",
     "include(${CHIP_ROOT}/src/app/chip_data_model.cmake)",
     "target_link_libraries(chip INTERFACE $<TARGET_FILE:kernel>)",
     "target_include_directories(app PRIVATE\n    ${CHIP_ROOT}/zzz_generated/app-common)",
