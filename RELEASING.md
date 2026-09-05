@@ -73,26 +73,41 @@ checked against that limit first and fails with a sentence instead. The
 workspace package — a multi-gigabyte source-world snapshot — is the one
 that can actually reach it; the SDK and tools archives sit far below.
 
-## 3. Publish it — one click per source
+## 3. Publish it — the registry operator's step
 
-The package host does not watch this repository; publishing is a
-deliberate act, because what it records is permanent. `sdk`,
-`build-workspace` and `build-tools` are three separate sources, each
-published by its own dispatch of the same workflow:
+The registry does not watch this repository; publishing is a deliberate
+act on the registry host, done by its operator, not by anything in this
+repository or its CI. This repository's part ends when the tag's release
+carries the archives (step 2); from there:
 
-> **github.com/mcu-home/mcuhome-packagetool → Actions →
-> "Publish a package" → Run workflow**
-> `source` = `sdk` | `build-workspace` | `build-tools`, `tag` = `v0.1.0`
+- The operator triggers the server-side publish pipeline. It discovers
+  the new GitHub release, downloads the asset(s) each source declares,
+  checks them against their `.sha256` sidecars, records them in a signed
+  index and atomically publishes a new registry snapshot.
+  `build-workspace`'s declaration sidecar travels with its archive into
+  the source, next to it. `build-tools` needs both architecture packages
+  of the tag published together — once every member is present, the
+  pipeline additionally records the meta package `mcuhome-build-tools`,
+  which points at both.
+- How that pipeline is invoked, and everything else about the registry
+  host itself, is documented on the operator side in
+  [mcuhome-packagetool](https://github.com/mcu-home/mcuhome-packagetool)'s
+  `deploy/` material — out of scope here.
 
-It fetches the release asset(s) the source declares, checks them against
-their `.sha256` sidecars, records them in a signed index and verifies the
-result before committing. `build-workspace`'s declaration sidecar travels
-with its archive into the source, next to it. `build-tools` fetches both
-architecture packages of the tag in one dispatch — publishing one without
-the other is refused — and, once every member is present, additionally
-records the meta package `mcuhome-build-tools`, which points at both,
-automatically. Within a minute the package is live at
-`https://packages.mcuhome.org/<source>/`.
+Once published, the packages are not served from `packages.mcuhome.org`
+directly — that host only carries the signed head documents (the trust
+anchor, `mirrors.json`, `keys.json`) and a page that explains and browses
+the registry. The bytes live on a mirror, discovered per source through
+its `mirrors.json`; the official one is
+`https://mirror-1.packages.mcuhome.org/<source>/`. To check a release
+landed:
+
+```sh
+curl -fsSL https://mirror-1.packages.mcuhome.org/sdk/index.json
+```
+
+or verify a source in full against the trust anchor with
+`mcuhome-packagetool`'s `verify.py`, as its README describes.
 
 ## The two rules that have no undo
 

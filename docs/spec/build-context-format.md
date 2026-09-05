@@ -69,19 +69,19 @@ mcuhome:
   constraint: ~=2.3.6
   version: 2.4.0
   package:
-    url: https://packages.mcuhome.org/sdk/mcuhome-sdk-2.4.0.tar.zst
+    url: https://mirror-1.packages.mcuhome.org/sdk/mcuhome-sdk-2.4.0.tar.zst
     sha256: 9d1c…
 build_environment:
   workspace:
     name: mcuhome-build-workspace
     version: 2.4.0
     sha256: 7c31…
-    url: https://packages.mcuhome.org/build-workspace/mcuhome-build-workspace-2.4.0.tar.zst
+    url: https://mirror-1.packages.mcuhome.org/build-workspace/mcuhome-build-workspace-2.4.0.tar.zst
   tools:
     name: mcuhome-build-tools
     version: 1.2.0
     sha256: b90a…
-    url: https://packages.mcuhome.org/build-tools/
+    url: https://mirror-1.packages.mcuhome.org/build-tools/
 target:
   board: nrf7002dk/nrf5340/cpuapp
 ```
@@ -155,7 +155,7 @@ mcuhome:
   constraint: ~=2.3.6
   version: 2.4.0
   package:
-    url: https://packages.mcuhome.org/sdk/mcuhome-sdk-2.4.0.tar.zst
+    url: https://mirror-1.packages.mcuhome.org/sdk/mcuhome-sdk-2.4.0.tar.zst
     sha256: 9d1c…
 build_environment:
   workspace:
