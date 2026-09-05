@@ -26,8 +26,7 @@ python scripts/release.py 0.1.0          # --dry-run first, if you like
 
 That checks you are on `main`, clean, and level with `origin`; that the
 version moves forward; and that the gates pass. Then it bumps every
-version file, moves `CHANGELOG.md`'s `[Unreleased]` section into a dated
-one, commits with sign-off and creates the annotated tag.
+version file, commits with sign-off and creates the annotated tag.
 
 **It stops there.** Nothing is pushed, and it prints how to undo:
 

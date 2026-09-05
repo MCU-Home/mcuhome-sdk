@@ -64,10 +64,8 @@ gates = [
 next_steps = [
   "git push && git push origin {tag}",
   "",
-  "Then, once the Release workflow has attached the package:",
-  "  github.com/mcu-home/mcuhome-packagetool -> Actions",
-  "  -> \"Publish a package\" -> Run workflow",
-  "     source = sdk, tag = {tag}",
+  "Then, once https://mirror-1.packages.mcuhome.org/sdk/index.json lists it:",
+  "  gh workflow run release.yml -f tag={tag} -f image=true",
 ]
 
 [tool.ruff]
