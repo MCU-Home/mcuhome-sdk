@@ -38,13 +38,13 @@
 # exercises the archive.
 [dependency-groups]
 dev = [
-  "pytest>=8.0",
+  "pytest>=9.1.1",
   "zstandard",
-  "ruff==0.16.1",
-  "clang-format==22.1.8",
+  "ruff==0.16.5",
+  "clang-format==23.1.0",
   "codespell==2.4.3",
-  "reuse==5.0.2",
-  "pre-commit-hooks==5.0.0",
+  "reuse==6.2.0",
+  "pre-commit-hooks==6.0.0",
 ]
 
 # Where `scripts/release.py` finds this repository's release-relevant
