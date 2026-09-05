@@ -33,7 +33,8 @@ scripts/build_env_image.py \
 
 The script derives the tag; `--revision <n>` sets the assembly counter and
 `--tag` overrides the whole reference for a local experiment. Building does
-not publish — pushing is a separate, deliberate act.
+not publish — pushing is a separate, deliberate act, and one this repository
+does in CI (below) rather than from a workstation.
 
 Through the script, not with a bare `docker build`. Specification §5.2 asks
 an image to repeat every member of its packages' declaration as an OCI
@@ -67,6 +68,43 @@ org.mcuhome.build-environment.packages.mcuhome-build-tools_linux-amd64=<version>
 platform's package the image really contains. It refuses before building if
 the archives are not the set the declaration names, or if a hash the
 declaration already stated does not match the bytes it was handed.
+
+## Publishing one
+
+The published image is built by CI, from the **published** packages — never
+pushed from a workstation. A locally assembled image pins the hashes of
+locally built archives, and those are not the bytes the registry serves; an
+image that labels package hashes no index names is one no orchestrator can
+match. A local build is for testing, and it stays local.
+
+```sh
+gh workflow run release.yml -f tag=v0.1.0 -f image=true -f revision=1
+```
+
+That is the `Release` workflow's image dispatch. It runs on nothing else —
+no tag push publishes an image, because at tag time the packages it is
+assembled from are not published yet, and CI cannot observe the registry
+operator's publish. `image` also makes the run an image run alone: no
+package job builds beside it.
+
+Per architecture, on a runner of that architecture: the workspace package
+and *this* architecture's tools package are downloaded from the mirror, each
+archive is checked against its source's `index.json` by size and sha256, the
+image is assembled by the script above and pushed as
+`<version>-r<n>-<arch>`. A last job composes the OCI index over the two and
+pushes it as `<version>-r<n>`, which is the reference a client resolves —
+`amd64` and `arm64` both, because a Home Assistant box is an arm64 machine.
+
+`revision` is the `-r<n>` counter and starts at 1. Raise it when the same
+packages are assembled again, for a new base image or a changed
+`Dockerfile`: a **per-architecture** tag that already exists in the registry
+is skipped with a notice rather than reassembled, so the counter is the only
+way to publish a second assembly of one package set. (The index over the two
+is composed and pushed either way — it names whichever manifests those two
+tags hold, which is why a re-dispatch must not change one half of a set.)
+
+The release runbook, and where this step sits in it, is
+[`RELEASING.md`](../../RELEASING.md).
 
 ## What is in it
 

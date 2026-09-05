@@ -12,7 +12,10 @@ build environment's host tools
 counter, `TOOLS_VERSION` in `scripts/build_env_package.py`, and do not
 build on every release — see step 2.
 
-Three steps. Only the first is typed.
+The build environment's container image is assembled from those two
+packages once they are published — step 4.
+
+Four steps.
 
 ## 1. Cut it locally
 
@@ -108,6 +111,39 @@ curl -fsSL https://mirror-1.packages.mcuhome.org/sdk/index.json
 
 or verify a source in full against the trust anchor with
 `mcuhome-packagetool`'s `verify.py`, as its README describes.
+
+## 4. The build environment image — after the packages are published
+
+`ghcr.io/mcu-home/build-environment` is the container profile of the build
+environment, and the one artifact that is not built from the commit: it is
+*assembled* from the packages the registry already serves. So it comes
+after step 3, on its own dispatch, and never on a tag push — at tag time
+its packages are not published yet, and nothing in CI can observe the
+operator's publish.
+
+```sh
+gh workflow run release.yml -f tag=v0.1.0 -f image=true -f revision=1
+```
+
+`image` makes the run an image run and nothing else: no package job builds
+beside it. Per architecture, on a runner of that architecture, the run
+downloads `mcuhome-build-workspace` and that architecture's
+`mcuhome-build-tools` from the mirror, checks each archive's size and
+sha256 against its source's `index.json`, assembles the image with
+`scripts/build_env_image.py` — which reads the packages' own declaration
+and labels the image with it — and pushes `<version>-r<n>-<arch>`. A last
+job composes the OCI index over the two and pushes it as `<version>-r<n>`,
+the reference a client resolves.
+
+`revision` is the `-r<n>` assembly counter and starts at 1. Raise it when
+the same packages are assembled again — a new base image, a changed
+`Dockerfile`. A per-architecture tag that already exists in the registry is
+skipped with a notice rather than overwritten, so repeating a dispatch
+after one architecture failed publishes only the missing half.
+
+Publish the image from CI, not from a workstation. A locally assembled
+image pins the hashes of locally built archives, and those are not the
+bytes the index names — the same rule the packages follow.
 
 ## The two rules that have no undo
 

@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-# What a tag of this repository produces. Three artifacts, three jobs:
+# What a release of this repository produces. Three artifacts a tag
+# builds, and a fourth that is assembled afterwards:
 #
 #   package                  — the SDK package, `mcuhome-sdk-<version>`:
 #                              the source a build compiles from.
@@ -11,15 +12,33 @@
 #                              build environment's host tools, one
 #                              package per platform.
 #
-# Together they are the release chain of `docs/design/build-environment.md`
-# section 3. Every job builds from the tagged *commit* — never a working
-# tree — and attaches the archive and its sidecars to the GitHub release
-# of that tag. The package host (mcu-home/mcuhome-packagetool) then pulls
-# them from here and records them in a signed index; nothing in this
-# repository pushes anywhere, and no cross-repository credential exists.
-# Publication stays one deliberate, manually dispatched act over there.
+#   build-environment-image and publish-environment-image-index —
+#                              `ghcr.io/mcu-home/build-environment`: the
+#                              two packages above assembled into the
+#                              container profile's image, one manifest per
+#                              architecture and the index over them. On a
+#                              dispatch only; a tag never builds it.
 #
-# The three do not share a cadence, which is what the `if:` conditions
+# Together they are the release chain of `docs/design/build-environment.md`
+# section 3. Every package job builds from the tagged *commit* — never a
+# working tree — and attaches the archive and its sidecars to the GitHub
+# release of that tag. The package host (mcu-home/mcuhome-packagetool)
+# then pulls them from here and records them in a signed index; nothing in
+# this repository pushes anywhere, and no cross-repository credential
+# exists. Publication stays one deliberate, manually dispatched act over
+# there.
+#
+# The image is the one artifact that is not built from the commit but from
+# the *published* packages, which is why it has a trigger of its own. It
+# has no push trigger at all: the registry pulls the release assets on the
+# operator's schedule, nothing in here can observe that it happened, and
+# an image assembled from a release asset would pin bytes the registry may
+# not serve. It runs on an explicit dispatch with `image` set, once the
+# packages of that tag are live — and then it builds nothing else, because
+# a package build in the same run could only produce a second copy of
+# bytes the registry has served for a while.
+#
+# The four do not share a cadence, which is what the `if:` conditions
 # below say:
 #
 # * The SDK package and the workspace package are named after the version
@@ -32,10 +51,14 @@
 #   or under a new one that means nothing. It runs when a dispatch asks
 #   for it, which is what "only when the toolchain generation changes"
 #   is in practice.
+# * The image is assembled from what the registry already serves, so it
+#   runs when a dispatch asks for it and never on a tag: at tag time the
+#   packages it needs are not published yet.
 #
-# Only `package` ever creates the release; the other two require it to
-# exist and upload into it. Two jobs racing for `gh release create` would
-# otherwise be a coin flip.
+# Only `package` ever creates the release; the other two package jobs
+# require it to exist and upload into it. Two jobs racing for
+# `gh release create` would otherwise be a coin flip. The image jobs
+# upload nothing to a release — they push to the container registry.
 #
 # Why zstandard is pinned: two parties building the same tag must reach
 # the same sha256, because that hash is a hashed input of the build
@@ -63,16 +86,36 @@ on:
         description: "Also build the build-tools packages (the toolchain generation changed)"
         type: boolean
         default: false
+      image:
+        description: "Instead of the packages: assemble and publish the build-environment image for this tag (its packages must already be published)"
+        type: boolean
+        default: false
+      revision:
+        description: "The image assembly revision, the -r<n> half of its tag (only with `image`)"
+        type: string
+        default: "1"
 
 permissions:
   contents: read
 
 env:
   ZSTANDARD_VERSION: "0.25.0"
+  # Where the published packages are read from. packages.mcuhome.org
+  # carries the signed head documents only; the bytes live on a mirror,
+  # discovered per source through its `mirrors.json`, and this is the
+  # official one (RELEASING.md, "Publish it").
+  PACKAGE_MIRROR: "https://mirror-1.packages.mcuhome.org"
 
 jobs:
   package:
     runs-on: ubuntu-latest
+    # An image dispatch builds no package. The image is assembled from
+    # packages the registry already serves, so a package build in the same
+    # run would rebuild bytes that were published long before — and upload
+    # them over the assets a published index already names. The two
+    # package jobs below repeat this condition rather than inherit it, so
+    # each states its own cadence in full.
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.image }}
     permissions:
       contents: write
     outputs:
@@ -161,7 +204,7 @@ jobs:
   build-workspace-package:
     name: Build (workspace package)
     needs: package
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.workspace }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.workspace && !inputs.image) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -307,7 +350,7 @@ jobs:
   build-tools-package:
     name: Build (tools package)
     needs: package
-    if: ${{ inputs.tools }}
+    if: ${{ inputs.tools && !inputs.image }}
     runs-on: ${{ matrix.runner }}
     strategy:
       # Both architectures are reported even when one fails: "arm64 broke"
@@ -503,3 +546,411 @@ jobs:
             dist/mcuhome-build-tools_*.tar.zst \
             dist/mcuhome-build-tools_*.tar.zst.sha256 \
             --clobber
+
+  # --------------------------------------------------------------------
+  # The build environment as a container image, per architecture.
+  # --------------------------------------------------------------------
+  #
+  # The container profile of the build environment specification
+  # (`docs/spec/build-environment-specification.md` §2), assembled by
+  # `scripts/build_env_image.py` from the two packages and nothing else.
+  # It is a MULTI-ARCHITECTURE image, for the same reason the tools package
+  # is built twice: a Home Assistant box is an arm64 machine, so an
+  # amd64-only build environment is one no HA user can ever run.
+  #
+  # Three properties, and none of them is optional:
+  #
+  #   1. the packages come from the REGISTRY, not from this repository and
+  #      not from the release page. What an image delivers has to be what
+  #      the signed index names, byte for byte — an image built from a
+  #      release asset would pin a hash no consumer can resolve if the two
+  #      ever drift. Each archive is checked against its index entry
+  #      (size and sha256) before it is unpacked into anything.
+  #   2. each architecture is built on a runner of that architecture and
+  #      pushed under its own tag, `<version>-r<n>-<arch>`. That tag names
+  #      exactly these bytes for exactly this architecture, and it is what
+  #      somebody pulls who wants one architecture on purpose.
+  #   3. the index over the two is pushed under the plain `<version>-r<n>`
+  #      by the job below, which is what every client resolves.
+  #
+  # No moving tags. The naming scheme's tag is `<workspace package
+  # version>-r<n>` and convenience tags are a question for the switchover,
+  # not something to invent here — and a tag is a location anyway: an
+  # orchestrator matches this image by its
+  # `org.mcuhome.build-environment.packages.<name>` labels (§5.2).
+  build-environment-image:
+    name: Build (build-environment image)
+    if: ${{ inputs.image }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Both architectures are reported even when one fails: "arm64 broke"
+      # and "the image broke" are different news.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            # Free for public repositories, and native — a QEMU build of
+            # this image would be hours.
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      # The package inherits the repository's visibility, which is public.
+      packages: write
+    outputs:
+      # Both legs compute this from the same two dispatch inputs with the
+      # same code, so the matrix's "last job wins" rule for outputs has
+      # nothing to decide between.
+      reference: ${{ steps.image.outputs.reference }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The tag's own Dockerfile and assembler, not whatever `main`
+          # carries today: the image is a release artifact of this tag.
+          ref: ${{ inputs.tag }}
+
+      # A matrix entry is a label, and a label is a promise somebody else
+      # keeps. An image built on the wrong runner would be published under
+      # a name that lies, and the index would then serve amd64 bytes to an
+      # arm64 host.
+      - name: The runner is the architecture the matrix claims
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) actual=amd64 ;;
+            aarch64) actual=arm64 ;;
+            *) actual="$(uname -m)" ;;
+          esac
+          test "$actual" = '${{ matrix.arch }}' || {
+            echo "this runner is $actual, not ${{ matrix.arch }}" >&2
+            exit 1
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # The assembler reads each package's own documents out of the
+      # archive, which is what it needs zstandard for. It only ever
+      # decompresses here, so the pin buys consistency rather than
+      # reproducible bytes — but one release should run on one library.
+      - name: Install the pinned compressor
+        run: pip install "zstandard==${ZSTANDARD_VERSION}"
+
+      # The two archives, the layers the unpack stage writes and the
+      # finished 4.7 GB image are on this disk at the same time. Free what
+      # nothing here uses, and print the result — `rm -rf` on an absent
+      # path is not an error, so the same list serves any runner image.
+      - name: Make room, and say how much there is
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+
+      # The tag the naming scheme asks for, spelled out in one place: the
+      # image repository comes from the assembler, so the image's name
+      # lives in one file. The version half is the dispatched tag without
+      # its `v` — a *claim* about the packages, which the assembly step
+      # below holds against what the package says about itself.
+      - name: Resolve the image reference
+        id: image
+        env:
+          TAG: ${{ inputs.tag }}
+          REVISION: ${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import os
+          import re
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from build_env_image import IMAGE_REPOSITORY
+
+          tag = os.environ["TAG"]
+          revision = os.environ["REVISION"]
+          version = tag[1:] if tag.startswith("v") else tag
+          if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version) is None:
+              sys.exit(f"{tag!r} does not name a version a container tag can carry")
+          if not revision.isdigit() or int(revision) < 1:
+              sys.exit(f"the assembly revision is {revision!r}, and it counts assemblies from 1")
+
+          print(f"version={version}")
+          print(f"reference={IMAGE_REPOSITORY}:{version}-r{int(revision)}")
+          PY
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The tag IS the content identity, so a tag that already exists is
+      # not something to overwrite: `-r<n>` is the counter that exists for
+      # a second assembly of one package set. Asked with `docker manifest
+      # inspect` rather than a pull — the answer is a name, and pulling
+      # 4.7 GB to learn that a name is taken is 4.7 GB spent on nothing.
+      #
+      # Skipped rather than refused, because the case is real: one leg of
+      # a dispatch fails, the dispatch is repeated, and the leg that had
+      # already published must not now push different bytes under its tag.
+      - name: Is this architecture already published?
+        id: publish
+        run: |
+          set -euo pipefail
+          arch_reference='${{ steps.image.outputs.reference }}-${{ matrix.arch }}'
+          if docker manifest inspect "$arch_reference" >/dev/null 2>&1; then
+            echo "::notice::$arch_reference is already published — nothing to assemble."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # What the image delivers, taken from where consumers take it. The
+      # tools family is resolved through its meta package — the same
+      # `meta.arch` map an orchestrator follows — so this job cannot pick
+      # a per-architecture package name that the index does not point at.
+      #
+      # Each archive is held against its index entry by size and sha256
+      # before anything unpacks it. What that proves is that the bytes
+      # assembled here are the bytes the published index names; the index's
+      # own signature chain is the package host's business and is checked
+      # over there, against the trust anchor this repository does not
+      # carry.
+      - name: Download the published packages, and check them against the index
+        id: packages
+        if: steps.publish.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.image.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p packages
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          import urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          mirror = os.environ["PACKAGE_MIRROR"].rstrip("/")
+          version = os.environ["VERSION"]
+          platform = f"linux-{os.environ['ARCH']}"
+          into = Path("packages")
+
+
+          def index(source):
+              with urllib.request.urlopen(f"{mirror}/{source}/index.json", timeout=60) as answer:
+                  document = json.load(answer)
+              # An index states how long it speaks for itself. Past that, it
+              # is a document nobody is refreshing any more, and the image
+              # would pin whatever it last said.
+              expires = document.get("expires")
+              if expires and datetime.now(timezone.utc) > datetime.fromisoformat(expires):
+                  sys.exit(f"{source}/index.json expired on {expires}")
+              return document
+
+
+          def entry(document, source, package):
+              versions = document.get("packages", {}).get(package)
+              if not versions:
+                  sys.exit(f"{source}/index.json carries no {package}")
+              if version not in versions:
+                  sys.exit(
+                      f"{source}/index.json has no {package} {version}; "
+                      f"it carries {', '.join(sorted(versions))}"
+                  )
+              return versions[version]
+
+
+          def download(source, package, item):
+              name = item.get("file")
+              expected = item.get("sha256")
+              size = item.get("size")
+              if not name or not expected or not isinstance(size, int):
+                  sys.exit(
+                      f"the index entry for {package} {version} names no downloadable "
+                      "archive, so it cannot be the package an image is assembled from"
+                  )
+              # The file name is a name, not a path: it is used as a URL
+              # segment and as a file under packages/, and this block exists
+              # precisely because it does not take what it is handed on
+              # trust.
+              if name != Path(name).name or name.startswith("."):
+                  sys.exit(
+                      f"{package} {version} names its archive {name!r}, "
+                      "which is not a file name"
+                  )
+              path = into / name
+              digest = hashlib.sha256()
+              measured = 0
+              with (
+                  urllib.request.urlopen(f"{mirror}/{source}/{name}", timeout=60) as answer,
+                  open(path, "wb") as out,
+              ):
+                  while chunk := answer.read(1 << 20):
+                      out.write(chunk)
+                      digest.update(chunk)
+                      measured += len(chunk)
+              if measured != size:
+                  sys.exit(f"{name} is {measured} bytes and the index says {size}")
+              if digest.hexdigest() != expected:
+                  sys.exit(f"{name} hashes to {digest.hexdigest()} and the index says {expected}")
+              print(f"{name}  {measured} bytes  sha256 {expected}  matches the index")
+              return path
+
+
+          workspace = download(
+              "build-workspace",
+              "mcuhome-build-workspace",
+              entry(index("build-workspace"), "build-workspace", "mcuhome-build-workspace"),
+          )
+
+          document = index("build-tools")
+          family = entry(document, "build-tools", "mcuhome-build-tools")
+          architectures = family.get("meta", {}).get("arch", {})
+          if platform not in architectures:
+              sys.exit(
+                  f"mcuhome-build-tools {version} names no {platform}; "
+                  f"it names {', '.join(sorted(architectures)) or 'no architecture at all'}"
+              )
+          concrete = architectures[platform]
+          tools = download("build-tools", concrete, entry(document, "build-tools", concrete))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"workspace={workspace}\n")
+              out.write(f"tools={tools}\n")
+          PY
+
+      # Through the assembler, never a bare `docker build`: §5.2 asks the
+      # image to repeat every member of its packages' declaration as an OCI
+      # label, a `LABEL` cannot read a file, and an image without those
+      # labels is one no orchestrator would ever select. The script also
+      # refuses when the two archives are not the set the declaration
+      # names, and reads the built image back to check that it mirrors it.
+      #
+      # No `--tag`: the assembler derives `<version>-r<n>` from the
+      # workspace package's OWN manifest. So the image lands under the
+      # reference resolved above only if the packages really are the
+      # version the dispatched tag claims — which is what the inspect
+      # below turns from an assumption into a check.
+      - name: Assemble the image
+        if: steps.publish.outputs.needed == 'true'
+        env:
+          WORKSPACE: ${{ steps.packages.outputs.workspace }}
+          TOOLS: ${{ steps.packages.outputs.tools }}
+          REVISION: ${{ inputs.revision }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          reference='${{ steps.image.outputs.reference }}'
+          python scripts/build_env_image.py \
+            --workspace "$WORKSPACE" \
+            --tools "$TOOLS" \
+            --revision "$REVISION"
+          docker image inspect "$reference" >/dev/null 2>&1 || {
+            echo "::error::the packages are not the version $TAG names — the assembler tags the image after the version the workspace package states, and that is not $reference" >&2
+            exit 1
+          }
+          docker tag "$reference" "${reference}-${{ matrix.arch }}"
+          df -h /
+
+      # Asserted rather than assumed, like the runner above: this is the
+      # architecture the tag about to be pushed claims.
+      - name: The image is the architecture its tag claims
+        if: steps.publish.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          arch_reference='${{ steps.image.outputs.reference }}-${{ matrix.arch }}'
+          built="$(docker image inspect "$arch_reference" --format '{{.Architecture}}')"
+          test "$built" = '${{ matrix.arch }}' || {
+            echo "$arch_reference is $built, not ${{ matrix.arch }}" >&2
+            exit 1
+          }
+
+      # Only the per-architecture tag. The plain `<version>-r<n>` is the
+      # index, and the index is the job below — pushing the local image
+      # under it here would publish one architecture under the name every
+      # client resolves.
+      - name: Publish this architecture
+        if: steps.publish.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          arch_reference='${{ steps.image.outputs.reference }}-${{ matrix.arch }}'
+          docker push "$arch_reference"
+          echo "::notice::published $arch_reference"
+
+  # The index over the two, under the name clients actually use. Split from
+  # the job above because it needs BOTH architectures to exist, which is
+  # what `needs` says and a matrix cannot — and skipped with them when one
+  # leg failed, so a half-published set never gets an index over it.
+  #
+  # `docker manifest` rather than buildx, as in `ci-build.yml`: it needs no
+  # builder setup and composes an index from references that are already in
+  # the registry, which these are.
+  publish-environment-image-index:
+    name: Publish (build-environment image index)
+    needs: build-environment-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `docker manifest rm` first, ignoring its failure: the local
+      # manifest list is state on the runner and `create` refuses to
+      # overwrite one. Nothing in the registry is touched by it.
+      - name: Compose and push the index
+        env:
+          REFERENCE: ${{ needs.build-environment-image.outputs.reference }}
+        run: |
+          set -euo pipefail
+          test -n "$REFERENCE" || {
+            echo "::error::the architecture jobs published no image reference" >&2
+            exit 1
+          }
+          docker manifest rm "$REFERENCE" >/dev/null 2>&1 || true
+          docker manifest create "$REFERENCE" \
+            "${REFERENCE}-amd64" \
+            "${REFERENCE}-arm64"
+          docker manifest push "$REFERENCE"
+          echo "::notice::published $REFERENCE"
+
+      # What a client will actually do with it, done here once: resolve the
+      # tag to a digest and check that the digest names an index over the
+      # two architectures. A tag that resolved to one manifest would be an
+      # environment half this project's users cannot run, published under a
+      # name that says otherwise.
+      - name: The tag names an index over both architectures
+        env:
+          REFERENCE: ${{ needs.build-environment-image.outputs.reference }}
+        run: |
+          set -euo pipefail
+          docker manifest inspect "$REFERENCE" > index.json
+          python3 - <<'PY'
+          import json
+          import sys
+
+          index = json.load(open("index.json"))
+          if "manifests" not in index:
+              sys.exit(f"the tag resolves to a single manifest: {index.get('mediaType')}")
+          found = sorted(
+              entry["platform"]["architecture"]
+              for entry in index["manifests"]
+              if entry.get("platform", {}).get("architecture") not in (None, "unknown")
+          )
+          print("architectures:", found)
+          if found != ["amd64", "arm64"]:
+              sys.exit(f"expected amd64 and arm64, the index names {found}")
+          PY
