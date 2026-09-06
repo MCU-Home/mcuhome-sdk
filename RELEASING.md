@@ -125,14 +125,25 @@ gh workflow run release.yml -f tag=v0.1.0 -f image=true -f revision=1
 ```
 
 `image` makes the run an image run and nothing else: no package job builds
-beside it. Per architecture, on a runner of that architecture, the run
-downloads `mcuhome-build-workspace` and that architecture's
-`mcuhome-build-tools` from the mirror, checks each archive's size and
-sha256 against its source's `index.json`, assembles the image with
-`scripts/build_env_image.py` — which reads the packages' own declaration
-and labels the image with it — and pushes `<version>-r<n>-<arch>`. A last
-job composes the OCI index over the two and pushes it as `<version>-r<n>`,
-the reference a client resolves.
+beside it. Per architecture, on a runner of that architecture, the run asks
+`packages.mcuhome.org` for each consumed source's signed mirror list,
+fetches the served documents from every mirror named there, and verifies
+them with `mcuhome-packagetool`'s own `verify.py` against the registry's
+trust anchor. It then downloads `mcuhome-build-workspace` and that
+architecture's `mcuhome-build-tools` from the verified mirror, checks each
+archive's size and sha256 against the index bytes the verifier accepted,
+assembles the image with `scripts/build_env_image.py` — which reads the
+packages' own declaration and labels the image with it — and pushes
+`<version>-r<n>-<arch>`. A last job composes the OCI index over the two and
+pushes it as `<version>-r<n>`, the reference a client resolves.
+
+**Prerequisite: the organisation variable `MCUHOME_REGISTRY_ANCHOR`.** It
+carries the content of `mcuhome-packagetool`'s
+`deploy/mcuhome/anchor.json` — public material, the registry's root keys
+and their threshold. It is a *variable* and not a fetched document on
+purpose: an anchor downloaded at verification time verifies nothing. The
+job refuses when it is unset or empty, because a publish that quietly
+skipped verification would be worse than one that failed.
 
 `revision` is the `-r<n>` assembly counter and starts at 1. Raise it when
 the same packages are assembled again — a new base image, a changed

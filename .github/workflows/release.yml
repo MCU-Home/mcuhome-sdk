@@ -100,11 +100,13 @@ permissions:
 
 env:
   ZSTANDARD_VERSION: "0.25.0"
-  # Where the published packages are read from. packages.mcuhome.org
-  # carries the signed head documents only; the bytes live on a mirror,
-  # discovered per source through its `mirrors.json`, and this is the
-  # official one (RELEASING.md, "Publish it").
-  PACKAGE_MIRROR: "https://mirror-1.packages.mcuhome.org"
+  # The one address a client is configured with. Which mirrors exist and
+  # what they serve is discovered from signed documents below it, so no
+  # mirror is named here — the same route `mcuhome-packagetool`'s own
+  # `scripts/test.d/verify-sources` takes, and taken here for the same
+  # reason: a host that is merely discovered can be replaced without a
+  # workflow change, and is never trusted for it.
+  PACKAGE_REGISTRY: "https://packages.mcuhome.org"
 
 jobs:
   package:
@@ -564,8 +566,15 @@ jobs:
   #      not from the release page. What an image delivers has to be what
   #      the signed index names, byte for byte — an image built from a
   #      release asset would pin a hash no consumer can resolve if the two
-  #      ever drift. Each archive is checked against its index entry
-  #      (size and sha256) before it is unpacked into anything.
+  #      ever drift. And "signed" is meant literally: the served documents
+  #      of both consumed sources are verified with the registry's own
+  #      reference verifier against a trust anchor that reaches this job
+  #      out of band, as the organisation variable
+  #      MCUHOME_REGISTRY_ANCHOR. Without that variable the job refuses —
+  #      a publish that quietly skipped verification would be worse than
+  #      one that failed. Each archive is then checked (size and sha256)
+  #      against the index bytes the verifier accepted, off disk, so that
+  #      what was verified and what is used are one document.
   #   2. each architecture is built on a runner of that architecture and
   #      pushed under its own tag, `<version>-r<n>-<arch>`. That tag names
   #      exactly these bytes for exactly this architecture, and it is what
@@ -709,21 +718,225 @@ jobs:
             echo "needed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # The trust anchor, and the reason the verification below means
+      # anything at all: an index is trustworthy because a threshold of
+      # the registry's root keys stands behind it, and those keys have to
+      # reach this job from somewhere other than the registry. They arrive
+      # as an organisation variable — public material, deliberately not a
+      # document fetched at verification time, because the anchor says of
+      # itself that "downloading it at verification time is not
+      # verification".
+      #
+      # Unconditional, before anything is downloaded or skipped: a missing
+      # anchor is a misconfiguration, and the cheapest place to learn that
+      # is the top of the job.
+      - name: The registry trust anchor
+        env:
+          ANCHOR: ${{ vars.MCUHOME_REGISTRY_ANCHOR }}
+        run: |
+          set -euo pipefail
+          test -n "${ANCHOR:-}" || {
+            echo "::error::the organisation variable MCUHOME_REGISTRY_ANCHOR is unset or empty. It carries the registry's trust anchor — the keys and threshold of mcuhome-packagetool's deploy/mcuhome/anchor.json — and without it nothing here can tell a signed index from any other file. Set it under Organisation settings, Actions, Variables, and dispatch again." >&2
+            exit 1
+          }
+          printf '%s' "$ANCHOR" > "$RUNNER_TEMP/registry-anchor.json"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "registry-anchor.json"
+          try:
+              anchor = json.loads(path.read_text(encoding="utf-8"))
+          except ValueError as unreadable:
+              sys.exit(f"MCUHOME_REGISTRY_ANCHOR is not readable JSON: {unreadable}")
+          if not isinstance(anchor, dict) or not anchor.get("keys") or not anchor.get("threshold"):
+              sys.exit(
+                  "MCUHOME_REGISTRY_ANCHOR is not a trust anchor: an anchor states its root "
+                  "keys and the threshold of them a document needs"
+              )
+          print(f"anchor: {len(anchor['keys'])} root keys, threshold {anchor['threshold']}")
+          PY
+
+      # The registry's own reference verifier, at a commit this repository
+      # pins. Not a branch: `main` over there is somebody else's moving
+      # target, and a verifier that changed under this job would change
+      # what "verified" means with no diff here to show for it. Bumping the
+      # pin is a deliberate act — read that repository's commits, then put
+      # the new SHA in.
+      - name: Check out the reference verifier
+        if: steps.publish.outputs.needed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-packagetool
+          ref: ed93edc635b1e9609a5969d7572ab245842fbfa8 # main as of 2026-09-06
+          path: .deps/mcuhome-packagetool
+
+      # In a virtual environment of its own, as that repository's README
+      # asks for — never this job's interpreter. Without its `dev` group,
+      # which is for working on that repository rather than running its
+      # verifier: what the verifier needs is what the project declares for
+      # itself, `cryptography` and `packaging`. `--help` is the smoke test
+      # that the install actually imports.
+      - name: Set up the reference verifier
+        if: steps.publish.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          cd .deps/mcuhome-packagetool
+          python3 -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check -e .
+          .venv/bin/python verify.py --help > /dev/null
+
+      # The route `mcuhome-packagetool`'s own `scripts/test.d/verify-sources`
+      # takes, walked here for the two sources this image is assembled
+      # from: the bootstrap host is asked for a source's signed mirror
+      # list, and every mirror that list names is fetched from in full and
+      # verified against the anchor. Only the bootstrap host is a constant;
+      # nothing else is meant to be.
+      #
+      # Every mirror the list names, not only the one that is used: a
+      # source whose second copy cannot be verified is a registry in
+      # trouble, and an image that pins its bytes is the wrong place to
+      # find that out afterwards. The first mirror in the list is the one
+      # whose documents are then consumed, and the tree stays on disk for
+      # exactly that.
+      - name: Fetch the served sources and verify them against the anchor
+        id: registry
+        if: steps.publish.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          # Both are on every runner image this workflow uses; asked for
+          # anyway, because an absent jq reads downstream as "this source
+          # names no mirror" rather than as the missing tool it is.
+          for tool in jq curl; do
+            command -v "$tool" > /dev/null || {
+              echo "::error::$tool is not on this runner, and the registry cannot be read without it" >&2
+              exit 1
+            }
+          done
+
+          tree="$RUNNER_TEMP/registry"
+          anchor="$RUNNER_TEMP/registry-anchor.json"
+          verifier="$PWD/.deps/mcuhome-packagetool"
+          documents=(keys.json mirrors.json index.json)
+          max_key_generations=10
+
+          fetch() {
+            # One document, into the fetched tree. Retries only what a
+            # retry can fix, and never silently writes an error page into
+            # a file the verifier is about to trust.
+            local url="$1" target="$2"
+            mkdir -p "$(dirname "$target")"
+            curl -fsS --max-time 60 --retry 3 --retry-connrefused -o "$target" "$url" || {
+              echo "::error::could not fetch $url" >&2
+              return 1
+            }
+          }
+
+          # Everything fetched here is named by a document that has not
+          # been verified yet — that is the order this check exists in. So
+          # the two things an unchecked document gets to decide are held to
+          # their shape before they are used: a mirror's base URL, and a
+          # file name inside the source.
+          usable_base() {
+            case "$1" in
+              https://*/) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          usable_name() {
+            case "$1" in
+              "" | /* | .* | *..*) return 1 ;;
+              *) return 0 ;;
+            esac
+          }
+
+          for source in build-workspace build-tools; do
+            list="$tree/discovery/$source.json"
+            fetch "$PACKAGE_REGISTRY/$source/mirrors.json" "$list"
+            if [ -z "$(jq -r '.mirrors[]?.url' "$list")" ]; then
+              echo "::error::$PACKAGE_REGISTRY names no mirror for $source" >&2
+              exit 1
+            fi
+            consumed=""
+            while IFS= read -r mirror; do
+              [ -z "$mirror" ] && continue
+              if ! usable_base "$mirror"; then
+                echo "::error::$source: $mirror is not an https base URL ending in '/'" >&2
+                exit 1
+              fi
+              copy="$tree/$source/$(printf '%s' "$mirror" | tr -c 'A-Za-z0-9._-' '_')"
+              for document in "${documents[@]}"; do
+                fetch "$mirror$document" "$copy/$document"
+                fetch "$mirror$document.sig" "$copy/$document.sig"
+              done
+
+              # An index that has outgrown one file names its parts, and
+              # the parts carry most of the entries; verifying only the
+              # head would check the smaller half and say nothing about it.
+              while IFS= read -r part; do
+                [ -z "$part" ] && continue
+                if ! usable_name "$part"; then
+                  echo "::error::$source at $mirror: index part $part is not a file name in the source" >&2
+                  exit 1
+                fi
+                fetch "$mirror$part" "$copy/$part"
+              done < <(jq -r '.parts[]?.file' "$copy/index.json")
+
+              # A rotated key set is authorised by the one before it, so
+              # the chain back to the anchor has to be here too.
+              previous="$(jq -r '.previous // empty' "$copy/keys.json")"
+              generations=0
+              while [ -n "$previous" ]; do
+                generations=$((generations + 1))
+                if [ "$generations" -gt "$max_key_generations" ]; then
+                  echo "::error::$source: more than $max_key_generations key generations at $mirror" >&2
+                  exit 1
+                fi
+                if ! usable_name "$previous"; then
+                  echo "::error::$source at $mirror: key set $previous is not a path in the source" >&2
+                  exit 1
+                fi
+                fetch "$mirror$previous" "$copy/$previous"
+                fetch "$mirror$previous.sig" "$copy/$previous.sig"
+                previous="$(jq -r '.previous // empty' "$copy/$previous")"
+              done
+
+              echo "$source at $mirror"
+              (cd "$verifier" && .venv/bin/python verify.py "$copy" --anchor "$anchor")
+              if [ -z "$consumed" ]; then
+                consumed="$copy"
+                printf '%s\n' "$mirror" > "$tree/$source.base"
+                printf '%s\n' "$copy" > "$tree/$source.consumed"
+              fi
+            done < <(jq -r '.mirrors[]?.url' "$list")
+          done
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+
       # What the image delivers, taken from where consumers take it. The
       # tools family is resolved through its meta package — the same
       # `meta.arch` map an orchestrator follows — so this job cannot pick
       # a per-architecture package name that the index does not point at.
       #
-      # Each archive is held against its index entry by size and sha256
-      # before anything unpacks it. What that proves is that the bytes
-      # assembled here are the bytes the published index names; the index's
-      # own signature chain is the package host's business and is checked
-      # over there, against the trust anchor this repository does not
-      # carry.
-      - name: Download the published packages, and check them against the index
+      # The index is read OFF DISK, out of the tree the verifier just
+      # accepted, and never fetched a second time: an index that was
+      # verified and an index that is downloaded again are two documents,
+      # and only one of them was checked. Each archive is then held against
+      # its entry in that document by size and sha256 before anything
+      # unpacks it, and the archive itself may come over any wire — the
+      # hash is what makes the transport irrelevant.
+      #
+      # Freshness is deliberately not re-checked here: an expired document
+      # is a refusal in `verify.py`, which is the normative implementation
+      # of that rule, and a second copy of it in this file could only ever
+      # drift from it.
+      - name: Download the published packages, and check them against the verified index
         id: packages
         if: steps.publish.outputs.needed == 'true'
         env:
+          REGISTRY_TREE: ${{ steps.registry.outputs.tree }}
           VERSION: ${{ steps.image.outputs.version }}
           ARCH: ${{ matrix.arch }}
         run: |
@@ -735,25 +948,21 @@ jobs:
           import os
           import sys
           import urllib.request
-          from datetime import datetime, timezone
           from pathlib import Path
 
-          mirror = os.environ["PACKAGE_MIRROR"].rstrip("/")
+          tree = Path(os.environ["REGISTRY_TREE"])
           version = os.environ["VERSION"]
           platform = f"linux-{os.environ['ARCH']}"
           into = Path("packages")
 
 
-          def index(source):
-              with urllib.request.urlopen(f"{mirror}/{source}/index.json", timeout=60) as answer:
-                  document = json.load(answer)
-              # An index states how long it speaks for itself. Past that, it
-              # is a document nobody is refreshing any more, and the image
-              # would pin whatever it last said.
-              expires = document.get("expires")
-              if expires and datetime.now(timezone.utc) > datetime.fromisoformat(expires):
-                  sys.exit(f"{source}/index.json expired on {expires}")
-              return document
+          def verified(source):
+              """The index the verifier accepted, and the mirror it came from."""
+              base = (tree / f"{source}.base").read_text(encoding="utf-8").strip()
+              copy = Path((tree / f"{source}.consumed").read_text(encoding="utf-8").strip())
+              document = json.loads((copy / "index.json").read_text(encoding="utf-8"))
+              print(f"{source}: the index verified at {base}")
+              return base, document
 
 
           def entry(document, source, package):
@@ -768,7 +977,7 @@ jobs:
               return versions[version]
 
 
-          def download(source, package, item):
+          def download(base, package, item):
               name = item.get("file")
               expected = item.get("sha256")
               size = item.get("size")
@@ -790,7 +999,7 @@ jobs:
               digest = hashlib.sha256()
               measured = 0
               with (
-                  urllib.request.urlopen(f"{mirror}/{source}/{name}", timeout=60) as answer,
+                  urllib.request.urlopen(f"{base}{name}", timeout=60) as answer,
                   open(path, "wb") as out,
               ):
                   while chunk := answer.read(1 << 20):
@@ -805,13 +1014,14 @@ jobs:
               return path
 
 
+          base, document = verified("build-workspace")
           workspace = download(
-              "build-workspace",
+              base,
               "mcuhome-build-workspace",
-              entry(index("build-workspace"), "build-workspace", "mcuhome-build-workspace"),
+              entry(document, "build-workspace", "mcuhome-build-workspace"),
           )
 
-          document = index("build-tools")
+          base, document = verified("build-tools")
           family = entry(document, "build-tools", "mcuhome-build-tools")
           architectures = family.get("meta", {}).get("arch", {})
           if platform not in architectures:
@@ -820,7 +1030,7 @@ jobs:
                   f"it names {', '.join(sorted(architectures)) or 'no architecture at all'}"
               )
           concrete = architectures[platform]
-          tools = download("build-tools", concrete, entry(document, "build-tools", concrete))
+          tools = download(base, concrete, entry(document, "build-tools", concrete))
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"workspace={workspace}\n")

@@ -87,13 +87,23 @@ assembled from are not published yet, and CI cannot observe the registry
 operator's publish. `image` also makes the run an image run alone: no
 package job builds beside it.
 
-Per architecture, on a runner of that architecture: the workspace package
-and *this* architecture's tools package are downloaded from the mirror, each
-archive is checked against its source's `index.json` by size and sha256, the
-image is assembled by the script above and pushed as
+Per architecture, on a runner of that architecture: the two consumed
+sources are discovered from `packages.mcuhome.org`, their served documents
+are verified with `mcuhome-packagetool`'s reference verifier against the
+registry's trust anchor, the workspace package and *this* architecture's
+tools package are downloaded from the verified mirror, each archive is
+checked by size and sha256 against the index bytes the verifier accepted,
+the image is assembled by the script above and pushed as
 `<version>-r<n>-<arch>`. A last job composes the OCI index over the two and
 pushes it as `<version>-r<n>`, which is the reference a client resolves —
 `amd64` and `arm64` both, because a Home Assistant box is an arm64 machine.
+
+**The anchor arrives out of band**, as the organisation variable
+`MCUHOME_REGISTRY_ANCHOR` (the content of `mcuhome-packagetool`'s
+`deploy/mcuhome/anchor.json`). Without it the job refuses: an image whose
+packages were only checked against a document from the same host they came
+from has been checked against nothing much, and skipping that quietly would
+be worse than failing.
 
 `revision` is the `-r<n>` counter and starts at 1. Raise it when the same
 packages are assembled again, for a new base image or a changed
