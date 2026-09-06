@@ -282,19 +282,42 @@ incorporate their consequences.
   `scripts/zephyr_module.py` asks west for the workspace's projects from
   there. Measured with the tree linked, the answer named the store — a
   patched copy would silently not be built against; measured with the
-  tree mirrored, it named the view. Directory mirrors cost a few dozen
-  symbolic links, so the rule is free.
+  tree mirrored, it named the view.
+
+  **A second constraint, found by the first real build (2026-09-07) and
+  not by the experiment above: the mirror has to go all the way down, and
+  its files have to be hard links.** West checks that a project's
+  `west-commands` file stays inside that project
+  (`west.commands._ext_specs` → `west.util.escapes_directory`) and it
+  *resolves both sides* to do so. A mirror whose entries are symbolic
+  links fails that check the moment a mirrored project declares
+  `west-commands`: the project directory resolves to the view and the
+  file behind the link resolves to the store, so west raises
+  `west-commands file scripts/west-commands.yml escapes project path
+  zephyr` and refuses the workspace before any command runs. Zephyr and
+  MCUboot both declare `west-commands`, and `west build` is itself such
+  an extension, so a shallow mirror does not build at all — measured
+  first-hand against the real 0.1.10.dev1 workspace package. A mirrored
+  layer is therefore reproduced as real directories with a **hard link
+  per file** (`_mirror_tree`): the same bytes and the same inode, no copy,
+  and every path in it resolves to itself. The measured cost for the real
+  package is 90 005 files and 17 878 directories across the three
+  mirrored layers in ≈ 3 s and ≈ 71 MB of directory entries. Where a hard
+  link cannot be made — the store on another filesystem than the step's
+  work directory — that file is copied instead.
 
   **The rule applies to the layers, not to every project.** Mirrored as
-  real directories are the four trees a build context can patch — zephyr,
-  the manifest repository (the SDK, which is a link to what the
-  orchestrator delivered), chip and mcuboot. Every other west project of
-  the workspace — the Zephyr modules the manifest `import:`s — is a plain
+  real trees are the four a build context can patch — zephyr, the
+  manifest repository (the SDK, which is a link to what the orchestrator
+  delivered), chip and mcuboot. Every other west project of the
+  workspace — the Zephyr modules the manifest `import:`s — is a plain
   link into the store, and `west topdir` started inside one of *those*
   does resolve to the store, as measured. That is sound rather than
   tolerated: a patch can only name a layer, so a link out of the view can
   only ever reach the same bytes the view would have shown, and mirroring
-  a workspace of 124 000 members on every step would buy nothing.
+  a workspace of 124 000 members on every step would buy nothing. Such a
+  project may declare `west-commands` too, and west's check passes for it
+  because *both* sides resolve into the store together.
 - **Offline venv**: creating and populating a venv from a bundled wheel
   set works fully offline (`--no-index`, verified with an unreachable
   proxy) at arbitrary paths; `python3 -m venv` itself needs no network.

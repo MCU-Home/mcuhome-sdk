@@ -2885,6 +2885,51 @@ def _patched_layers(context_root: Path) -> set[str]:
     return {entry.name for entry in root.iterdir() if entry.is_dir()}
 
 
+def _mirror_tree(source: Path, target: Path, *, base: Path, skipped: set[Path]) -> None:
+    """*source* reproduced at *target* as a real tree over the same bytes.
+
+    Directories are created, symbolic links are recreated with the target
+    they had — a relative one then points inside the mirror, exactly as it
+    pointed inside the original — and every file becomes a **hard link** to
+    the file in the store. So the mirror costs directory entries and no
+    file bytes, and every path in it resolves to itself rather than into
+    the store, which is what west's containment checks need
+    (:func:`_workspace_view`).
+
+    A hard link shares the store's inode and therefore the store's
+    permission bits, which a frozen store makes read-only: a build cannot
+    write through the mirror any more than it could write through the
+    symbolic links this replaced. Where one cannot be made at all — the
+    store on another filesystem than the step's work directory — the file
+    is copied instead, so the view is correct on such a machine too and
+    only pays for it.
+
+    *skipped* are the paths, relative to the workspace's top directory,
+    that the view fills in itself: a patched copy or the delivered SDK
+    nested inside a mirrored tree. They are left out here rather than
+    mirrored and then overwritten.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    stack = [(source, target, base)]
+    while stack:
+        directory, into, relative = stack.pop()
+        for entry in sorted(os.scandir(directory), key=lambda entry: entry.name):
+            child = relative / entry.name
+            if child in skipped:
+                continue
+            destination = into / entry.name
+            if entry.is_symlink():
+                os.symlink(os.readlink(entry.path), destination)
+            elif entry.is_dir():
+                destination.mkdir()
+                stack.append((Path(entry.path), destination, child))
+            else:
+                try:
+                    os.link(entry.path, destination)
+                except OSError:
+                    shutil.copy2(entry.path, destination, follow_symlinks=False)
+
+
 def _workspace_view(
     topdir: Path,
     view: Path,
@@ -2916,19 +2961,34 @@ def _workspace_view(
     view: the patched ones. They are skipped rather than linked, because
     they are already there.
 
-    *mirrored* are the store's own trees that this step keeps — each one a
-    real directory whose entries link into the store. **That the directory
-    is real is not cosmetic.** ``os.getcwd`` resolves symbolic links, so a
-    tool started with its working directory inside a *linked* tree is,
-    as far as the kernel is concerned, in the store — and west then walks
-    up from there and finds the store's workspace rather than this view.
-    Zephyr's build does exactly that: ``cmake/modules/zephyr_module.cmake``
-    runs ``scripts/zephyr_module.py`` with the working directory set to
+    *mirrored* are the store's own trees that this step keeps — each one
+    reproduced inside the view as a real tree: real directories, and hard
+    links to the store's files (:func:`_mirror_tree`). **That the tree is
+    real is not cosmetic, and neither is its depth.** Two tools insist on
+    it, each in its own way.
+
+    ``os.getcwd`` resolves symbolic links, so a tool started with its
+    working directory inside a *linked* tree is, as far as the kernel is
+    concerned, in the store — and west then walks up from there and finds
+    the store's workspace rather than this view. Zephyr's build does
+    exactly that: ``cmake/modules/zephyr_module.cmake`` runs
+    ``scripts/zephyr_module.py`` with the working directory set to
     ``ZEPHYR_BASE``, and that script asks west for the workspace's
     projects. With the tree linked, the answer names the store's trees and
-    a patched copy is silently not built against; with the tree mirrored,
-    the working directory stays inside the view and the answer names the
-    view's.
+    a patched copy is silently not built against.
+
+    And west **resolves both sides** when it checks that a project's
+    ``west-commands`` file stays inside that project
+    (``west.util.escapes_directory``, called from
+    ``west.commands._ext_specs``). A directory of symbolic links is not
+    enough for that check: the project directory resolves to the view and
+    the file behind the link resolves to the store, so west refuses the
+    workspace outright — with ``west-commands file … escapes project
+    path …``, before any command runs. Zephyr and MCUboot both declare
+    ``west-commands``, and ``west build`` is itself such an extension, so
+    the whole build depends on the file resolving inside the view. Hard
+    links give exactly that: the same bytes, at a path that resolves to
+    itself.
 
     **Only the layers are mirrored**, and that is the whole rule rather
     than an omission: a west workspace has many more projects than
@@ -2938,7 +2998,9 @@ def _workspace_view(
     and :meth:`_Build._apply_patches`), so a link out of the view can only
     ever reach the same bytes the view would have shown, and mirroring
     every project would cost a directory walk of the whole workspace on
-    every step for nothing.
+    every step for nothing. A project *outside* the layers that declares
+    ``west-commands`` is a plain link, and both sides of west's check
+    resolve into the store together, so it passes.
     """
     substitutes = {path.relative_to(topdir): target for path, target in linked.items()}
     shadowed = {path.relative_to(topdir) for path in mirrored}
@@ -2947,14 +3009,17 @@ def _workspace_view(
     for relative in (*substitutes, *shadowed, *copied):
         real.update(relative.parents)
     real -= copied
+    skipped = copied | set(substitutes)
     try:
-        for relative in sorted(real, key=lambda path: len(path.parts)):
+        for relative in sorted(real - shadowed, key=lambda path: len(path.parts)):
             (view / relative).mkdir(parents=True, exist_ok=True)
             for entry in sorted((topdir / relative).iterdir()):
                 child = relative / entry.name
-                if child in real or child in copied or child in substitutes:
+                if child in real or child in skipped:
                     continue
                 (view / child).symlink_to(entry)
+        for relative in sorted(shadowed, key=lambda path: len(path.parts)):
+            _mirror_tree(topdir / relative, view / relative, base=relative, skipped=skipped)
         # The substitutes by name rather than by what the workspace happens
         # to contain. The manifest repository's directory is the one the
         # workspace package carries *empty* for this moment, and a package

@@ -3339,7 +3339,8 @@ def test_an_unpatched_build_on_a_frozen_workspace_copies_nothing(stepped: StepSe
 
     A read-only store still needs a view — the SDK has to be reachable
     where west looks for the manifest repository, and that place is in the
-    store. But the view is links, not bytes: nothing in it is a copy.
+    store. But the view shares the store's bytes rather than duplicating
+    them: a mirrored file is a hard link onto the store's own inode.
     """
     stepped.freeze()
     assert stepped.run() == abi.EXIT_SUCCESS
@@ -3347,8 +3348,10 @@ def test_an_unpatched_build_on_a_frozen_workspace_copies_nothing(stepped: StepSe
     view = stepped.view()
     for name, path in stepped.layers.items():
         entry = view / path.relative_to(stepped.topdir) / "VERSION"
-        assert entry.is_symlink(), name
-        assert entry.resolve() == (path / "VERSION").resolve(), name
+        original = path / "VERSION"
+        assert not entry.is_symlink(), name
+        assert entry.stat().st_ino == original.stat().st_ino, name
+        assert entry.stat().st_dev == original.stat().st_dev, name
 
 
 def test_a_frozen_workspace_is_byte_identical_after_a_patched_build(
@@ -3398,10 +3401,40 @@ def test_only_the_patched_tree_of_a_frozen_workspace_is_copied(stepped: StepSetu
     view = stepped.view()
     for name in ("zephyr", "mcuboot"):
         mirrored = view / stepped.layers[name].relative_to(stepped.topdir) / "VERSION"
-        assert mirrored.is_symlink(), name
-        assert mirrored.resolve() == (stepped.layers[name] / "VERSION").resolve(), name
+        original = stepped.layers[name] / "VERSION"
+        assert mirrored.stat().st_ino == original.stat().st_ino, name
     copied = view / stepped.layers["chip"].relative_to(stepped.topdir) / "VERSION"
-    assert not copied.is_symlink()
+    assert copied.stat().st_ino != (stepped.layers["chip"] / "VERSION").stat().st_ino
+
+
+def test_a_mirrored_tree_of_a_frozen_workspace_resolves_inside_the_view(
+    stepped: StepSetup,
+) -> None:
+    """West's containment check resolves both sides, so the view must be real.
+
+    ``west.commands._ext_specs`` refuses a workspace whose project
+    declares a ``west-commands`` file that "escapes project path" — and it
+    decides that with ``west.util.escapes_directory``, which calls
+    ``Path.resolve()`` on the file and on the project directory. A
+    mirrored tree of symbolic links fails that check: the directory
+    resolves to the view and the file behind the link resolves to the
+    store. Zephyr and MCUboot both declare ``west-commands``, and
+    ``west build`` is one of those extensions, so this is the difference
+    between a build and a workspace west will not load at all.
+    """
+    for layer in stepped.layers.values():
+        (layer / "scripts").mkdir()
+        (layer / "scripts" / "west-commands.yml").write_text("west-commands:\n", encoding="utf-8")
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    view = stepped.view()
+    for name, path in stepped.layers.items():
+        project = view / path.relative_to(stepped.topdir)
+        spec = project / "scripts" / "west-commands.yml"
+        assert spec.is_file(), name
+        # escapes_directory(spec, project) — verbatim, in west's own terms.
+        assert spec.resolve().is_relative_to(project.resolve()), name
 
 
 def test_a_patched_copy_of_a_frozen_tree_can_be_written(stepped: StepSetup) -> None:
