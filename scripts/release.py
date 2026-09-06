@@ -13,12 +13,19 @@ today and `mcuhome`, `cli` and `build-server` when they publish.
 ```toml
 [tool.mcuhome-release]
 version_files = ["mcuhome/model/__init__.py"]   # every place the number is written
-changelog     = "CHANGELOG.md"
+changelog     = "CHANGELOG.md"                  # optional — omit where no changelog is kept
 tag_prefix    = "v"
 branch        = "main"
 gates         = ["{python} -m ruff check .", "{python} -m pytest -q tests/python"]
 next_steps    = ["git push && git push origin {tag}", "…"]
 ```
+
+``changelog`` is optional: a repository that keeps no changelog simply
+omits the key, and the release runs with no changelog step at all — no
+file is read, written or required. Naming a ``changelog`` keeps today's
+behaviour exactly: the file must exist and its ``## [Unreleased]``
+section must be non-empty, or the release is refused before anything is
+written.
 
 **It stops before pushing, on purpose.** Everything up to the tag is
 local and reversible (`git reset`, `git tag -d`); the push is the moment
@@ -76,7 +83,7 @@ class Config:
     """The per-repository half of a release."""
 
     version_files: list[Path]
-    changelog: Path
+    changelog: Path | None
     tag_prefix: str = "v"
     branch: str = "main"
     gates: list[str] = field(default_factory=list)
@@ -97,9 +104,10 @@ def load_config(root: Path) -> Config:
     files = [root / name for name in block.get("version_files", [])]
     if not files:
         raise Refused("[tool.mcuhome-release] names no version_files")
+    changelog = block.get("changelog")
     return Config(
         version_files=files,
-        changelog=root / block.get("changelog", "CHANGELOG.md"),
+        changelog=root / changelog if changelog is not None else None,
         tag_prefix=block.get("tag_prefix", "v"),
         branch=block.get("branch", "main"),
         gates=list(block.get("gates", [])),
@@ -264,7 +272,7 @@ def main(argv: list[str]) -> int:
     check_working_state(config, tag, root)
     run_gates(config, root)
 
-    touched = [*config.version_files, config.changelog]
+    touched = [*config.version_files, *([config.changelog] if config.changelog else [])]
     for path in config.version_files:
         if declared_version(path) != current:
             raise Refused(
@@ -272,7 +280,8 @@ def main(argv: list[str]) -> int:
                 f"{config.version_files[0]} declares {current} — they must agree first"
             )
         set_version(path, current, arguments.version)
-    update_changelog(config.changelog, arguments.version, date.today())
+    if config.changelog is not None:
+        update_changelog(config.changelog, arguments.version, date.today())
 
     if arguments.dry_run:
         print(git("diff", root=root))

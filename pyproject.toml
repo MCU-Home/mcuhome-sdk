@@ -53,7 +53,6 @@ dev = [
 # them.
 [tool.mcuhome-release]
 version_files = ["mcuhome/model/__init__.py"]
-changelog = "CHANGELOG.md"
 tag_prefix = "v"
 branch = "main"
 gates = [

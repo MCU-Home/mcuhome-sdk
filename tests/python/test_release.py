@@ -64,8 +64,15 @@ CHANGELOG = """# Changelog
 """
 
 
-def make_repo(tmp_path: Path, *, version: str = "0.1.0", two_files: bool = False) -> Path:
-    """A minimal repository shaped like ours, with an origin to compare against."""
+def make_repo(
+    tmp_path: Path, *, version: str = "0.1.0", two_files: bool = False, changelog: bool = True
+) -> Path:
+    """A minimal repository shaped like ours, with an origin to compare against.
+
+    ``changelog=False`` shapes a repository the way ours looks before
+    1.0.0: no ``changelog`` key in ``[tool.mcuhome-release]`` and no
+    ``CHANGELOG.md`` on disk at all.
+    """
     root = tmp_path / "repo"
     (root / "pkg").mkdir(parents=True)
     (root / "pkg" / "__init__.py").write_text(f'"""A package."""\n\n__version__ = "{version}"\n')
@@ -76,12 +83,13 @@ def make_repo(tmp_path: Path, *, version: str = "0.1.0", two_files: bool = False
     project += (
         "\n[tool.mcuhome-release]\n"
         f"version_files = {files!r}\n"
-        'changelog = "CHANGELOG.md"\n'
-        "gates = []\n"
+        + ('changelog = "CHANGELOG.md"\n' if changelog else "")
+        + "gates = []\n"
         'next_steps = ["push {tag}"]\n'
     )
     (root / "pyproject.toml").write_text(project)
-    (root / "CHANGELOG.md").write_text(CHANGELOG)
+    if changelog:
+        (root / "CHANGELOG.md").write_text(CHANGELOG)
 
     git(root.parent, "init", "--quiet", "--initial-branch=main", str(root))
     git(root, "config", "user.email", "test@example.org")
@@ -208,13 +216,11 @@ def test_an_empty_changelog_section_is_refused(release, tmp_path):
 
 
 def test_a_missing_changelog_is_refused(release, tmp_path):
-    """The file the configuration names has to be there.
+    """Once a repository names a changelog, the file has to be there.
 
-    A repository may have no changelog at all — several here do not, on
-    purpose, while the format still changes weekly. What must not happen
-    is a release that writes the version into every source, commits and
-    tags, and only then discovers it has nowhere to record what changed.
-    So the refusal comes before anything is written.
+    What must not happen is a release that writes the version into every
+    source, commits and tags, and only then discovers it has nowhere to
+    record what changed. So the refusal comes before anything is written.
     """
     root = make_repo(tmp_path)
     (root / "CHANGELOG.md").unlink()
@@ -222,6 +228,24 @@ def test_a_missing_changelog_is_refused(release, tmp_path):
     git(root, "push", "--quiet", "origin", "main")
     with pytest.raises(SystemExit, match="is missing"):
         release.main(["0.2.0", "--repo", str(root)])
+
+
+def test_no_changelog_key_releases_without_a_changelog_step(release, tmp_path):
+    """A repository that keeps no changelog at all — several here do not,
+    on purpose, while the format still changes weekly — omits the
+    ``changelog`` key entirely, and the release proceeds with no
+    changelog file read, written or required.
+    """
+    root = make_repo(tmp_path, changelog=False)
+    assert not (root / "CHANGELOG.md").exists()
+
+    assert release.main(["0.2.0", "--repo", str(root)]) == 0
+
+    assert release.declared_version(root / "pkg" / "__init__.py") == "0.2.0"
+    assert not (root / "CHANGELOG.md").exists()
+    assert git(root, "tag", "--list") == "v0.2.0"
+    committed = git(root, "show", "--stat", "--pretty=format:", "HEAD")
+    assert "CHANGELOG.md" not in committed
 
 
 def test_a_failing_gate_stops_the_release(release, tmp_path):
