@@ -49,6 +49,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -2684,6 +2686,11 @@ class StepSetup(BuildStubs):
         }
         for path in (*self.layers.values(), self.manifest_dir):
             path.mkdir(parents=True)
+        for name, path in self.layers.items():
+            # One file per tree, so that a view of the workspace can be
+            # told apart from a copy of it: a mirrored tree's entries are
+            # links to these, a copied tree's are bytes of their own.
+            (path / "VERSION").write_text(f"{name}\n", encoding="utf-8")
         (self.topdir / ".west").mkdir()
         (self.topdir / ".west" / "config").write_text(
             "[manifest]\npath = mcuhome-sdk\nfile = west.yml\n", encoding="utf-8"
@@ -2741,6 +2748,58 @@ class StepSetup(BuildStubs):
             json.dumps(document), encoding="utf-8"
         )
 
+    def freeze(self) -> None:
+        """Make the workspace package read-only, as the store's freeze does.
+
+        The subprocess profile unpacks the environment's packages into a
+        per-user store and marks the entry read-only; from then on it is
+        immutable and shared by any number of concurrent builds. This is
+        that state, produced the same way — the permission bits — so that
+        "may not be written" is found out here exactly as it is found out
+        there.
+        """
+        for directory, subdirectories, files in os.walk(self.package, topdown=False):
+            base = Path(directory)
+            for name in (*files, *subdirectories):
+                entry = base / name
+                if not entry.is_symlink():
+                    entry.chmod(entry.stat().st_mode & ~0o222)
+            base.chmod(base.stat().st_mode & ~0o222)
+
+    def mark_provisioned(self) -> None:
+        """Write the store's completion marker, as the provisioner does last."""
+        (self.package / abi.STORE_MARKER).write_text(
+            json.dumps({"kind": "build-workspace", "package": "mcuhome-build-workspace"}),
+            encoding="utf-8",
+        )
+
+    def thaw(self) -> None:
+        """Undo :meth:`freeze`, so the temporary directory can be removed."""
+        for directory, subdirectories, files in os.walk(self.package):
+            base = Path(directory)
+            base.chmod(base.stat().st_mode | 0o200)
+            for name in (*files, *subdirectories):
+                entry = base / name
+                if not entry.is_symlink():
+                    entry.chmod(entry.stat().st_mode | 0o200)
+
+    def workspace_state(self) -> dict[str, Any]:
+        """Every byte and every mode of the workspace package, for comparison."""
+        state: dict[str, Any] = {}
+        for path in sorted(self.package.rglob("*")):
+            relative = str(path.relative_to(self.package))
+            if path.is_symlink():
+                state[relative] = ("link", os.readlink(path))
+            elif path.is_dir():
+                state[relative] = ("dir", path.stat().st_mode)
+            else:
+                state[relative] = ("file", path.stat().st_mode, path.read_bytes())
+        return state
+
+    def view(self) -> Path:
+        """Where the view of a workspace that may not be written is."""
+        return self.work / abi.STEP_VIEW
+
     def patch(self, layer: str, name: str, body: str) -> None:
         """Put a patch into the context and re-lock it over the new file set."""
         path = self.context / "patches" / layer / name
@@ -2781,8 +2840,17 @@ class StepSetup(BuildStubs):
 
 
 @pytest.fixture
-def stepped(tmp_path: Path, device_model_json: str, monkeypatch) -> StepSetup:
-    return StepSetup(tmp_path, device_model_json, monkeypatch)
+def stepped(tmp_path: Path, device_model_json: str, monkeypatch):
+    setup = StepSetup(tmp_path, device_model_json, monkeypatch)
+    yield setup
+    # A frozen workspace and the copies taken out of it are read-only, and
+    # pytest has to be able to remove its temporary directory afterwards.
+    setup.thaw()
+    for directory, subdirectories, _files in os.walk(tmp_path):
+        for name in subdirectories:
+            entry = Path(directory) / name
+            if not entry.is_symlink():
+                entry.chmod(entry.stat().st_mode | 0o700)
 
 
 # -- the invocation (§6) ---------------------------------------------------
@@ -3227,6 +3295,344 @@ def test_an_unpatched_sdk_is_not_copied_at_all(stepped: StepSetup) -> None:
     assert stepped.run() == abi.EXIT_SUCCESS
     assert not (stepped.work / abi.STEP_PATCHED).exists()
     assert stepped.manifest_dir.resolve() == stepped.sdk.resolve()
+
+
+# -- a workspace that may not be written (§10) ------------------------------
+
+
+def test_a_writable_workspace_needs_no_view(stepped: StepSetup) -> None:
+    """§10: "A tree that is disposable … may be patched in place".
+
+    The container profile's workspace goes away with the container, so
+    there is nothing to protect it from and nothing to assemble: the SDK
+    link goes into the workspace itself and no view is built.
+    """
+    stepped.patch("zephyr", "0001-fix.patch", "--- a\n+++ b\n")
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert not stepped.view().exists()
+    assert stepped.manifest_dir.is_symlink()
+    applied = [child for child in stepped.children if child["command"][0] == "git"]
+    assert applied[0]["command"][2] == str(stepped.layers["zephyr"])
+
+
+def test_a_frozen_workspace_is_built_against_a_view(stepped: StepSetup) -> None:
+    """§10: "build against a view of the environment".
+
+    The subprocess profile's store may not be touched at all, so the
+    workspace the build runs in is the one this step assembled under
+    ``work`` — and the whole build sees it: west's top directory, the
+    Zephyr base every generated CMakeLists resolves against, every layer
+    path.
+    """
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+    view = stepped.view()
+    assert stepped.plans[0].topdir == view
+    assert stepped.build_env()["ZEPHYR_BASE"] == str(view / "zephyr")
+    assert (view / ".west" / "config").is_file()
+
+
+def test_an_unpatched_build_on_a_frozen_workspace_copies_nothing(stepped: StepSetup) -> None:
+    """§10: "copying is the price of a patch and is paid only for the trees
+    a patch actually names".
+
+    A read-only store still needs a view — the SDK has to be reachable
+    where west looks for the manifest repository, and that place is in the
+    store. But the view is links, not bytes: nothing in it is a copy.
+    """
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert not (stepped.work / abi.STEP_PATCHED).exists()
+    view = stepped.view()
+    for name, path in stepped.layers.items():
+        entry = view / path.relative_to(stepped.topdir) / "VERSION"
+        assert entry.is_symlink(), name
+        assert entry.resolve() == (path / "VERSION").resolve(), name
+
+
+def test_a_frozen_workspace_is_byte_identical_after_a_patched_build(
+    stepped: StepSetup,
+) -> None:
+    """The point of the view: the store comes out of the step as it went in.
+
+    §3's promise for this profile — "the subprocess profile keeps the store
+    read-only" — measured over every file, every mode and every link of the
+    package, with a patch on one of its trees.
+    """
+    stepped.patch("chip", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.patch_marker = "patched.txt"
+    stepped.freeze()
+    before = stepped.workspace_state()
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert stepped.workspace_state() == before
+
+
+def test_a_patched_tree_of_a_frozen_workspace_is_copied_into_the_view(
+    stepped: StepSetup,
+) -> None:
+    """§10: "Materialize a patched copy of it under ``work``".
+
+    The copy stands at the tree's own place inside the view, so the
+    patches land in it and everything that resolves a path through the
+    workspace reaches it.
+    """
+    stepped.patch("chip", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.patch_marker = "patched.txt"
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    copy = stepped.view() / stepped.layers["chip"].relative_to(stepped.topdir)
+    assert copy.is_dir() and not copy.is_symlink()
+    assert (copy / "patched.txt").is_file()
+    applied = [child for child in stepped.children if child["command"][0] == "git"]
+    assert [child["command"][2] for child in applied] == [str(copy)]
+
+
+def test_only_the_patched_tree_of_a_frozen_workspace_is_copied(stepped: StepSetup) -> None:
+    """§10: "Trees no patch names stay where they are"."""
+    stepped.patch("chip", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    view = stepped.view()
+    for name in ("zephyr", "mcuboot"):
+        mirrored = view / stepped.layers[name].relative_to(stepped.topdir) / "VERSION"
+        assert mirrored.is_symlink(), name
+        assert mirrored.resolve() == (stepped.layers[name] / "VERSION").resolve(), name
+    copied = view / stepped.layers["chip"].relative_to(stepped.topdir) / "VERSION"
+    assert not copied.is_symlink()
+
+
+def test_a_patched_copy_of_a_frozen_tree_can_be_written(stepped: StepSetup) -> None:
+    """A copy of a read-only tree is read-only until it is made writable.
+
+    ``shutil.copytree`` copies the modes with the bytes, so the copy of a
+    frozen store entry arrives as unwritable as the entry — and a patch
+    could not be applied to it. Checked directly, because the stubbed
+    ``git apply`` of this suite would not notice.
+    """
+    stepped.freeze()
+    stepped.patch("chip", "0001-fix.patch", "--- a\n+++ b\n")
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    copy = stepped.view() / stepped.layers["chip"].relative_to(stepped.topdir)
+    (copy / "written-by-the-patch").write_text("ok\n", encoding="utf-8")
+
+
+def test_a_patch_that_does_not_apply_fails_a_step_on_a_frozen_workspace(
+    stepped: StepSetup,
+) -> None:
+    """§10: "A patch that does not apply fails the step" — view or no view."""
+    stepped.patch("chip", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.freeze()
+    stepped.child_code = 1
+    assert stepped.run() == abi.EXIT_FAILURE
+    assert "0001-fix.patch" in stepped.result()["message"]
+    assert stepped.plans == []
+
+
+def test_the_sdk_is_linked_into_the_view_of_a_frozen_workspace(stepped: StepSetup) -> None:
+    """West needs the manifest repository inside the workspace, and the
+    workspace may not be written — so the link goes into the view.
+
+    The store's own manifest directory stays the empty directory the
+    package carries; nothing was placed in it and nothing was replaced.
+    """
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    linked = stepped.view() / "mcuhome-sdk"
+    assert linked.is_symlink()
+    assert linked.resolve() == stepped.sdk.resolve()
+    assert stepped.manifest_dir.is_dir() and not stepped.manifest_dir.is_symlink()
+    assert list(stepped.manifest_dir.iterdir()) == []
+
+
+def test_a_patched_sdk_on_a_frozen_workspace_is_the_link_target(stepped: StepSetup) -> None:
+    """The two mechanisms compose: the SDK's copy is under ``work`` because
+    the SDK is the orchestrator's input, and the view links to that copy
+    instead of to what was delivered."""
+    stepped.patch("sdk", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    copy = stepped.work / abi.STEP_PATCHED / "sdk"
+    assert (stepped.view() / "mcuhome-sdk").resolve() == copy.resolve()
+
+
+def test_every_tree_of_a_view_is_a_real_directory(stepped: StepSetup) -> None:
+    """Why the view mirrors the trees instead of linking them.
+
+    ``os.getcwd`` resolves symbolic links, so a tool started with its
+    working directory inside a linked tree is in the store as far as the
+    kernel is concerned — and west, walking up from there, finds the
+    store's workspace rather than this view. Zephyr's build does exactly
+    that: ``cmake/modules/zephyr_module.cmake`` runs
+    ``scripts/zephyr_module.py`` with the working directory set to
+    ``ZEPHYR_BASE``, and that script asks west which projects the
+    workspace has. Measured against west 1.5.0: with the tree linked the
+    answer names the store, with the tree a real directory it names the
+    view.
+    """
+    stepped.patch("chip", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    view = stepped.view()
+    for name, path in stepped.layers.items():
+        entry = view / path.relative_to(stepped.topdir)
+        assert entry.is_dir() and not entry.is_symlink(), name
+
+
+def test_a_marked_store_entry_is_frozen_whatever_the_permission_bits_say(
+    stepped: StepSetup,
+) -> None:
+    """The signal a privileged user cannot ignore.
+
+    A store freezes an entry with permission bits and then marks it
+    finished, and the bits are exactly the part of that root does not
+    notice: every write into a frozen store succeeds for root, and this
+    program would then patch a store shared with other builds in place and
+    leave a link in it pointing into a directory that is gone at the end of
+    the step. The marker is a statement rather than a permission, so it
+    decides for every user alike — checked here with the entry left fully
+    writable, which is what root sees.
+    """
+    stepped.mark_provisioned()
+    stepped.patch("chip", "0001-fix.patch", "--- a\n+++ b\n")
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    assert abi._writable(stepped.topdir) is True
+    view = stepped.view()
+    assert view.is_dir()
+    assert stepped.plans[0].topdir == view
+    assert stepped.manifest_dir.is_dir() and not stepped.manifest_dir.is_symlink()
+    copy = view / stepped.layers["chip"].relative_to(stepped.topdir)
+    assert copy.is_dir() and not copy.is_symlink()
+
+
+def test_a_read_only_workspace_without_a_marker_is_frozen_too(stepped: StepSetup) -> None:
+    """The other signal, for what no marker can answer: a tree that cannot
+    be written for a reason nobody wrote down — a read-only mount, an image
+    whose workspace belongs to somebody else."""
+    stepped.freeze()
+    assert not (stepped.package / abi.STORE_MARKER).exists()
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert stepped.view().is_dir()
+
+
+def test_a_workspace_with_neither_signal_is_the_disposable_one(stepped: StepSetup) -> None:
+    """Neither marked nor unwritable is the container profile's tree, and
+    it is patched where it stands."""
+    assert not (stepped.package / abi.STORE_MARKER).exists()
+    assert abi._writable(stepped.topdir) is True
+    stepped.patch("chip", "0001-fix.patch", "--- a\n+++ b\n")
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    assert not stepped.view().exists()
+    applied = [child for child in stepped.children if child["command"][0] == "git"]
+    assert applied[0]["command"][2] == str(stepped.layers["chip"])
+
+
+def test_a_workspace_without_a_manifest_directory_still_gets_its_sdk(
+    stepped: StepSetup,
+) -> None:
+    """The link is made by name, not by what the workspace happens to hold.
+
+    The manifest repository's directory is the one the workspace package
+    carries empty for this moment. A package that carries it not at all
+    would otherwise produce a view with no SDK in it, and a failure much
+    later — in west or in CMake, about something else entirely.
+    """
+    stepped.manifest_dir.rmdir()
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    linked = stepped.view() / "mcuhome-sdk"
+    assert linked.is_symlink()
+    assert linked.resolve() == stepped.sdk.resolve()
+
+
+def test_the_view_has_the_shape_of_the_workspace(stepped: StepSetup) -> None:
+    """Nothing of the workspace is lost on the way into the view.
+
+    A view is only a view if everything the workspace has is reachable
+    through it under the same name — west's configuration, the trees, and
+    whatever else a package put at the top level. What differs is how each
+    entry is reached, not whether it is there.
+    """
+    (stepped.topdir / "extra-thing").write_text("in the package\n", encoding="utf-8")
+    stepped.patch("chip", "0001-fix.patch", "--- a\n+++ b\n")
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    view = stepped.view()
+    assert sorted(entry.name for entry in view.iterdir()) == sorted(
+        entry.name for entry in stepped.topdir.iterdir()
+    )
+    assert (view / "extra-thing").read_text(encoding="utf-8") == "in the package\n"
+    assert (view / ".west" / "config").read_text(encoding="utf-8") == (
+        stepped.topdir / ".west" / "config"
+    ).read_text(encoding="utf-8")
+
+
+def test_whether_a_tree_may_be_written_is_found_out_by_writing(tmp_path: Path) -> None:
+    """§3's question, answered by the operation it is about.
+
+    Which profile is running is not something the program is told: the
+    container profile's workspace is a disposable tree and the subprocess
+    profile's is a frozen store, and the difference between them is this
+    answer. Permission bits alone are not it — they say "yes" to root on a
+    read-only mount — so the answer comes from creating something and
+    removing it again, and it leaves nothing behind either way.
+    """
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    assert abi._writable(tree) is True
+    assert list(tree.iterdir()) == []
+
+    tree.chmod(0o555)
+    try:
+        assert abi._writable(tree) is False
+    finally:
+        tree.chmod(0o755)
+
+    assert abi._writable(tmp_path / "absent") is False
+
+    # The case a permission check gets wrong, and the reason this is not
+    # one: the bits say writable and nothing can be created in it.
+    ordinary = tmp_path / "a-file"
+    ordinary.write_text("bits say yes\n", encoding="utf-8")
+    assert os.access(ordinary, os.W_OK) is True
+    assert abi._writable(ordinary) is False
+
+
+@pytest.mark.skipif(shutil.which("west") is None, reason="west is not on PATH")
+def test_west_resolves_the_workspace_through_the_view(stepped: StepSetup) -> None:
+    """The view is a west workspace, checked with west itself.
+
+    Replacing a project directory with a symbolic link is a pattern west
+    documents in its own manifest code ("some existing users … use symlinks
+    to existing project repositories outside the workspace as a cache"),
+    and its containment check is lexical for that reason. This holds the
+    view against the real tool rather than against that promise: the top
+    directory, and the projects the manifest resolves to.
+    """
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+    view = stepped.view()
+    (view / "mcuhome-sdk" / "west.yml").write_text(
+        "manifest:\n  self:\n    path: mcuhome-sdk\n  projects: []\n", encoding="utf-8"
+    )
+    for start in (view, view / "zephyr"):
+        topdir = subprocess.run(
+            ["west", "topdir"],
+            cwd=start,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert Path(topdir) == view, start
 
 
 # -- the generator, and what it is handed ----------------------------------

@@ -248,8 +248,44 @@ incorporate their consequences.
   read-only manifest repo. West's workspace containment check is
   deliberately lexical and replacing a *project* directory with a
   symlink is an upstream-documented pattern — the basis for symlink
-  views of read-only trees; practical verification runs with the
-  provisioner implementation.
+  views of read-only trees.
+- **Symlink view of a read-only workspace** (verified 2026-09-06 with
+  west 1.5.0, the version the tools package ships). A view assembled
+  under `work` — the workspace's top level mirrored, links to the store's
+  trees, the delivered SDK linked in at the manifest repository's place —
+  is a west workspace: `west topdir` answers with the view, `west list`
+  resolves every project through it including the ones the Zephyr
+  manifest `import:`s, `west manifest --path` names the view's manifest
+  file, and `zephyr.base` stays the relative value the package ships and
+  therefore resolves inside the view. The store's `.west/config` is never
+  written, because the builder already copies it into `work` and points
+  west at the copy with `WEST_CONFIG_LOCAL`.
+
+  **One constraint the experiment produced, and it is not optional.**
+  Every source tree in the view has to be a *real directory* — a mirror
+  whose entries are links, or the patched copy itself — and not a link to
+  the tree. `os.getcwd()` resolves symbolic links, so a tool started with
+  its working directory inside a linked tree is in the store as far as
+  the kernel is concerned; west then walks up from there and finds the
+  store's workspace instead of the view. Zephyr's build does exactly
+  that: `cmake/modules/west.cmake` and `cmake/modules/zephyr_module.cmake`
+  both run with `WORKING_DIRECTORY ${ZEPHYR_BASE}`, and
+  `scripts/zephyr_module.py` asks west for the workspace's projects from
+  there. Measured with the tree linked, the answer named the store — a
+  patched copy would silently not be built against; measured with the
+  tree mirrored, it named the view. Directory mirrors cost a few dozen
+  symbolic links, so the rule is free.
+
+  **The rule applies to the layers, not to every project.** Mirrored as
+  real directories are the four trees a build context can patch — zephyr,
+  the manifest repository (the SDK, which is a link to what the
+  orchestrator delivered), chip and mcuboot. Every other west project of
+  the workspace — the Zephyr modules the manifest `import:`s — is a plain
+  link into the store, and `west topdir` started inside one of *those*
+  does resolve to the store, as measured. That is sound rather than
+  tolerated: a patch can only name a layer, so a link out of the view can
+  only ever reach the same bytes the view would have shown, and mirroring
+  a workspace of 124 000 members on every step would buy nothing.
 - **Offline venv**: creating and populating a venv from a bundled wheel
   set works fully offline (`--no-index`, verified with an unreachable
   proxy) at arbitrary paths; `python3 -m venv` itself needs no network.
@@ -296,7 +332,6 @@ incorporate their consequences.
 
 ## 10. Open points
 
-- Symlink-view verification with the provisioner (section 8, item 3).
 - Which Python ABI the bundled wheel set targets. It is built by the
   container base's interpreter today, so a host whose Python is a different
   minor version cannot install the compiled wheels in it — which the
