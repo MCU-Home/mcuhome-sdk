@@ -341,7 +341,7 @@ incorporate their consequences.
 
 ## 10. Open points
 
-- Which Python ABI the bundled wheel set targets. It is built by the
-  container base's interpreter today, so a host whose Python is a different
-  minor version cannot install the compiled wheels in it — which the
-  container profile never notices and the subprocess profile will.
+None. The last one — which Python ABI the bundled wheel set targets — is
+answered in section 6: the set targets the minor it is built with, that
+minor is the requirement, and the provisioner refuses a host that has
+another one before it creates anything.
