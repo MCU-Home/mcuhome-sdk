@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mcuhome.model import ota
+from mcuhome.model.buildenvironment import DEFAULT_BUILD_TOOLS, DEFAULT_BUILD_WORKSPACE
 from mcuhome.model.buildimage import DEFAULT_ENVIRONMENT
 from mcuhome.model.sdkindex import DEFAULT_SDK
 
@@ -242,13 +243,21 @@ class ToolchainModel:
 
 @dataclass(frozen=True)
 class SourcesModel:
-    """Where the two things a build needs and nobody stores come from.
+    """Where the things a build needs and nobody stores come from.
 
-    A device folder holds no SDK and no toolchain, and it never will: one
-    is a hash-pinned package, the other a container image, and both are
-    fetched. This says *which* — in the reference form
+    A device folder holds no SDK and no toolchain, and it never will:
+    they are hash-pinned packages and a container image, and all of them
+    are fetched. This says *which* — in the reference form
     :mod:`mcuhome.model.imageref` parses, the spelling a person already
     knows from docker.
+
+    **Every entry here is an override with a default that decides
+    nothing.** A reference without a version resolves at build time —
+    the SDK against the version this workbench was released alongside,
+    the two environment packages against what that SDK release states —
+    so a device is not frozen onto whatever happened to be current on the
+    day it was created. A device that wants to be frozen names a
+    version, and then that is honoured exactly.
 
     **Both carry a default and the default is written down** rather than
     assumed further downstream. That is the whole point of the block: the
@@ -266,15 +275,33 @@ class SourcesModel:
     #: tag and a digest. An untagged one is resolved against
     #: :attr:`ToolchainModel.zephyr_constraint`.
     build_environment: str = DEFAULT_ENVIRONMENT
+    #: The build environment's workspace package, in the same reference
+    #: form as :attr:`sdk`. Naming **no version** — which is the default —
+    #: means "whatever the resolved SDK release states it was built and
+    #: tested with"; naming one overrides that derivation and nothing
+    #: else.
+    build_workspace: str = DEFAULT_BUILD_WORKSPACE
+    #: The build environment's tools package, same form and same rule.
+    #: The bare family name is the normal pin: it resolves per platform,
+    #: which is what lets one context build on hosts of two
+    #: architectures.
+    build_tools: str = DEFAULT_BUILD_TOOLS
 
     def to_dict(self) -> dict[str, Any]:
-        return {"sdk": self.sdk, "build_environment": self.build_environment}
+        return {
+            "sdk": self.sdk,
+            "build_environment": self.build_environment,
+            "build_workspace": self.build_workspace,
+            "build_tools": self.build_tools,
+        }
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> SourcesModel:
         return SourcesModel(
             sdk=data["sdk"],
             build_environment=data["build_environment"],
+            build_workspace=data["build_workspace"],
+            build_tools=data["build_tools"],
         )
 
 

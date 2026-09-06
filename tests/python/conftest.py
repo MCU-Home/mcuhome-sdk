@@ -261,7 +261,7 @@ def lock_context(
         files=files,
         id=context_id(
             sdk_sha256=request.sdk.sha256,
-            environment_digest=build_environment.digest,
+            environment=build_environment,
             board=request.board,
             files=files,
         ),

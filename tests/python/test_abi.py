@@ -65,6 +65,7 @@ from mcuhome.model.context import (
     ContextFile,
     ContextManifest,
     EnvironmentPin,
+    PackagePin,
     SdkPin,
     context_id,
 )
@@ -155,11 +156,11 @@ def backend(tmp_path: Path) -> Backend:
 #: actually pulled is the backend's duty (§9.1) — so nothing here has to
 #: name a container or an SDK package that exists.
 #:
-#: The build environment is pinned to a specific digest. ``verify`` reads
-#: only that the reference is well-formed; it does not validate that the
-#: image actually exists.
+#: The build environment is pinned by its packages. ``verify`` reads only
+#: that each entry is well-formed; it does not go looking for the bytes.
 ENVIRONMENT_PIN = EnvironmentPin(
-    reference="ghcr.io/mcu-home/build-container:zephyr-4.4.0-r4@sha256:" + "ab" * 32,
+    workspace=PackagePin(name="mcuhome-build-workspace", version="0.1.0", sha256="ab" * 32),
+    tools=PackagePin(name="mcuhome-build-tools", version="0.1.0", sha256="ba" * 32),
 )
 SDK = SdkPin(
     constraint="^0.1.0",
@@ -206,7 +207,7 @@ def locked_context(root: Path, files: dict[str, str] | None = None) -> ContextMa
         files=tuple(entries),
         id=context_id(
             sdk_sha256=SDK.sha256,
-            environment_digest=ENVIRONMENT_PIN.digest,
+            environment=ENVIRONMENT_PIN,
             board="nrf7002dk/nrf5340/cpuapp",
             files=entries,
         ),

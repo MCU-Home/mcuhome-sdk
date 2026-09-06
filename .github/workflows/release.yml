@@ -174,9 +174,16 @@ jobs:
             gh release create "$tag" --title "$tag" --generate-notes
           fi
           # index.json is the host's to write, not ours: it belongs to a
-          # source, and a source is signed. Only the package and its
-          # sidecar travel.
-          gh release upload "$tag" dist/mcuhome-sdk-*.tar.zst dist/mcuhome-sdk-*.tar.zst.sha256 --clobber
+          # source, and a source is signed. Only the package and its two
+          # sidecars travel — the hash, and the environment lock that says
+          # which build environment this release was built and tested
+          # with. The lock is inside the archive as well; the copy here is
+          # so a mirror can serve it without unpacking anything.
+          gh release upload "$tag" \
+            dist/mcuhome-sdk-*.tar.zst \
+            dist/mcuhome-sdk-*.tar.zst.sha256 \
+            dist/mcuhome-sdk-*.tar.zst.build-environment.lock.json \
+            --clobber
 
   # --------------------------------------------------------------------
   # The build environment's source world.

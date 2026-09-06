@@ -4,12 +4,12 @@
 
 The model half of the subject: :mod:`mcuhome.model.context` is the
 format, the canonical encoding and the ID rule — the vocabulary a build
-server recomputes an ID with while carrying no build logic at all (ADR
-0020 decision 4). The directory that rule is applied to is
+server recomputes an ID with while carrying no build logic at all. The
+directory that rule is applied to is
 :mod:`mcuhome.workbench.contextdir`, and it is tested next door in
 ``test_context_workbench.py``.
 
-The context ID rule is locked with ``context`` format version 3 and can
+The context ID rule is locked with ``context`` format version 4 and can
 never change afterwards — every archived context, every artifact
 attribution and every server-side integrity check depends on the same
 inputs hashing to the same ID forever. That makes :data:`GOLDEN_ID` the
@@ -35,10 +35,10 @@ from mcuhome.model.context import (
     ContextRequest,
     EnvironmentPin,
     GeneratorEntry,
+    PackagePin,
     SdkPin,
     canonical_json,
     context_id,
-    environment_digest,
     format_generator_chain,
     parse_generator_chain,
     validate_manifest,
@@ -49,7 +49,10 @@ from mcuhome.model.toolchain import line_of, normalize_release, satisfies_line
 
 # The fixed synthetic inputs of the golden vector.
 SDK_SHA = "cd" * 32
-ENVIRONMENT_DIGEST = "sha256:" + "4d" * 32
+ENVIRONMENT = EnvironmentPin(
+    workspace=PackagePin(name="mcuhome-build-workspace", version="2.4.0", sha256="4d" * 32),
+    tools=PackagePin(name="mcuhome-build-tools", version="1.2.0", sha256="4e" * 32),
+)
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 FILES = (
     ContextFile(path="model/device-model.json", sha256="11" * 32),
@@ -61,12 +64,13 @@ FILES = (
 #: constant — a change here is a change to a frozen contract, and the
 #: bug is in the code that made it necessary.
 #:
-#: It moved with the bump to context format 3, which is the only thing
-#: that may move it: the hashed document gained a ``build_environment``
-#: member, so the same inputs hash to a different number under a different
-#: format version. A frozen rule is frozen per format version, and version
-#: 2 no longer exists to disagree with this.
-GOLDEN_ID = "sha256:b033e1ddade6357860d87555d87c6575ec53901623b64b8452b16c954c9d3479"
+#: It moved with the bump to context format 4, which is the only thing
+#: that may move it: the environment member stopped being one digest and
+#: became two ``(name, version, sha256)`` triples, so the same files and
+#: the same SDK hash to a different number under the new format version.
+#: A frozen rule is frozen per format version, and version 3 no longer
+#: exists to disagree with this. It is the "model and one patch" vector.
+GOLDEN_ID = "sha256:40c5066b0891e91aedd299cfd21cbb81b12e028228f7b0007e7cf92f8522bca7"
 
 
 # --------------------------------------------------------------------------
@@ -99,7 +103,7 @@ def test_the_golden_vector_never_changes() -> None:
     """The regression anchor of the whole format. See GOLDEN_ID."""
     computed = context_id(
         sdk_sha256=SDK_SHA,
-        environment_digest=ENVIRONMENT_DIGEST,
+        environment=ENVIRONMENT,
         board=BOARD,
         files=FILES,
     )
@@ -165,6 +169,14 @@ def test_an_implementation_sorting_by_utf16_code_units_fails_the_suite() -> None
             ],
             "sdk": {"sha256": inputs["sdk_sha256"]},
             "target": {"board": inputs["board"]},
+            "build_environment": {
+                half: {
+                    "name": entry["name"],
+                    "sha256": entry["sha256"],
+                    "version": entry["version"],
+                }
+                for half, entry in inputs["environment"].items()
+            },
         }
         return "sha256:" + hashlib.sha256(canonical_json(document).encode("utf-8")).hexdigest()
 
@@ -175,7 +187,21 @@ def test_an_implementation_sorting_by_utf16_code_units_fails_the_suite() -> None
 def test_the_golden_vectors_canonical_form_never_changes() -> None:
     """The exact bytes under the hash, spelled out — nesting, order, all."""
     expected = (
-        '{"build_environment":{"digest":"' + ENVIRONMENT_DIGEST + '"},'
+        '{"build_environment":'
+        '{"tools":{"name":"'
+        + ENVIRONMENT.tools.name
+        + '","sha256":"'
+        + ENVIRONMENT.tools.sha256
+        + '","version":"'
+        + ENVIRONMENT.tools.version
+        + '"},'
+        '"workspace":{"name":"'
+        + ENVIRONMENT.workspace.name
+        + '","sha256":"'
+        + ENVIRONMENT.workspace.sha256
+        + '","version":"'
+        + ENVIRONMENT.workspace.version
+        + '"}},'
         '"files":['
         '{"path":"model/device-model.json","sha256":"' + "11" * 32 + '"},'
         '{"path":"patches/zephyr/0001-fix.patch","sha256":"' + "22" * 32 + '"}],'
@@ -189,7 +215,7 @@ def test_the_order_files_are_given_in_does_not_matter() -> None:
     """The sort is part of the rule: the list is a set with an encoding."""
     computed = context_id(
         sdk_sha256=SDK_SHA,
-        environment_digest=ENVIRONMENT_DIGEST,
+        environment=ENVIRONMENT,
         board=BOARD,
         files=reversed(FILES),
     )
@@ -199,7 +225,30 @@ def test_the_order_files_are_given_in_does_not_matter() -> None:
 def test_every_hashed_field_changes_the_id() -> None:
     variants = [
         {"sdk_sha256": "dc" * 32},
-        {"environment_digest": "sha256:" + "5e" * 32},
+        # Each of the six members of the two environment triples on its own.
+        {
+            "environment": replace(
+                ENVIRONMENT, workspace=replace(ENVIRONMENT.workspace, sha256="5e" * 32)
+            )
+        },
+        {
+            "environment": replace(
+                ENVIRONMENT, workspace=replace(ENVIRONMENT.workspace, name="other-workspace")
+            )
+        },
+        {
+            "environment": replace(
+                ENVIRONMENT, workspace=replace(ENVIRONMENT.workspace, version="9.9.9")
+            )
+        },
+        {"environment": replace(ENVIRONMENT, tools=replace(ENVIRONMENT.tools, sha256="6f" * 32))},
+        {
+            "environment": replace(
+                ENVIRONMENT,
+                tools=replace(ENVIRONMENT.tools, name="mcuhome-build-tools_linux-amd64"),
+            )
+        },
+        {"environment": replace(ENVIRONMENT, tools=replace(ENVIRONMENT.tools, version="9.9.9"))},
         {"board": "nrf52840dk/nrf52840"},
         # A file's content, a file's path, one file more, one file less.
         {"files": (FILES[0], replace(FILES[1], sha256="33" * 32))},
@@ -211,7 +260,7 @@ def test_every_hashed_field_changes_the_id() -> None:
         context_id(
             **{
                 "sdk_sha256": SDK_SHA,
-                "environment_digest": ENVIRONMENT_DIGEST,
+                "environment": ENVIRONMENT,
                 "board": BOARD,
                 "files": FILES,
                 **variant,
@@ -227,7 +276,7 @@ def test_a_duplicate_path_is_refused() -> None:
     with pytest.raises(BuildError) as caught:
         context_id(
             sdk_sha256=SDK_SHA,
-            environment_digest=ENVIRONMENT_DIGEST,
+            environment=ENVIRONMENT,
             board=BOARD,
             files=(FILES[0], replace(FILES[0], sha256="33" * 32)),
         )
@@ -238,7 +287,7 @@ def test_a_malformed_file_hash_is_refused() -> None:
     with pytest.raises(BuildError):
         context_id(
             sdk_sha256=SDK_SHA,
-            environment_digest=ENVIRONMENT_DIGEST,
+            environment=ENVIRONMENT,
             board=BOARD,
             files=(replace(FILES[0], sha256="not-a-hash"),),
         )
@@ -248,7 +297,7 @@ def test_a_missing_board_is_refused() -> None:
     with pytest.raises(BuildError):
         context_id(
             sdk_sha256=SDK_SHA,
-            environment_digest=ENVIRONMENT_DIGEST,
+            environment=ENVIRONMENT,
             board="  ",
             files=FILES,
         )
@@ -262,7 +311,7 @@ def test_an_unusable_path_is_refused(path: str) -> None:
     with pytest.raises(BuildError):
         context_id(
             sdk_sha256=SDK_SHA,
-            environment_digest=ENVIRONMENT_DIGEST,
+            environment=ENVIRONMENT,
             board=BOARD,
             files=(ContextFile(path=path, sha256="11" * 32),),
         )
@@ -284,7 +333,7 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
     with pytest.raises(BuildError) as caught:
         context_id(
             sdk_sha256=SDK_SHA,
-            environment_digest=ENVIRONMENT_DIGEST,
+            environment=ENVIRONMENT,
             board=BOARD,
             files=(ContextFile(path=path, sha256="11" * 32),),
         )
@@ -292,19 +341,19 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Context format 3: the pinned build environment and identity
+# Context format 4: the pinned package set and identity
 # --------------------------------------------------------------------------
 
 
-def test_the_format_version_is_three() -> None:
-    """Version 2 is gone rather than supported alongside this one.
+def test_the_format_version_is_four() -> None:
+    """Version 3 is gone rather than supported alongside this one.
 
     Pinned as a number because everything else in this file is written
     against it: the golden ID, the vectors, and the refusal a document of
     another version gets. Nothing is published, so the bump cost nothing
     — and this assertion is what makes the next bump a deliberate act.
     """
-    assert CONTEXT_VERSION == 3
+    assert CONTEXT_VERSION == 4
 
 
 @pytest.mark.parametrize(
@@ -413,52 +462,57 @@ def test_normalize_release_strips_one_leading_v(version: str, expected: str) -> 
 # --------------------------------------------------------------------------
 
 
-PINNED = "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10@sha256:" + "ab" * 32
-
-
-def test_a_pin_carries_its_digest_where_the_identity_reads_it() -> None:
-    """One string in the document, one place the digest is written."""
-    assert EnvironmentPin(reference=PINNED).digest == "sha256:" + "ab" * 32
-    assert environment_digest(PINNED) == "sha256:" + "ab" * 32
+#: A pin whose tools entry names one platform's package rather than the
+#: family — the second of the two shapes §4 allows.
+CONCRETE = replace(
+    ENVIRONMENT,
+    tools=replace(ENVIRONMENT.tools, name="mcuhome-build-tools_linux-amd64"),
+)
 
 
 @pytest.mark.parametrize(
-    "reference",
+    "broken",
     [
-        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10",
-        "ghcr.io/mcu-home/build-container",
-        "",
-        "   ",
-        "ghcr.io/x@sha256:short",
-        "ghcr.io/x@md5:" + "ab" * 16,
-        "ghcr.io/x@sha256:" + "AB" * 32,
-        "ghcr.io/x@" + "ab" * 32,
-        # No repository at all. It has to be refused *here*, because this
-        # is the only check a document's environment field goes through:
-        # a rule that looked past the `@` and no further would accept a
-        # reference nothing can run and leave it to be discovered by
-        # whoever tried.
-        "@sha256:" + "ab" * 32,
-        "ghcr.io/@sha256:" + "ab" * 32,
-        "ghcr.io/X/y@sha256:" + "ab" * 32,
+        # The name: empty, uppercase, a second underscore, a slash.
+        PackagePin(name="", version="1.0", sha256="ab" * 32),
+        PackagePin(name="MCUHome-Build-Tools", version="1.0", sha256="ab" * 32),
+        PackagePin(name="a_b_c", version="1.0", sha256="ab" * 32),
+        PackagePin(name="build-tools/mcuhome-build-tools", version="1.0", sha256="ab" * 32),
+        PackagePin(name="-leading-dash", version="1.0", sha256="ab" * 32),
+        # The version: empty, and something that is not one.
+        PackagePin(name="mcuhome-build-tools", version="", sha256="ab" * 32),
+        PackagePin(name="mcuhome-build-tools", version="1 0", sha256="ab" * 32),
+        # The hash: uppercase, short, prefixed, not a string.
+        PackagePin(name="mcuhome-build-tools", version="1.0", sha256="AB" * 32),
+        PackagePin(name="mcuhome-build-tools", version="1.0", sha256="ab" * 16),
+        PackagePin(name="mcuhome-build-tools", version="1.0", sha256="sha256:" + "ab" * 32),
+        PackagePin(name="mcuhome-build-tools", version="1.0", sha256=None),
     ],
 )
-def test_a_reference_that_is_not_a_pin_is_refused(reference: str) -> None:
-    """A tag alone moves, and hashing a moving name would be a lie.
+def test_an_environment_entry_that_is_not_a_pin_is_refused(broken) -> None:
+    """All three members have exactly one spelling, and all three are hashed.
 
     Uppercase hex is refused rather than normalized for the reason every
     other identity input is: two spellings of one value are two values as
-    far as a hash is concerned.
+    far as a hash is concerned. The **name** is checked as strictly,
+    because a family name and a per-platform name are different pins with
+    different meanings, and one of them resolving to the other would let
+    two builds share an identity.
     """
     with pytest.raises(BuildError):
-        environment_digest(reference)
+        context_id(
+            sdk_sha256=SDK_SHA,
+            environment=replace(ENVIRONMENT, tools=broken),
+            board=BOARD,
+            files=FILES,
+        )
 
 
-def test_a_manifest_is_only_valid_when_its_environment_is_pinned() -> None:
-    """The check that used to be the Zephyr line's is the pin's now."""
+def test_a_manifest_is_only_valid_when_both_its_packages_are_pinned() -> None:
+    """The check that used to be the image digest's is the two triples'."""
     unpinned = ContextManifest(
         sdk=SdkPin(constraint="", version="0.1.0", url="", sha256=SDK_SHA),
-        build_environment=EnvironmentPin(reference="ghcr.io/mcu-home/build-container:x"),
+        build_environment=replace(ENVIRONMENT, workspace=replace(ENVIRONMENT.workspace, sha256="")),
         board=BOARD,
         files=FILES,
         id=GOLDEN_ID,
@@ -468,51 +522,98 @@ def test_a_manifest_is_only_valid_when_its_environment_is_pinned() -> None:
 
 
 def test_a_manifest_and_its_request_round_trip_through_their_documents() -> None:
-    """Both halves carry the pin, and both read back exactly what was written."""
-    pin = EnvironmentPin(reference=PINNED)
+    """Both halves carry the pin, and both read back exactly what was written.
+
+    The one difference between them is the location hint: the request
+    carries it, the lock does not — where the bytes were found is not part
+    of what is in the context.
+    """
+    hinted = replace(
+        ENVIRONMENT,
+        workspace=replace(ENVIRONMENT.workspace, url="https://example.invalid/w.tar.zst"),
+    )
     sdk = SdkPin(constraint="~=0.1", version="0.1.0", url="", sha256=SDK_SHA)
     request = ContextRequest(
-        sdk=sdk, build_environment=pin, board=BOARD, created="2026-08-18T00:00:00Z"
+        sdk=sdk, build_environment=hinted, board=BOARD, created="2026-08-18T00:00:00Z"
     )
     assert ContextRequest.from_dict(request.to_dict()) == request
-    assert request.to_dict()["build_environment"] == PINNED
+    assert request.to_dict()["build_environment"]["workspace"] == {
+        "name": hinted.workspace.name,
+        "version": hinted.workspace.version,
+        "sha256": hinted.workspace.sha256,
+        "url": hinted.workspace.url,
+    }
 
     manifest = ContextManifest(
         sdk=sdk,
-        build_environment=pin,
+        build_environment=ENVIRONMENT,
         board=BOARD,
         files=FILES,
         id=context_id(
             sdk_sha256=SDK_SHA,
-            environment_digest=pin.digest,
+            environment=ENVIRONMENT,
             board=BOARD,
             files=FILES,
         ),
     )
     assert ContextManifest.from_dict(manifest.to_dict()) == manifest
     assert manifest.compute_id() == manifest.id
+    assert "url" not in manifest.to_dict()["build_environment"]["tools"]
+    assert manifest.compute_id() == GOLDEN_ID
     validate_manifest(manifest)
+
+
+def test_a_request_that_carried_hints_locks_without_them() -> None:
+    """``without_urls`` is what makes a written lock equal a read-back one."""
+    hinted = replace(
+        ENVIRONMENT,
+        workspace=replace(ENVIRONMENT.workspace, url="https://example.invalid/w.tar.zst"),
+        tools=replace(ENVIRONMENT.tools, url="https://example.invalid/t/"),
+    )
+    assert hinted.without_urls() == ENVIRONMENT
+    # And the hint never reaches the identity either way.
+    assert context_id(sdk_sha256=SDK_SHA, environment=hinted, board=BOARD, files=FILES) == GOLDEN_ID
+
+
+def test_a_meta_pin_and_a_concrete_pin_are_two_contexts() -> None:
+    """The reason ``name`` is inside the hashed triple.
+
+    A family pin resolves per platform; a per-platform pin does not. Same
+    version, same bytes on this host, two different statements about what
+    may run the context — so two identities. An implementation that
+    hashed only version and hash would give them one.
+    """
+    assert context_id(
+        sdk_sha256=SDK_SHA, environment=ENVIRONMENT, board=BOARD, files=FILES
+    ) != context_id(sdk_sha256=SDK_SHA, environment=CONCRETE, board=BOARD, files=FILES)
 
 
 def test_two_contexts_differing_only_in_their_environment_are_two_contexts() -> None:
     """The whole reason the pin is hashed.
 
     Under the format this replaced, the same sources built in two
-    different containers produced one identity — which made the document
-    that names a build name two of them.
+    different environments produced one identity — which made the
+    document that names a build name two of them.
     """
-    other = "sha256:" + "cd" * 32
+    other = replace(ENVIRONMENT, tools=replace(ENVIRONMENT.tools, sha256="cd" * 32))
     assert context_id(
         sdk_sha256=SDK_SHA,
-        environment_digest="sha256:" + "ab" * 32,
+        environment=ENVIRONMENT,
         board=BOARD,
         files=FILES,
     ) != context_id(
         sdk_sha256=SDK_SHA,
-        environment_digest=other,
+        environment=other,
         board=BOARD,
         files=FILES,
     )
+
+
+def test_a_malformed_environment_document_is_refused_on_read() -> None:
+    """A reader refuses a document that does not describe a package set."""
+    for broken in ({}, {"workspace": "x"}, {"workspace": {}, "tools": {}}, "a string", None):
+        with pytest.raises((BuildError, KeyError, TypeError)):
+            EnvironmentPin.from_dict(broken)
 
 
 # --------------------------------------------------------------------------

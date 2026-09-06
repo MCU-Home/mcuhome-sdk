@@ -55,8 +55,9 @@ does not name the version the commit declares, then builds the SDK
 archive and the `mcuhome-build-workspace` package from that **commit**
 with a pinned compressor, and attaches each archive and its `.sha256` to
 the GitHub release — the workspace package's declaration sidecar
-(`<archive>.build-environment.json`) goes up alongside it. The workspace
-package builds by default; a manual dispatch can turn it off with the
+(`<archive>.build-environment.json`) and the SDK archive's environment
+lock (`<archive>.build-environment.lock.json`) go up alongside them. The
+workspace package builds by default; a manual dispatch can turn it off with the
 `workspace` input (`workflow_dispatch`, default `true`) when only the SDK
 archive is wanted.
 
@@ -74,6 +75,40 @@ bare HTTP 500 or an empty asset); every archive this workflow uploads is
 checked against that limit first and fails with a sentence instead. The
 workspace package — a multi-gigabyte source-world snapshot — is the one
 that can actually reach it; the SDK and tools archives sit far below.
+
+### The environment lock
+
+The SDK archive carries a file `build-environment.lock.json` at its top
+level, and the same bytes are written beside it as
+`<archive>.build-environment.lock.json`. It states which build
+environment this release was built and tested with:
+
+```json
+{
+  "packages.mcuhome-build-tools": "0.1.10.dev1",
+  "packages.mcuhome-build-workspace": "0.1.10.dev1"
+}
+```
+
+`scripts/build_sdk_archive.py` generates it; nothing in the repository is
+committed for it. The workspace version is the SDK's **own** version,
+because the workspace package is built from this tag; the tools version
+is read out of `scripts/build_env_package.py`'s `TOOLS_VERSION` at the
+packaged commit, because the tools move on their own cadence. Neither
+member carries a hash — at this point nobody has built those archives —
+so a client resolves the versions to bytes through the package host's
+signed index.
+
+**What this means for a release that changes the tools.** Bump
+`TOOLS_VERSION` in `scripts/build_env_package.py` *before* cutting the
+release, or the lock will name the old tools package and every device
+built with this SDK will get it. The two versions are independent on
+purpose, and the lock is the only place they are tied together.
+
+A workbench reads the lock out of the archive it already verified against
+the pin, which is why the copy inside the package is the authoritative
+one; the sidecar exists so a mirror and a release page can serve the same
+statement without unpacking anything.
 
 ## 3. Publish it — the registry operator's step
 

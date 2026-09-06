@@ -156,6 +156,29 @@ INDEX_FILE = "index.json"
 #: the file name carries the version, the index key does not.
 PACKAGE_NAME = "mcuhome-sdk"
 
+#: The environment lock: which build-environment packages this release
+#: was built and tested with. Written into the archive *and* beside it —
+#: inside, because whoever resolves the pins has already verified those
+#: bytes against the index, and reading the answer out of the package
+#: itself is the one route that cannot be substituted; beside, so a
+#: mirror and a release page can serve it without unpacking anything.
+#:
+#: Its shape is the abstract package set of the build environment
+#: specification §5.1: one ``packages.<name>`` member per package, value
+#: ``<version>``, no hashes. An SDK release cannot state hashes — the
+#: workspace package is built *from* this tag and the tools package's
+#: bytes differ per platform — so the versions are the statement and the
+#: signed index turns them into bytes.
+LOCK_FILE = "build-environment.lock.json"
+PACKAGE_MEMBER_PREFIX = "packages."
+WORKSPACE_PACKAGE = "mcuhome-build-workspace"
+TOOLS_FAMILY = "mcuhome-build-tools"
+
+#: Where the tools version is written down: the packaging script's own
+#: constant, read out of the archived commit rather than imported, for
+#: the reason :data:`VERSION_FILE` is.
+TOOLS_VERSION_FILE = "scripts/build_env_package.py"
+
 #: Fixed, and part of what makes two builds of one tag agree. 19 is the
 #: highest level with a bounded memory appetite; the archive is written
 #: once per release and read on every build, so the asymmetry is the
@@ -222,9 +245,19 @@ def package_filename(version: str) -> str:
     return f"mcuhome-sdk-{version}.tar.zst"
 
 
+#: Members this script writes itself rather than taking from the commit.
+#: They are allowlisted like every other member, so the check that the
+#: archive holds nothing outside the allowlist covers them too.
+GENERATED_FILES = frozenset({LOCK_FILE})
+
+
 def included(path: str) -> bool:
-    """Whether *path* is one of the allowlisted files or inside an allowlisted tree."""
-    return path in SDK_FILES or any(path.startswith(f"{tree}/") for tree in SDK_TREES)
+    """Whether *path* is allowlisted: a named file, a named tree, or generated."""
+    return (
+        path in SDK_FILES
+        or path in GENERATED_FILES
+        or any(path.startswith(f"{tree}/") for tree in SDK_TREES)
+    )
 
 
 def _git(repository: Path, *arguments: str) -> bytes:
@@ -256,6 +289,60 @@ def archived_version(repository: Path, commit: str) -> str:
         if isinstance(value, str):
             return value
     raise SystemExit(f"{VERSION_FILE} at {commit} declares no string __version__")
+
+
+def _assigned(source: str, name: str, *, where: str) -> str:
+    """The string a module-level ``<name> = "..."`` assigns, or a refusal."""
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if name not in (target.id for target in node.targets if isinstance(target, ast.Name)):
+            continue
+        value = ast.literal_eval(node.value)
+        if isinstance(value, str):
+            return value
+    raise SystemExit(f"{where} declares no string {name}")
+
+
+def tools_version(repository: Path, commit: str) -> str:
+    """The tools package version *commit* builds its environment with.
+
+    Read out of ``scripts/build_env_package.py`` at the packaged
+    revision, which is the one place that number is written down. The
+    tools move on their own cadence, so it is not the SDK's version and
+    cannot be derived from it.
+    """
+    source = _git(repository, "cat-file", "blob", f"{commit}:{TOOLS_VERSION_FILE}").decode("utf-8")
+    return _assigned(source, "TOOLS_VERSION", where=f"{TOOLS_VERSION_FILE} at {commit}")
+
+
+def environment_lock(*, version: str, tools: str) -> dict[str, str]:
+    """The lock document: which environment packages this release wants.
+
+    The workspace package is stated at the SDK's **own** version, because
+    it is built from this tag; the tools package is named by its family
+    at version level only, because its bytes differ per platform on
+    purpose and the sibling platforms' archives may not exist yet.
+    Neither carries a hash: nothing has built them at this point, and the
+    signed index is where a version becomes bytes.
+    """
+    return {
+        f"{PACKAGE_MEMBER_PREFIX}{TOOLS_FAMILY}": tools,
+        f"{PACKAGE_MEMBER_PREFIX}{WORKSPACE_PACKAGE}": version,
+    }
+
+
+def lock_bytes(document: dict[str, str]) -> bytes:
+    """*document* as the bytes both copies carry — the same bytes, twice.
+
+    Sorted keys, two-space indent, one trailing newline: the archive
+    member and the sidecar are written from one value and must not differ
+    in a byte, or the copy a reader happened to take would decide what a
+    release means.
+    """
+    return (json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode(
+        "utf-8"
+    )
 
 
 def sdk_entries(archive: bytes) -> dict[str, tuple[bytes, bool]]:
@@ -362,6 +449,11 @@ def build_archive(*, repository: Path, revision: str, output_dir: Path) -> SdkAr
     entries = sdk_entries(_git(repository, "archive", "--format=tar", commit))
     if "mcuhome-sdk.json" not in entries:
         raise SystemExit(f"{commit} carries no mcuhome-sdk.json — that tree is not an SDK")
+    # Generated rather than committed: the workspace version *is* the SDK
+    # version, and a file in the tree restating it would be a second
+    # place for one number to be wrong in.
+    lock = lock_bytes(environment_lock(version=version, tools=tools_version(repository, commit)))
+    entries[LOCK_FILE] = (lock, False)
     payload = compress(write_tar(entries, mtime=mtime))
     digest = hashlib.sha256(payload).hexdigest()
 
@@ -373,6 +465,10 @@ def build_archive(*, repository: Path, revision: str, output_dir: Path) -> SdkAr
     (output_dir / f"{archive.name}.sha256").write_text(
         f"{digest}  {archive.name}\n", encoding="utf-8"
     )
+    # The same bytes the archive carries, beside it — named for the file
+    # rather than for the package, the way the .sha256 sidecar is, so a
+    # directory holding two releases keeps two locks.
+    (output_dir / f"{archive.name}.{LOCK_FILE}").write_bytes(lock)
     write_index(
         output_dir / INDEX_FILE,
         version=version,

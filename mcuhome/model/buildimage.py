@@ -29,6 +29,14 @@ from what a build runs.
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+
+from mcuhome.model.errors import BuildError
+from mcuhome.model.imageref import DOCKER_HUB, parse_reference
+
+_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+
 __all__ = [
     "CCACHE_DIR_VAR",
     "CONTAINER_HOME",
@@ -37,7 +45,10 @@ __all__ = [
     "DOCKERFILE_DIR",
     "DOCKER_VAR",
     "IMAGE",
+    "ENVIRONMENT_IMAGE_REPOSITORY",
     "IMAGE_REPOSITORY",
+    "ImagePin",
+    "image_digest",
     "IMAGE_REVISION",
     "IMAGE_TAG",
     "IMAGE_VAR",
@@ -261,9 +272,83 @@ ZEPHYR_LABEL = f"{LABEL_PREFIX}.zephyr.version"
 #: than the label costs.
 TOOLCHAIN_LABEL = f"{LABEL_PREFIX}.toolchain"
 
+#: The repository of the image that assembles the environment
+#: **packages** — the delivery of the package set a build context pins,
+#: as opposed to the baked ``build-container`` above. Its identity is
+#: never its tag: it is matched by the ``packages.`` labels it declares,
+#: and a tag only says where a copy of it is.
+ENVIRONMENT_IMAGE_REPOSITORY = "ghcr.io/mcu-home/build-environment"
+
 #: The three together — what an image must carry to be one of these at
 #: all. **Absence is never read as compatible**: an environment that does
 #: not say what it builds against has not made the declaration a
 #: constraint is written against, so a missing label disqualifies rather
 #: than defaulting.
 REQUIRED_LABELS = (CONTRACT_LABEL, ZEPHYR_LABEL, TOOLCHAIN_LABEL)
+
+
+# --------------------------------------------------------------------------
+# One image, pinned
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ImagePin:
+    """One container image, named the way a container runtime names it.
+
+    A Docker reference in its full explicit form, and it **must carry a
+    digest**:
+    ``ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10@sha256:…``. The
+    tag is documentation for whoever reads the record later; the digest
+    is what a runtime fetches.
+
+    One string rather than a block of parts, because every consumer is a
+    container runtime and this is the spelling every container runtime
+    takes. Splitting it into registry, path, tag and digest would create
+    four fields that can disagree with each other and one join to get
+    wrong in each reader; parsing it is
+    :func:`mcuhome.model.imageref.parse_reference`, for the readers that
+    care about a part.
+
+    **An image is a delivery, never an identity.** What a build context
+    pins is the environment's package set
+    (:class:`~mcuhome.model.context.EnvironmentPin`); an image that
+    declares that set is one way to get it. This type is what the party
+    running such an image passes around while it does so.
+    """
+
+    reference: str
+
+    @property
+    def digest(self) -> str:
+        """The ``sha256:…`` half, checked rather than trusted."""
+        return image_digest(self.reference)
+
+
+def image_digest(reference: object) -> str:
+    """The ``sha256:…`` a pinned image reference ends in.
+
+    Strict about **both halves**, because both are read by somebody. A
+    reference without a digest is not a pin at all — it names a moving
+    tag, and two different sets of bytes could answer to it. The rest of
+    the reference is what a container runtime is handed, so it is parsed
+    here rather than trusted: a value that named no repository would be
+    accepted by a rule that only ever looks past the ``@``, and refused
+    later by whoever tried to run it.
+    """
+    if not isinstance(reference, str) or "@" not in reference:
+        raise BuildError(
+            "The build environment image is not pinned to a digest.",
+            hint=(
+                "an image is named as repository:tag@sha256:… — a tag alone moves, "
+                "and a build that cannot say which bytes produced it is not "
+                "reproducible"
+            ),
+        )
+    parsed = parse_reference(reference, default_registry=DOCKER_HUB, what="build environment")
+    if parsed.digest is None or _DIGEST.fullmatch(parsed.digest) is None:
+        raise BuildError(
+            f'The build environment image names a digest that is not one: "{parsed.digest}".',
+            hint="a digest is sha256: followed by 64 lowercase hex digits",
+        )
+    return parsed.digest

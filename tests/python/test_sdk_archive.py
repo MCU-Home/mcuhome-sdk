@@ -46,10 +46,12 @@ import pytest
 import zstandard
 
 from mcuhome.compiler.abi import sdk_entry_point
+from mcuhome.model.buildenvironment import TOOLS_FAMILY, WORKSPACE_PACKAGE, parse_lock
 from mcuhome.model.errors import BuildError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_sdk_archive.py"
+ENV_PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "build_env_package.py"
 
 #: Directories the archive must never carry, each for a reason the
 #: script's docstring records: no consumer reads them out of
@@ -91,9 +93,36 @@ def _unpacked(archive: Path) -> list[tarfile.TarInfo]:
         return tar.getmembers()
 
 
+def _member_bytes(archive: Path, name: str) -> bytes:
+    """One named member's content, decompressed in memory."""
+    raw = zstandard.ZstdDecompressor().decompress(
+        archive.read_bytes(), max_output_size=64 * 1024 * 1024
+    )
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tar:
+        handle = tar.extractfile(name)
+        assert handle is not None, f"{name} is not a regular file in the archive"
+        return handle.read()
+
+
 @pytest.fixture(scope="module")
 def module_script():
     return _script()
+
+
+@pytest.fixture(scope="module")
+def env_package_script():
+    """``build_env_package.py`` as a module, loaded the same way ``test_env_package.py`` does.
+
+    Read for its ``TOOLS_VERSION`` constant — the tools package's version
+    moves on its own cadence and is written down in exactly one place,
+    which this fixture reads rather than restates.
+    """
+    spec = importlib.util.spec_from_file_location("build_env_package", ENV_PACKAGE_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture(scope="module")
@@ -326,6 +355,74 @@ def test_an_unreadable_index_is_a_refusal_and_never_an_overwrite(module_script, 
     with pytest.raises(SystemExit):
         module_script.write_index(index, version="0.1.0", file="a.tar.zst", sha256="ab", size=1)
     assert index.read_text(encoding="utf-8") == "not json at all"
+
+
+# --------------------------------------------------------------------------
+# The environment lock
+# --------------------------------------------------------------------------
+
+
+def test_the_archive_carries_the_lock_at_its_top_level_and_it_parses(package) -> None:
+    """The one file a workbench reads to derive the workspace and tools pins.
+
+    Read out of the archive rather than assumed present: a member the
+    packer forgot would leave every device without ``sources.*`` overrides
+    unable to resolve its build environment, and the failure would only
+    show up on the consuming side.
+    """
+    content = _member_bytes(package.path, "build-environment.lock.json")
+    lock = parse_lock(json.loads(content))
+    assert set(lock.packages) == {WORKSPACE_PACKAGE, TOOLS_FAMILY}
+
+
+def test_the_lock_names_the_workspace_at_the_sdks_own_version(package) -> None:
+    """The workspace package is built *from* this tag, so it shares the tag's version."""
+    lock = parse_lock(json.loads(_member_bytes(package.path, "build-environment.lock.json")))
+    assert lock.version_of(WORKSPACE_PACKAGE) == package.version
+
+
+def test_the_lock_names_the_tools_family_at_the_scripts_own_version(
+    package, env_package_script
+) -> None:
+    """The tools move on their own cadence, so their number is not derived from the SDK's."""
+    lock = parse_lock(json.loads(_member_bytes(package.path, "build-environment.lock.json")))
+    assert lock.version_of(TOOLS_FAMILY) == env_package_script.TOOLS_VERSION
+
+
+def test_neither_lock_member_carries_a_hash(package) -> None:
+    """An SDK release cannot know these hashes: nothing has built those archives yet."""
+    lock = parse_lock(json.loads(_member_bytes(package.path, "build-environment.lock.json")))
+    assert lock.packages[WORKSPACE_PACKAGE].sha256 is None
+    assert lock.packages[TOOLS_FAMILY].sha256 is None
+
+
+def test_the_sidecar_lock_is_byte_identical_to_the_archive_member(package) -> None:
+    """One value written twice, not two independent renderings of the same document.
+
+    A mirror or a release page serves the sidecar without unpacking
+    anything; if it ever disagreed with the copy inside the archive, which
+    one a reader saw would depend on which route they took.
+    """
+    sidecar = package.path.parent / f"{package.path.name}.build-environment.lock.json"
+    assert sidecar.read_bytes() == _member_bytes(package.path, "build-environment.lock.json")
+
+
+def test_a_second_build_writes_a_byte_identical_sidecar_lock_too(
+    module_script, package, tmp_path
+) -> None:
+    """The determinism proof extended to the file that lives beside the archive.
+
+    ``test_two_builds_of_one_revision_are_byte_identical`` already compares
+    the archive itself byte for byte, which covers the lock member inside
+    it; the sidecar is a second file this script writes and needs its own
+    check.
+    """
+    again = module_script.build_archive(
+        repository=REPO_ROOT, revision="HEAD", output_dir=tmp_path / "second"
+    )
+    first_sidecar = package.path.parent / f"{package.path.name}.build-environment.lock.json"
+    second_sidecar = again.path.parent / f"{again.path.name}.build-environment.lock.json"
+    assert second_sidecar.read_bytes() == first_sidecar.read_bytes()
 
 
 # --------------------------------------------------------------------------

@@ -144,6 +144,45 @@ of every platform's package, so pinning the family still pins the exact
 bytes each platform will get. A host does not choose a package — it looks
 up the one entry that was already decided for it.
 
+### Where the two pins come from
+
+This is about the party that *writes* a context, not about the one that
+reads it: a reader finds three resolved values per entry and needs to
+know nothing about how they were arrived at. It is written down because
+"pinned, not requested" only means something if the pinning has a rule.
+
+The **versions** come from the SDK release. Every release carries a file
+`build-environment.lock.json` — inside the SDK package and, byte for
+byte the same document, beside it — stating the build environment it was
+built and tested with. Its shape is the abstract package set of the
+[build environment specification](build-environment-specification.md)
+§5.1: one `packages.<name>` member per package, value `<version>`, no
+hashes.
+
+```json
+{
+  "packages.mcuhome-build-tools": "0.1.10.dev1",
+  "packages.mcuhome-build-workspace": "0.1.10.dev1"
+}
+```
+
+It carries no hashes because at that moment nobody could: the workspace
+package is built *from* the SDK's own tag, and the tools package's bytes
+differ per platform. So the **hashes** come from the package host's
+index, where a version resolves to bytes — a concrete package's archive
+hash, or a meta entry's hash over the members it points at. Whoever
+writes a context resolves the lock's versions against an index it trusts
+and writes the triples out.
+
+A device may override either entry, and then that entry's version is the
+device's and only the hash is looked up. An override that states a hash
+as well decides the whole entry and nothing is looked up at all, which is
+what lets a context be created with no index in reach.
+
+None of this is in the context. A context states what was decided, and
+two contexts with the same six values are the same environment however
+either party got there.
+
 ## 5. `manifest.yaml` — the lock
 
 The request restated, plus the two things that do not exist until the
