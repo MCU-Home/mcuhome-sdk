@@ -171,20 +171,29 @@ patched trees, and overlay filesystems are deliberately not relied on
 The subprocess profile runs the packaged tools on the host, so the
 tools package defines a minimum host baseline. With zap out of the
 runtime (section 2), the floors are set by the Zephyr SDK toolchain and
-the Zephyr build system:
+the Zephyr build system — except for Python, which is not a floor but an
+exact requirement:
 
-| Dimension | Floor | Set by |
+| Dimension | Requirement | Set by |
 |---|---|---|
 | glibc | ≥ 2.28 | Zephyr SDK prebuilt toolchain (gn needs only 2.18) |
-| Python | ≥ 3.12 | Zephyr v4.4 build scripts |
+| Python | exactly the minor the wheel set targets — the current Debian stable's, 3.13 today | tools package's wheel set (Zephyr v4.4's build scripts only need ≥ 3.12, a lower floor) |
 | CMake | ≥ 3.20 | Zephyr v4.4 (4.5+ raises this to 3.28) |
 | dtc | ≥ 1.4.6 | Zephyr build system |
 | Architecture | x86_64, aarch64 (Linux) | all prebuilt tool sources |
 | libc family | glibc only, no musl | Zephyr SDK prebuilt toolchain |
 
+Compiled wheels install only into the minor they were built for, so the
+subprocess profile needs that minor and no other; the provisioner checks
+the host interpreter against the wheel set before it creates the build's
+virtual environment and refuses legibly, naming the version it needs.
+Nothing is downloaded or compiled to paper over a difference. The
+container profile never sees the question, because the base image
+already carries that Python.
+
 The container base image (Debian trixie: glibc 2.41, Python 3.13,
-CMake 3.31, dtc 1.7) satisfies every floor — the container is simply a
-host that always qualifies.
+CMake 3.31, dtc 1.7) satisfies every line of the table — the container
+is simply a host that always qualifies.
 
 ## 7. Compiler cache
 
