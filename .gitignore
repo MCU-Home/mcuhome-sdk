@@ -6,6 +6,7 @@ build_*/
 twister-out*/
 .cache/
 compile_commands.json
+.deps/
 
 # ai coding agents, which live in the workspace and never in a repository
 AGENTS.md

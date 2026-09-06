@@ -63,7 +63,10 @@ gates = [
 next_steps = [
   "git push && git push origin {tag}",
   "",
-  "Then, once https://mirror-1.packages.mcuhome.org/sdk/index.json lists it:",
+  "Want the image? Dispatch the tools build if wanted (RELEASING.md",
+  "step 2), wait for the operator to publish (step 3) so both",
+  "mirror-1.packages.mcuhome.org/build-workspace/ and .../build-tools/",
+  "index.json list this version, then:",
   "  gh workflow run release.yml -f tag={tag} -f image=true",
 ]
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Cut a release: version, changelog, gates, commit, tag — and stop there.
+"""Cut a release: version, optional changelog, gates, commit, tag — and stop there.
 
 Nobody remembers a release procedure, and the parts of one that are
 remembered wrongly are the expensive parts. This script is the whole
