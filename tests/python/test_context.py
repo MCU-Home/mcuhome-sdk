@@ -29,10 +29,12 @@ from mcuhome.model.context import (
     CONTEXT_FILE,
     CONTEXT_ID_VECTORS,
     CONTEXT_VERSION,
+    DEVELOPER_ENVIRONMENT,
     MANIFEST_FILE,
     ContextFile,
     ContextManifest,
     ContextRequest,
+    DeveloperEnvironment,
     EnvironmentPin,
     GeneratorEntry,
     PackagePin,
@@ -40,8 +42,10 @@ from mcuhome.model.context import (
     canonical_json,
     context_id,
     format_generator_chain,
+    parse_environment,
     parse_generator_chain,
     validate_manifest,
+    validate_request,
     vector_id,
 )
 from mcuhome.model.errors import BuildError
@@ -151,9 +155,9 @@ def test_an_implementation_sorting_by_utf16_code_units_fails_the_suite() -> None
     from a correct one.
 
     So: replay every vector with a UTF-16 sort in place of the code-point
-    sort, and *some* vector must come out wrong. Five of the six do not
-    (they are ASCII, or single-file, or below U+D800); the sixth is
-    there so this assertion has something to stand on. Deleting it makes
+    sort, and *some* vector must come out wrong. All but one do not (they
+    are ASCII, or single-file, or below U+D800); that one is there so
+    this assertion has something to stand on. Deleting it makes
     this test fail, which is the whole point of writing it as a check on
     the table rather than as a sixth assertion inside it.
     """
@@ -169,14 +173,18 @@ def test_an_implementation_sorting_by_utf16_code_units_fails_the_suite() -> None
             ],
             "sdk": {"sha256": inputs["sdk_sha256"]},
             "target": {"board": inputs["board"]},
-            "build_environment": {
-                half: {
-                    "name": entry["name"],
-                    "sha256": entry["sha256"],
-                    "version": entry["version"],
+            "build_environment": (
+                inputs["environment"]
+                if isinstance(inputs["environment"], str)
+                else {
+                    half: {
+                        "name": entry["name"],
+                        "sha256": entry["sha256"],
+                        "version": entry["version"],
+                    }
+                    for half, entry in inputs["environment"].items()
                 }
-                for half, entry in inputs["environment"].items()
-            },
+            ),
         }
         return "sha256:" + hashlib.sha256(canonical_json(document).encode("utf-8")).hexdigest()
 
@@ -563,6 +571,150 @@ def test_a_manifest_and_its_request_round_trip_through_their_documents() -> None
     validate_manifest(manifest)
 
 
+def test_a_developer_context_round_trips_as_one_word() -> None:
+    """The second form of ``build_environment``, through both documents.
+
+    A build against a workspace somebody maintains themselves has no
+    package set to name, so the field is the word — written as the word,
+    read back as the object that means it, in the request and in the lock
+    alike.
+    """
+    sdk = SdkPin(constraint="", version="", url="", sha256="")
+    request = ContextRequest(
+        sdk=sdk,
+        build_environment=DeveloperEnvironment(),
+        board=BOARD,
+        created="2026-09-07T00:00:00Z",
+    )
+    assert request.to_dict()["build_environment"] == DEVELOPER_ENVIRONMENT
+    assert ContextRequest.from_dict(request.to_dict()) == request
+
+    manifest = ContextManifest(
+        sdk=sdk,
+        build_environment=DeveloperEnvironment(),
+        board=BOARD,
+        files=FILES,
+        id=context_id(sdk_sha256="", environment=DeveloperEnvironment(), board=BOARD, files=FILES),
+    )
+    assert manifest.to_dict()["build_environment"] == DEVELOPER_ENVIRONMENT
+    assert ContextManifest.from_dict(manifest.to_dict()) == manifest
+    assert manifest.compute_id() == manifest.id
+    validate_manifest(manifest)
+
+
+def test_the_developer_form_hashes_the_word_and_an_empty_sdk_hash() -> None:
+    """The exact bytes under the hash of the second form, spelled out.
+
+    The member is the JSON string, not an object with empty members and
+    not a member left out, and ``sdk`` keeps its shape around an empty
+    value — a reader of another implementation has to be able to build
+    this document from the specification alone.
+    """
+    files = (ContextFile(path="model/device-model.json", sha256="c" * 64),)
+    expected = (
+        '{"build_environment":"developer",'
+        '"files":[{"path":"model/device-model.json","sha256":"' + "c" * 64 + '"}],'
+        '"sdk":{"sha256":""},'
+        '"target":{"board":"nrf52840dk/nrf52840"}}'
+    )
+    digest = hashlib.sha256(expected.encode("utf-8")).hexdigest()
+    assert (
+        context_id(
+            sdk_sha256="",
+            environment=DeveloperEnvironment(),
+            board="nrf52840dk/nrf52840",
+            files=files,
+        )
+        == f"sha256:{digest}"
+    )
+    # The same inputs in the package form are a different context, which
+    # is the point of hashing the word at all.
+    assert (
+        context_id(
+            sdk_sha256="b" * 64,
+            environment=ENVIRONMENT,
+            board="nrf52840dk/nrf52840",
+            files=files,
+        )
+        != f"sha256:{digest}"
+    )
+
+
+def test_the_two_forms_cannot_be_mixed() -> None:
+    """One form or the other: the SDK hash travels with the environment.
+
+    A document that names no environment and pins an SDK, or names the
+    packages and pins nothing, would be half a claim — and half a claim
+    about the bytes a firmware was built from is worse than either whole
+    one.
+    """
+    with pytest.raises(BuildError, match="empty package hash"):
+        context_id(sdk_sha256=SDK_SHA, environment=DeveloperEnvironment(), board=BOARD, files=FILES)
+    with pytest.raises(BuildError, match="not a SHA-256 hash"):
+        context_id(sdk_sha256="", environment=ENVIRONMENT, board=BOARD, files=FILES)
+
+
+@pytest.mark.parametrize("written", ["dev", "", "DEVELOPER", None, [], 4])
+def test_only_the_one_word_is_the_developer_form(written) -> None:
+    """The form is one literal string, and everything else is refused.
+
+    Not only the wrong word: a ``build_environment:`` with nothing after
+    it reads as YAML's null, and a reader that took "not a mapping" for
+    "the developer form" would turn a truncated document into a context
+    that builds.
+    """
+    assert parse_environment(DEVELOPER_ENVIRONMENT) == DeveloperEnvironment()
+    assert parse_environment(ENVIRONMENT.to_dict()) == ENVIRONMENT
+    with pytest.raises(BuildError):
+        parse_environment(written)
+
+
+def test_a_developer_environment_has_no_hints_to_drop() -> None:
+    """What the lock does to a request's environment, in the second form.
+
+    The lock is written from the request with the location hints dropped,
+    so every form has to survive that — and this one has nothing to drop
+    and must come back as itself rather than as nothing.
+    """
+    assert DeveloperEnvironment().without_urls() == DeveloperEnvironment()
+    assert DeveloperEnvironment().to_dict(url=False) == DEVELOPER_ENVIRONMENT
+    assert DeveloperEnvironment().described()
+
+
+def test_a_request_is_checked_as_strictly_as_a_lock() -> None:
+    """The pair rule holds for the request document too.
+
+    A reader that checked only the environment would accept a document
+    half-claiming to be pinned — the word and a real SDK hash — and every
+    party downstream would then read one half of it and believe the
+    other.
+    """
+    mixed = ContextRequest(
+        sdk=SdkPin(constraint="", version="", url="", sha256=SDK_SHA),
+        build_environment=DeveloperEnvironment(),
+        board=BOARD,
+        created="2026-09-07T00:00:00Z",
+    )
+    with pytest.raises(BuildError, match="empty package hash"):
+        validate_request(mixed)
+    with pytest.raises(BuildError, match="not a SHA-256 hash"):
+        validate_request(
+            replace(mixed, build_environment=ENVIRONMENT, sdk=replace(mixed.sdk, sha256=""))
+        )
+    validate_request(replace(mixed, sdk=replace(mixed.sdk, sha256="")))
+
+
+def test_a_reader_of_package_pins_alone_refuses_the_developer_form() -> None:
+    """The developer form is opt-in for a reader, and this is how.
+
+    A party that can only act on a package set — a build server resolves
+    an environment from one — reads the pin itself instead of the field,
+    and a developer context is then refused rather than half-understood.
+    """
+    with pytest.raises(BuildError, match="names no build environment"):
+        EnvironmentPin.from_dict(DEVELOPER_ENVIRONMENT)
+
+
 def test_a_request_that_carried_hints_locks_without_them() -> None:
     """``without_urls`` is what makes a written lock equal a read-back one."""
     hinted = replace(
@@ -673,3 +825,37 @@ def test_an_empty_chain_cannot_be_written() -> None:
     with pytest.raises(BuildError) as caught:
         format_generator_chain(())
     assert "empty generator chain" in caught.value.message
+
+
+def test_a_developer_context_reads_back_off_disk(tmp_path) -> None:
+    """The form through a real ``context.yaml``/``manifest.yaml`` on disk.
+
+    Everything else about this form is checked as objects, and objects
+    never touch the one thing the on-disk form depends on: that a YAML
+    scalar comes back as the string ``developer`` and not as something a
+    parser decided it looked like. This is the builder's own reader
+    (:mod:`mcuhome.compiler.contextread`) over a directory, which is how
+    a context reaches a build.
+    """
+    from conftest import lock_context, write_context_request
+
+    from mcuhome.compiler.contextread import read_context_manifest, verify_context
+
+    root = tmp_path / "ctx"
+    root.mkdir()
+    (root / "model").mkdir()
+    (root / "model" / "device-model.json").write_text('{"device": 1}\n', encoding="utf-8")
+    request = ContextRequest(
+        sdk=SdkPin(constraint="", version="", url="", sha256=""),
+        build_environment=DeveloperEnvironment(),
+        board=BOARD,
+        created="2026-09-07T00:00:00Z",
+    )
+    write_context_request(request, out_dir=root)
+    written = lock_context(root, request=request, build_environment=DeveloperEnvironment())
+
+    manifest = read_context_manifest(root / MANIFEST_FILE)
+    assert isinstance(manifest.build_environment, DeveloperEnvironment)
+    assert manifest.sdk.sha256 == ""
+    assert manifest.id == written.id
+    assert verify_context(root).ok

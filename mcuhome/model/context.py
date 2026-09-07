@@ -44,7 +44,12 @@ document::
 
 — the manifest's build-relevant fields under the format's fixed names
 (``sdk.sha256`` carries the manifest's ``mcuhome.package.sha256``, and
-both environment entries contribute the full triple).
+both environment entries contribute the full triple). A context written
+for a build against a workspace somebody maintains themselves has neither
+a package set nor a packed SDK to name, and says so rather than inventing
+hashes: ``build_environment`` is then the one word ``developer`` and
+``sdk.sha256`` the empty string, and the ID is computed over exactly
+that (:class:`DeveloperEnvironment`).
 ``files`` is sorted by ``path`` in
 ascending byte order of its UTF-8 encoding — which UTF-8 makes equal
 to code-point order, so a plain string sort implements it — and every
@@ -126,9 +131,12 @@ __all__ = [
     "MANIFEST_FILE",
     "MODEL_FILE",
     "PATCHES_DIR",
+    "DEVELOPER_ENVIRONMENT",
+    "ContextEnvironment",
     "ContextFile",
     "ContextManifest",
     "ContextRequest",
+    "DeveloperEnvironment",
     "EnvironmentPin",
     "GeneratorEntry",
     "PackagePin",
@@ -136,9 +144,11 @@ __all__ = [
     "canonical_json",
     "context_id",
     "format_generator_chain",
+    "parse_environment",
     "parse_generator_chain",
     "validate_environment",
     "validate_manifest",
+    "validate_request",
     "vector_id",
 ]
 
@@ -158,6 +168,14 @@ __all__ = [
 #: two deliveries of one package set, and only the set identifies the
 #: build.
 CONTEXT_VERSION = 4
+
+#: What ``build_environment`` says when there is no package set to name:
+#: the build ran against a west workspace somebody maintains themselves.
+#: One word rather than a structure with empty members, because a reader
+#: has to be able to tell "no environment was pinned" from "an
+#: environment was pinned badly" at a glance, and because the word is
+#: what the context ID hashes (:class:`DeveloperEnvironment`).
+DEVELOPER_ENVIRONMENT = "developer"
 
 #: The one file a builder must parse first, at the top of the context.
 MANIFEST_FILE = "manifest.yaml"
@@ -489,14 +507,91 @@ class EnvironmentPin:
 
 
 @dataclass(frozen=True)
+class DeveloperEnvironment:
+    """The other thing ``build_environment`` may be: the word ``developer``.
+
+    A build against a west workspace somebody maintains themselves has no
+    package set to name. Its sources are a checkout, its SDK is that
+    workspace's manifest repository, and its tools are whatever is on the
+    person's ``PATH`` — none of which was published, so none of which has
+    a name, a version or a hash anybody could state. The alternative to
+    saying so is inventing a hash, and a context whose identity rests on
+    an invented hash is worse than one that says plainly what it is.
+
+    **A context in this form is not reproducible and not remote-buildable,
+    by construction rather than by policy.** Its ID covers the files, the
+    board and the word — never the bytes it was compiled against — so two
+    such contexts with the same files share an identity while the
+    firmware they produce need not be the same. Nothing may attribute an
+    artifact to it as "built from *this*" in the sense the package form
+    supports, and a build server refuses it: the server resolves an
+    environment from the pinned package set, and there is none.
+
+    The **SDK pin travels with it**: a developer context states an empty
+    ``mcuhome.package.sha256``, because the SDK it builds is that same
+    checkout. The two are one form and :func:`context_id` refuses them
+    apart, so a document cannot half-claim to be pinned.
+    """
+
+    def to_dict(self, *, url: bool = True) -> str:
+        """The word, as both documents write it. *url* is ignored — there
+        is no location hint on something that was never fetched."""
+        return DEVELOPER_ENVIRONMENT
+
+    def without_urls(self) -> DeveloperEnvironment:
+        """Nothing to drop: this form carries no hints."""
+        return self
+
+    def described(self) -> str:
+        """One line, for a log and for a build's own record."""
+        return "a build environment you maintain yourself"
+
+
+#: What ``build_environment`` may be: the pinned package set, or the word
+#: :data:`DEVELOPER_ENVIRONMENT`. Everything that reads a context takes
+#: this type; everything that resolves packages checks for the first.
+ContextEnvironment = EnvironmentPin | DeveloperEnvironment
+
+
+def parse_environment(data: Any) -> ContextEnvironment:
+    """``build_environment`` in either of the two forms the format allows.
+
+    The mapping is the ordinary one and goes through
+    :meth:`EnvironmentPin.from_dict` unchanged; the string ``developer``
+    is :class:`DeveloperEnvironment`. Any other string is refused here
+    rather than by the mapping reader, whose message would talk about
+    blocks of fields to somebody who wrote a word.
+
+    A reader that must *not* accept the developer form calls
+    :meth:`EnvironmentPin.from_dict` directly and gets its refusal — which
+    is how a build server declines a context it could never resolve an
+    environment for.
+    """
+    if isinstance(data, str):
+        if data == DEVELOPER_ENVIRONMENT:
+            return DeveloperEnvironment()
+        raise BuildError(
+            f"The context names the build environment {data!r}.",
+            hint=(
+                "build_environment is either the two package entries this format "
+                f'describes, or the single word "{DEVELOPER_ENVIRONMENT}" for a build '
+                "against a workspace you maintain yourself"
+            ),
+        )
+    return EnvironmentPin.from_dict(data)
+
+
+@dataclass(frozen=True)
 class ContextManifest:
     """``manifest.yaml``, as an object."""
 
     sdk: SdkPin
     #: The build environment this context is compiled in, pinned by its
-    #: packages. Repeated verbatim from the request: the locking party
-    #: records what the client stated, it does not choose.
-    build_environment: EnvironmentPin
+    #: packages — or :class:`DeveloperEnvironment` for a build against a
+    #: workspace the person maintains themselves. Repeated verbatim from
+    #: the request: the locking party records what the client stated, it
+    #: does not choose.
+    build_environment: ContextEnvironment
     #: The target board — the manifest's ``target:`` section.
     board: str
     #: The integrity list: every file in the context except the manifest
@@ -551,7 +646,7 @@ class ContextManifest:
                 # identity, and _validate_manifest type-checks them.
                 sha256=package["sha256"],
             ),
-            build_environment=EnvironmentPin.from_dict(data["build_environment"]),
+            build_environment=parse_environment(data["build_environment"]),
             board=data["target"]["board"],
             files=tuple(
                 ContextFile(path=item["path"], sha256=item["sha256"]) for item in data["files"]
@@ -591,8 +686,9 @@ class ContextRequest:
     #: resolved its model's sources and its SDK's environment lock to.
     #: **Hashed**, through both triples: these are resolved values like
     #: the SDK's package hash, not an intent like the constraint beside
-    #: them.
-    build_environment: EnvironmentPin
+    #: them. :class:`DeveloperEnvironment` is the other form, and it is
+    #: hashed as the one word it is.
+    build_environment: ContextEnvironment
     #: The target board — the request's ``target:`` section.
     board: str
     #: The instant the request was created, as an ISO 8601 UTC string
@@ -630,7 +726,7 @@ class ContextRequest:
                 # where it is used, not silently normalized on read.
                 sha256=package["sha256"],
             ),
-            build_environment=EnvironmentPin.from_dict(data["build_environment"]),
+            build_environment=parse_environment(data["build_environment"]),
             board=data["target"]["board"],
             created=str(data["created"]),
         )
@@ -719,16 +815,46 @@ def _require_package(pin: PackagePin, *, what: str) -> None:
     _require_sha256(pin.sha256, what=f"The build environment's {what} hash")
 
 
-def validate_environment(environment: EnvironmentPin) -> None:
+def validate_environment(environment: ContextEnvironment) -> None:
     """Both environment entries, spelled the one way the format allows.
 
-    Public because the *request* document carries the same pin as the
-    lock and has no :func:`validate_manifest` to be checked by: a reader
-    of ``context.yaml`` has to be exactly as strict about the fields an
-    identity is computed over as a reader of ``manifest.yaml``.
+    The environment alone. Whether the SDK pin beside it agrees with the
+    form is :func:`validate_request`'s and :func:`validate_manifest`'s,
+    because that is a question about the pair and this function is given
+    one half.
+
+    The developer form has nothing to spell: it is one word, and a
+    document that carries any other one never became this object
+    (:func:`parse_environment`).
     """
+    if isinstance(environment, DeveloperEnvironment):
+        return
     _require_package(environment.workspace, what="workspace")
     _require_package(environment.tools, what="tools")
+
+
+def _require_sdk_hash(sha256: object, environment: ContextEnvironment) -> None:
+    """The SDK's hashed field, in the form its environment implies.
+
+    The two travel together and cannot be mixed. A pinned environment is
+    built with a pinned SDK, so the hash is the ordinary 64 hex digits. A
+    developer context builds the workspace's own manifest checkout, which
+    was never packed and therefore has no hash — the field is empty, and
+    empty is *required* rather than tolerated, so a document cannot claim
+    to pin an SDK it does not name an environment for.
+    """
+    if not isinstance(environment, DeveloperEnvironment):
+        _require_sha256(sha256, what="The SDK package hash")
+        return
+    if sha256 != "":
+        raise BuildError(
+            f"This context builds a development workspace and pins the SDK package {sha256!r}.",
+            hint=(
+                "a developer context builds the SDK checkout its own workspace "
+                "carries, so it states an empty package hash — remove the hash, or "
+                "name the build environment's packages"
+            ),
+        )
 
 
 def _require_board(value: object) -> None:
@@ -788,7 +914,7 @@ def _require_files(entries: Iterable[ContextFile]) -> None:
 def context_id(
     *,
     sdk_sha256: str,
-    environment: EnvironmentPin,
+    environment: ContextEnvironment,
     board: str,
     files: Iterable[ContextFile],
 ) -> str:
@@ -807,23 +933,53 @@ def context_id(
     ``(name, version, sha256)`` triple, and the two are hashed the same
     way. The ``url`` hints beside them are not hashed: they say where
     bytes were found, not which bytes they are.
+
+    A **developer** environment contributes the one word it is, and the
+    SDK hash beside it is then the empty string — the whole of what such
+    a context can honestly say about the bytes it was compiled against.
+    The consequence is stated rather than hidden: two developer contexts
+    over the same files and board have one ID and need not produce the
+    same firmware, so such a context identifies its *inputs* and never
+    its output (:class:`DeveloperEnvironment`).
     """
     entries = tuple(files)
-    _require_sha256(sdk_sha256, what="The SDK package hash")
     validate_environment(environment)
+    _require_sdk_hash(sdk_sha256, environment)
     _require_board(board)
     _require_files(entries)
     document = {
-        "build_environment": {
-            "tools": environment.tools.identity(),
-            "workspace": environment.workspace.identity(),
-        },
+        "build_environment": (
+            DEVELOPER_ENVIRONMENT
+            if isinstance(environment, DeveloperEnvironment)
+            else {
+                "tools": environment.tools.identity(),
+                "workspace": environment.workspace.identity(),
+            }
+        ),
         "files": [entry.to_dict() for entry in sorted(entries, key=lambda entry: entry.path)],
         "sdk": {"sha256": sdk_sha256},
         "target": {"board": board},
     }
     digest = hashlib.sha256(canonical_json(document).encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
+
+
+def validate_request(request: ContextRequest) -> None:
+    """The request's hashed fields, as strictly as the lock's.
+
+    The *request* carries the same pins as the lock and has no ``files``
+    or ``id`` to check, so this is :func:`validate_manifest` minus those
+    two. It exists as its own function because the pair rule — the
+    developer word and the empty SDK hash travel together, or the package
+    entries and a real one do — is a statement about two fields, and a
+    reader that checked only the environment would accept a document that
+    half-claims to be pinned. Both readers are then equally strict, which
+    is what makes a lock a restatement of its request rather than a
+    second opinion about it.
+    """
+    validate_environment(request.build_environment)
+    _require_sdk_hash(request.sdk.sha256, request.build_environment)
+    _require_board(request.board)
 
 
 def validate_manifest(manifest: ContextManifest) -> None:
@@ -838,8 +994,8 @@ def validate_manifest(manifest: ContextManifest) -> None:
     :func:`~mcuhome.workbench.contextdir.verify_context`'s question and needs a
     disk to answer.
     """
-    _require_sha256(manifest.sdk.sha256, what="The SDK package hash")
     validate_environment(manifest.build_environment)
+    _require_sdk_hash(manifest.sdk.sha256, manifest.build_environment)
     _require_board(manifest.board)
     _require_files(manifest.files)
     _require_digest(manifest.id, what="The context id")
@@ -879,6 +1035,11 @@ def validate_manifest(manifest: ContextManifest) -> None:
 #: for its JCS library's comparator for the ``files`` array gets it
 #: wrong. The "astral and BMP paths" vector is the one that catches it;
 #: every other vector in this table a UTF-16 sort passes.
+#:
+#: The last vector is the format's second form — the developer
+#: environment — and it was added, not regenerated: the hashed document
+#: of a package-pinned context did not change when that form joined the
+#: draft, so every ID above it is the number it already was.
 #:
 #: All of them were regenerated for format version 4, which is the only
 #: thing that may cause a vector's ID to change and is exactly what a
@@ -1106,6 +1267,23 @@ CONTEXT_ID_VECTORS: tuple[dict[str, Any], ...] = (
         },
         "id": "sha256:a4db29a7979b8665c2d52d471a1b7c8c581b63bfe8ca6af58bf4c7fc0573c12d",
     },
+    {
+        # "one file" a third time, in the developer form: the same file,
+        # the same board, and neither an environment nor an SDK hash to
+        # state. The two members that carry bytes collapse to the word
+        # and the empty string, which is the whole of the second form —
+        # so an implementation that hashed the word as an object, or that
+        # kept the SDK member's shape while emptying it, disagrees here
+        # and agrees with the table everywhere else.
+        "name": "developer environment",
+        "inputs": {
+            "sdk_sha256": "",
+            "environment": DEVELOPER_ENVIRONMENT,
+            "board": "nrf52840dk/nrf52840",
+            "files": (("model/device-model.json", "c" * 64),),
+        },
+        "id": "sha256:0eb27f7b019ef3fb730628278557c120f9b73e7335e80adbe006cb24e0a7b4a5",
+    },
 )
 
 
@@ -1113,17 +1291,22 @@ def vector_id(vector: dict[str, Any]) -> str:
     """Run one :data:`CONTEXT_ID_VECTORS` entry through :func:`context_id`.
 
     A vector states its files as ``(path, sha256)`` pairs and its
-    environment as two plain objects rather than as :class:`ContextFile`
-    and :class:`PackagePin` instances, so that the data stays copyable
-    into a document another implementation can read.
+    environment as two plain objects — or as the word the developer form
+    is — rather than as :class:`ContextFile` and :class:`PackagePin`
+    instances, so that the data stays copyable into a document another
+    implementation can read.
     """
     inputs = vector["inputs"]
     environment = inputs["environment"]
     return context_id(
         sdk_sha256=inputs["sdk_sha256"],
-        environment=EnvironmentPin(
-            workspace=PackagePin(**environment["workspace"]),
-            tools=PackagePin(**environment["tools"]),
+        environment=(
+            DeveloperEnvironment()
+            if environment == DEVELOPER_ENVIRONMENT
+            else EnvironmentPin(
+                workspace=PackagePin(**environment["workspace"]),
+                tools=PackagePin(**environment["tools"]),
+            )
         ),
         board=inputs["board"],
         files=[ContextFile(path=path, sha256=sha256) for path, sha256 in inputs["files"]],

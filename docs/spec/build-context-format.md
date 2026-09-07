@@ -93,9 +93,10 @@ target:
 | `mcuhome.constraint` | What the device configuration asked for — a PEP 440 specifier. The intent, not the answer. May be empty, which is PEP 440's "any version". |
 | `mcuhome.version` | What the constraint resolved to. |
 | `mcuhome.package.url` | Where those bytes were found. A hint; may be empty. |
-| `mcuhome.package.sha256` | The bytes themselves — this is what identifies the SDK. |
+| `mcuhome.package.sha256` | The bytes themselves — this is what identifies the SDK. Empty in the developer form below, where the SDK is a checkout nobody packed. |
 | `build_environment.workspace` | The architecture-neutral package carrying the environment's source world: `name`, `version`, `sha256`, and `url` as a hint. |
 | `build_environment.tools` | The tools package: `name`, `version`, `sha256`, and `url` as a hint. The same fields as the workspace entry, and they mean the same thing. |
+| `build_environment` as a whole | Either the two entries above, or the single word `developer` — see "The developer form" below. The two forms are exclusive and each fixes what `mcuhome.package.sha256` may be. |
 | `target.board` | The Zephyr board. |
 
 Both environment entries are a plain `(name, version, sha256)` triple. The
@@ -143,6 +144,54 @@ open without giving anything up: the meta hash is derived from the hashes
 of every platform's package, so pinning the family still pins the exact
 bytes each platform will get. A host does not choose a package — it looks
 up the one entry that was already decided for it.
+
+### The developer form
+
+`build_environment` has a second form, and it is the single word
+`developer`:
+
+```yaml
+context: 4
+created: 2026-09-07T09:00:00Z
+mcuhome:
+  constraint: ""
+  version: ""
+  package:
+    url: ""
+    sha256: ""
+build_environment: developer
+target:
+  board: nrf7002dk/nrf5340/cpuapp
+```
+
+It says that this build ran against a **west workspace somebody
+maintains themselves**: its sources are a checkout, its SDK is that
+workspace's own manifest repository, and its tools are whatever was on
+that person's `PATH`. None of it was published, so none of it has a
+name, a version or a hash anybody could state — and the alternative to
+saying so is inventing one.
+
+The **SDK pin travels with it**: `mcuhome.package.sha256` is the empty
+string, because the SDK this context builds is the same checkout. The
+two are one form. A document that states the word and a real SDK hash,
+or package entries and an empty one, is refused rather than read — a
+context may not half-claim to be pinned. `mcuhome.constraint`,
+`mcuhome.version` and `mcuhome.package.url` are informational as always
+and may be empty or say whatever the writer knows.
+
+Two consequences, and they are properties of the form rather than
+policies anyone applies to it:
+
+- **Such a context is not reproducible.** Its ID covers the files, the
+  board and the word — never the bytes it was compiled against — so two
+  developer contexts over the same files share an identity while the
+  firmware they produce need not be the same. What it identifies is its
+  *inputs*; it can never attribute an artifact the way the package form
+  does.
+- **Such a context is not remote-buildable.** Whoever runs a context
+  finds an environment by the packages it names, and this one names
+  none. A build server refuses it, and the party that writes one refuses
+  to send it.
 
 ### Where the two pins come from
 
@@ -224,6 +273,35 @@ anywhere, so nothing can disagree with the patches actually present.
 
 `created` is not restated: it dates the request and lives there alone.
 
+A lock restates whichever form the request used, unchanged. For the
+developer form (§4) that is the word and the empty SDK hash:
+
+```yaml
+context: 4
+mcuhome:
+  constraint: ""
+  version: ""
+  package:
+    url: ""
+    sha256: ""
+build_environment: developer
+target:
+  board: nrf7002dk/nrf5340/cpuapp
+files:
+  - path: build-context.json
+    sha256: 4175…
+  - path: keys/signing.pub
+    sha256: 8ab0…
+  - path: model/device-model.json
+    sha256: 22cd…
+id: sha256:c8e7…
+```
+
+The `id` differs from the package-form example above it although the
+files and the board are the same, and that is §6 working: the form is
+hashed, so a context that names its environment and one that cannot are
+never the same context.
+
 ## 6. The context ID
 
 `id` names the context by its content. It is the SHA-256, written
@@ -238,12 +316,48 @@ document in RFC 8785 canonical JSON:
  "target":{"board":"…"}}
 ```
 
+For the **developer form** (§4) the same four members are hashed and two
+of them are what that form says: `build_environment` is the JSON string
+`"developer"` in place of the object, and `sdk.sha256` is the empty
+string. Nothing else changes — the member is not omitted, the `sdk`
+object keeps its shape, and the whole document is canonicalised exactly
+as above:
+
+```json
+{"build_environment":"developer",
+ "files":[{"path":"…","sha256":"…"}],
+ "sdk":{"sha256":""},
+ "target":{"board":"…"}}
+```
+
+A conformance vector for it, complete, so a second implementation can
+check itself against a number rather than against a description — board
+`nrf52840dk/nrf52840`, one file `model/device-model.json` with
+`sha256` = `c` × 64:
+
+```json
+{"build_environment":"developer",
+ "files":[{"path":"model/device-model.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}],
+ "sdk":{"sha256":""},
+ "target":{"board":"nrf52840dk/nrf52840"}}
+```
+
+```
+id = sha256:0eb27f7b019ef3fb730628278557c120f9b73e7335e80adbe006cb24e0a7b4a5
+```
+
+The same inputs in the package form are the "one file" vector of
+MCUHome's own table (`mcuhome.model.context.CONTEXT_ID_VECTORS`), and the
+two IDs differ, which is the point: a context that names its environment
+and one that cannot are never the same context.
+
 `files` is sorted by `path` in ascending byte order of its UTF-8
 encoding, which for these names is a plain string sort.
 
-Four things are hashed and nothing else: the SDK's content hash, both
-environment packages as the full `(name, version, sha256)` triple §4
-gives them, the board, and every file with its own hash.
+Four things are hashed and nothing else: the SDK's content hash, the
+environment — both packages as the full `(name, version, sha256)` triple
+§4 gives them, or the word — the board, and every file with its own
+hash.
 
 The two environment entries are hashed **the same way**, and that is the
 point rather than a tidiness. A tools pin's `name` decides what the hash
@@ -260,10 +374,13 @@ about where bytes were found rather than which bytes they are.
 **The rule is frozen with format version 4.** Everything that ever names a
 context depends on computing the same ID from the same inputs forever, so
 a field can join the hashed document only together with a new format
-version. Version 4 is still an unreleased draft and this rule was changed
-inside it, when the environment reference became a package set and then a
-pair of triples; nothing that shipped ever computed the older shape. From
-the moment version 4 is released, this is what it means. Both parties to a
+version. Version 4 is still an unreleased draft and this rule has been
+changed inside it twice: when the environment reference became a package
+set and then a pair of triples, and on 2026-09-07 when the developer form
+was added — the second change left every package-form ID exactly as it
+was, because it only says what the two members are for a context that has
+no packages to name. Nothing that shipped ever computed any older shape.
+From the moment version 4 is released, this is what it means. Both parties to a
 build compute the ID independently, from the bytes they actually hold; a
 declared `id` is advisory, like every declared value.
 
@@ -323,10 +440,16 @@ the context ID hashes, and a reader of version 3 would get both wrong —
 which is precisely when the number goes up.
 
 Version 4 is a **draft** and has not been released. It has already changed
-within itself: the tools entry lost its `platforms` map and became the
-same `(name, version, sha256)` triple as the workspace entry, and the
-context ID's hashed document changed with it. The number did not move for
-that, because a draft has no readers to get anything wrong — but it is
-worth saying plainly rather than leaving a reader of an intermediate copy
-to work it out. Once version 4 is released, §6's rule is fixed for good
-and the next change is version 5.
+within itself twice. First the tools entry lost its `platforms` map and
+became the same `(name, version, sha256)` triple as the workspace entry,
+and the context ID's hashed document changed with it. Then, on
+2026-09-07, `build_environment` gained its second form — the word
+`developer`, with the empty SDK hash beside it (§4) — because a build
+against a workspace somebody maintains themselves has no package set and
+no packed SDK, and the format had no way to say so without a hash
+somebody made up. That second change added a form rather than reshaping
+one: every ID a package-pinned context had before it, it has after it.
+The number did not move for either, because a draft has no readers to get
+anything wrong — but it is worth saying plainly rather than leaving a
+reader of an intermediate copy to work it out. Once version 4 is
+released, §6's rule is fixed for good and the next change is version 5.
