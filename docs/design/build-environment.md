@@ -125,7 +125,16 @@ set, checks it against the operator's repository allowlist,
 and starts **one fresh container per step** — which is how the
 specification's pristine-tree guarantee is met for free. Mounts provide
 `mcuhome/` (request document, sdk, build-context, out, cache tiers);
-`MCUHOME_BUILDER_BASE_DIR` is `/` here. The public build server runs
+`MCUHOME_BUILDER_BASE_DIR` is `/` here. The image's baked workspace is
+disposable and the specification would allow patching it in place; the
+builder does not take that permission and views it like any other
+workspace (section 5), so this profile pays the view's cost too — and in
+a container that cost is the mirrored layers' **bytes**, because `work`
+is the container's writable layer and the workspace a layer below it
+(measured, section 9). Before the container backend moves to the v3
+invocation (section 8) this profile therefore has to put `work` where the
+workspace is, rather than take that copy on every step. The public build
+server runs
 step containers without network as operator policy; a private operator
 may relax that. Which cache tiers exist, and what backs them, is the
 operator's decision (specification §8).
@@ -165,6 +174,22 @@ context carries patches, the environment materializes patched copies
 under `work` (specification §10) — the copy cost is paid only for
 patched trees, and overlay filesystems are deliberately not relied on
 (they are frequently unavailable exactly where this profile is needed).
+
+**One path in the builder, and it is the view.** Specification §10
+permits either behaviour — a disposable tree may be patched in place, a
+read-only store must not be touched — and MCUHome's builder takes only
+the second: every step assembles the view under `work` (section 9) and
+builds in it, whatever the environment's trees are. Nothing in the
+builder asks which profile is running, because nothing in it behaves
+differently. The alternative it replaces was a write probe on the
+workspace: it answered for the filesystem rather than for the owner, so
+a store readable by root and a west workspace somebody is working in
+both came out "disposable" — and were patched in place and had the
+manifest repository's directory replaced with a symbolic link into a
+build directory that is gone at the end of the step. What the single
+path costs is the view on every step of every profile; what it buys is
+that the builder never writes into a tree it does not own, and one code
+path to test instead of two that differ by a probe.
 
 ## 6. Host baseline
 
@@ -240,7 +265,12 @@ in every compile invocation, so hit rates follow path stability:
    out of the project root into a dedicated workspace directory (the
    manifest repository lives physically in that directory; the
    accustomed dev-root path stays as a symlink pointing into it —
-   section 9).
+   section 9). One thing has to be settled before that move and is
+   nobody's business until then: a step's `work` has to sit where the
+   environment's workspace does, or the view the builder assembles copies
+   the mirrored layers into the container's writable layer on every step
+   (measured, section 9). The legacy invocation the container backend
+   still uses builds no view and does not pay it.
 
 ## 9. Feasibility findings
 
@@ -258,8 +288,10 @@ incorporate their consequences.
   deliberately lexical and replacing a *project* directory with a
   symlink is an upstream-documented pattern — the basis for symlink
   views of read-only trees.
-- **Symlink view of a read-only workspace** (verified 2026-09-06 with
-  west 1.5.0, the version the tools package ships). A view assembled
+- **View of the environment's workspace** (verified 2026-09-06 with
+  west 1.5.0, the version the tools package ships; the builder assembles
+  one for every step, read-only workspace or not — section 5). A view
+  assembled
   under `work` — the workspace's top level mirrored, links to the store's
   trees, the delivered SDK linked in at the manifest repository's place —
   is a west workspace: `west topdir` answers with the view, `west list`
@@ -304,7 +336,8 @@ incorporate their consequences.
   package is 90 005 files and 17 878 directories across the three
   mirrored layers in ≈ 3 s and ≈ 71 MB of directory entries. Where a hard
   link cannot be made — the store on another filesystem than the step's
-  work directory — that file is copied instead.
+  work directory, or a container's image layer below its writable one —
+  that file is copied instead.
 
   **The rule applies to the layers, not to every project.** Mirrored as
   real trees are three of the four a build context can patch — zephyr,
@@ -320,6 +353,24 @@ incorporate their consequences.
   a workspace of 124 000 members on every step would buy nothing. Such a
   project may declare `west-commands` too, and west's check passes for it
   because *both* sides resolve into the store together.
+
+  **The findings were measured on a read-only store and the rule is not
+  limited to one.** The builder assembles this view for every step of
+  every profile (section 5), so the container profile's baked workspace
+  and a west workspace somebody is developing in are viewed the same way.
+  What differs is what the mirror costs, and it costs bytes wherever a
+  hard link cannot be made: the workspace on another filesystem than
+  `work`, and — measured 2026-09-07 against
+  `ghcr.io/mcu-home/build-environment:0.1.10.dev1-r1` on the overlayfs
+  driver — a container, where `work` is the writable layer and the baked
+  workspace a layer below it. Hard-linking the `zephyr` layer alone
+  (59 536 files, 612 MB in the image) into `/mcuhome/work` grew that
+  container's writable layer from nothing to 392 MB: `link()` succeeds
+  and the two paths share an inode afterwards, but overlayfs copies the
+  file up first. Putting a step's `work` where the environment's
+  workspace actually lives is therefore a property a profile owes its
+  builds rather than a detail, and for the container profile it is work
+  to do before its backend moves to this invocation (section 8).
 - **Offline venv**: creating and populating a venv from a bundled wheel
   set works fully offline (`--no-index`, verified with an unreachable
   proxy) at arbitrary paths; `python3 -m venv` itself needs no network.

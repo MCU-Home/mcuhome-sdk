@@ -122,7 +122,7 @@ The release runbook, and where this step sits in it, is
 /opt/mcuhome/build-environment/
   workspace/                   the mcuhome-build-workspace package, unpacked
     build-environment.json     the §5 declaration the labels mirror
-    workspace/                 the west workspace — writable, see below
+    workspace/                 the west workspace — never written, see below
     matter-pregen/             the pre-generated Matter data model
   tools/                       the mcuhome-build-tools package, unpacked
     venv/                      created here, offline, from tools/wheels
@@ -142,14 +142,14 @@ entry point can check those but not derive them.
 point sets them, so that both profiles get the same environment out of the
 same file.
 
-**The west workspace is world-writable.** §3 promises pristine source trees
-at the start of every step, and the container profile keeps that promise by
-throwing the container away — so the trees in here are disposable by
-construction, which is what §10 allows to be patched in place. Two things
-need the permission and neither can know which UID the orchestrator will
-run the container as: a build context that patches `zephyr`, `chip` or
-`mcuboot`, and the manifest-repository link a step places to join the
-delivered SDK to the workspace.
+**The west workspace is readable by every user**, because the
+orchestrator chooses the UID a step runs as and the image cannot know it.
+It is world-*writable* as well, and that is now a leftover rather than a
+requirement: §10 would allow this profile's disposable trees to be patched
+in place, but the builder does not take that permission — it assembles a
+view of the workspace under `work` and patches copies inside it, in every
+profile alike (SDK design section 5). Nothing in the image is written by a
+step any more.
 
 **No network is needed at run time, and none at build time beyond the base
 distribution.** No `west update`, no source tree fetched, no index reached:

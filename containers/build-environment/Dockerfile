@@ -59,14 +59,13 @@ RUN apt-get update \
 COPY mcuhome-build-workspace-*.tar.zst /archives/workspace.tar.zst
 COPY mcuhome-build-tools_*.tar.zst /archives/tools.tar.zst
 
-# The west workspace is made writable for every user, and only it. §3
-# promises pristine trees at the start of every step and the container
-# profile keeps that promise by throwing the container away, so a tree in
-# here is disposable by construction — which is exactly what §10 allows to
-# be patched in place. Two things need the permission: a build context that
-# patches `zephyr`, `chip` or `mcuboot`, and the manifest-repository link a
-# step places to join the delivered SDK to the workspace. Neither can know
-# which UID the orchestrator will run the container as.
+# The west workspace is made readable and traversable for every user, and
+# the mode is `a+rwX` rather than `a+rX` only because that is what the
+# image was built with before the builder stopped writing into it at all:
+# a step now assembles a view of this workspace under `work` and patches
+# copies inside it, so nothing here is written whether or not it could be.
+# What every UID does need is to read it — the orchestrator chooses the
+# UID and the image cannot know it.
 #
 # It happens here rather than in the final stage on purpose: a `chmod -R`
 # after the `COPY` below would write a second copy of every one of those

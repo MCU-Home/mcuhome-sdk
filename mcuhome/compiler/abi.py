@@ -105,9 +105,10 @@ instead.
 *``HOME`` and the west configuration are copied into ``work``.* A build
 runs as a user with no home directory of its own, and tools that cache in
 ``$HOME`` fail obscurely without a writable one; west writes ``zephyr.base``
-back into ``.west/config`` on its first build, and the workspace it would
-write into is frozen input. So both live in ``work``, and the workspace is
-never written to incidentally either.
+back into ``.west/config`` on its first build, and the environment's
+workspace is input this program does not write into — ever, in any
+profile. So both live in ``work``, and the workspace is not written to
+incidentally either.
 
 *``PATH`` is never composed here.* It arrives with the environment the
 caller stated, because it is the one variable naming things this program
@@ -192,7 +193,6 @@ is the backend's job.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import os
@@ -265,7 +265,6 @@ __all__ = [
     "STEP_TMP",
     "STEP_VIEW",
     "STEP_WORK",
-    "STORE_MARKER",
     "WORKSPACE_PACKAGE_MANIFEST",
     "WORKSPACE_PACKAGE_VAR",
     "WORKSPACE_RECORD",
@@ -2585,29 +2584,22 @@ STEP_CACHE = "cache"
 #: Inside ``work``, which is empty at the start of every step.
 STEP_TMP = "tmp"
 
-#: Where a tree that may not be written is copied to before its patches are
-#: applied — §10: "Materialize a patched copy of it under ``work``". One
-#: subdirectory per layer. The ``sdk`` layer always lands here, because it
-#: is the orchestrator's input in either profile; a tree of the
-#: environment's own workspace is copied to its place in the view below
-#: instead, so that it keeps its position relative to the other trees.
+#: Where a tree is copied to before its patches are applied — §10:
+#: "Materialize a patched copy of it under ``work``". One subdirectory per
+#: layer. The ``sdk`` layer lands here, because it is the orchestrator's
+#: input and stands outside the workspace; a tree of the environment's own
+#: workspace is copied to its place in the view below instead, so that it
+#: keeps its position relative to the other trees.
 STEP_PATCHED = "patched"
 
 #: §10's "view of the environment in which that copy stands in for the
-#: original", for a workspace this step may not write into: a directory
-#: under ``work`` that mirrors the workspace's top level with links to the
-#: originals, and holds the patched copies at their own place inside it.
-#: Only the subprocess profile's read-only store needs one; a disposable
-#: tree is patched where it is.
+#: original": a directory under ``work`` that mirrors the workspace's top
+#: level with links to the originals, holds the patched copies at their own
+#: place inside it, and carries the delivered SDK where west looks for the
+#: manifest repository. **Every step builds one**, whatever the environment's
+#: trees are — this program never writes into them
+#: (:func:`_workspace_view`).
 STEP_VIEW = "view"
-
-#: What the subprocess profile marks a finished store entry with, beside
-#: the package's own manifest. Not this specification's business — a
-#: profile's storage is its own affair — but it is the store's *statement*
-#: that this entry is frozen, and a statement is the only signal that
-#: survives being read by a user who is allowed to ignore permission bits.
-#: A disposable tree carries no such file.
-STORE_MARKER = ".mcuhome-provisioned"
 
 #: The four cache tiers (§8), most local first. ``local`` is the only one
 #: that is always writable, and is therefore the primary cache; every other
@@ -2785,13 +2777,11 @@ def _patched_copy(source: Path, target: Path) -> Path:
     stay where they are; copying is the price of a patch and is paid only
     for the trees a patch actually names."
 
-    The delivered SDK is the tree that always needs it, whatever the
-    profile: it is the orchestrator's input, shared with whoever else holds
-    those bytes, and §4 says to assume it cannot be written. A tree of the
-    environment's **own** workspace needs it only where that workspace may
-    not be written — the subprocess profile's frozen store — and is then
-    copied to its place inside the view (:func:`_workspace_view`), so that
-    it keeps its position relative to every other tree.
+    The delivered SDK is copied here: it is the orchestrator's input,
+    shared with whoever else holds those bytes, and §4 says to assume it
+    cannot be written. A tree of the environment's **own** workspace is
+    copied to its place inside the view (:func:`_workspace_view`) instead,
+    so that it keeps its position relative to every other tree.
 
     **The copy is made writable.** ``shutil.copytree`` copies the modes
     with the bytes, so a copy taken out of a frozen store is as unwritable
@@ -2828,56 +2818,6 @@ def _make_writable(root: Path) -> None:
                 entry.chmod(entry.stat().st_mode | 0o200)
 
 
-def _writable(directory: Path) -> bool:
-    """Whether this step may write into *directory*, found out by writing.
-
-    Asked by creating a directory and removing it again, because that is
-    the operation the answer has to be true for. ``os.access`` is not it:
-    it answers on the permission bits and on the path alone, so it says
-    "yes" to a plain file nothing can be created in and to a tree the
-    kernel will still refuse. It leaves nothing behind either way.
-    """
-    try:
-        probe = tempfile.mkdtemp(prefix=".mcuhome-", dir=directory)
-    except OSError:
-        return False
-    with contextlib.suppress(OSError):
-        Path(probe).rmdir()
-    return True
-
-
-def _frozen(root: Path, topdir: Path, trees: list[Path]) -> bool:
-    """Whether the environment's own workspace is a store this step may not touch.
-
-    §3 makes this the one question that decides how a patch is applied:
-    "a tree that is disposable may be changed freely; a read-only store may
-    not be touched at all". Which profile is running is not something this
-    program is told and not something it should be — the container
-    profile's workspace is a disposable tree and the subprocess profile's
-    is a frozen store — so it is worked out from the environment itself,
-    from two signals, either of which is enough.
-
-    **The store's own marker**, at the root of the unpacked package. A
-    store freezes an entry with permission bits and then marks it finished,
-    and the bits are exactly the part of that a sufficiently privileged
-    user does not notice: running as root, every write into a frozen store
-    succeeds, and this program would patch a shared store in place and
-    leave a symbolic link in it pointing into a directory that is gone at
-    the end of the step. The marker is a statement rather than a
-    permission, so it holds for every user alike. A disposable tree has
-    none.
-
-    **The write probe** (:func:`_writable`), on the workspace and on every
-    tree a patch names. It catches what no marker can: a tree that cannot
-    be written for any other reason — a read-only mount, an image whose
-    workspace belongs to another user — and it is what answers for an
-    environment that is not MCUHome's store at all.
-    """
-    if (root / STORE_MARKER).is_file():
-        return True
-    return not _writable(topdir) or any(not _writable(tree) for tree in trees)
-
-
 def _patched_layers(context_root: Path) -> set[str]:
     """The layers this context carries patches for, by name.
 
@@ -2900,18 +2840,25 @@ def _mirror_tree(source: Path, target: Path, *, base: Path, skipped: set[Path]) 
     Directories are created, symbolic links are recreated with the target
     they had — a relative one then points inside the mirror, exactly as it
     pointed inside the original — and every file becomes a **hard link** to
-    the file in the store. So the mirror costs directory entries and no
-    file bytes, and every path in it resolves to itself rather than into
-    the store, which is what west's containment checks need
+    the original file. So the mirror costs directory entries and no file
+    bytes, and every path in it resolves to itself rather than into the
+    original tree, which is what west's containment checks need
     (:func:`_workspace_view`).
 
-    A hard link shares the store's inode and therefore the store's
-    permission bits, which a frozen store makes read-only: a build cannot
-    write through the mirror any more than it could write through the
-    symbolic links this replaced. Where one cannot be made at all — the
-    store on another filesystem than the step's work directory — the file
-    is copied instead, so the view is correct on such a machine too and
-    only pays for it.
+    A hard link shares the original's inode and therefore its permission
+    bits, which a frozen store makes read-only: a build cannot write
+    through the mirror any more than it could write through the symbolic
+    links this replaced. On a tree that is *writable* the bits are the
+    tree's own and the mirror carries them, so what protects such a
+    workspace is not the filesystem but this program: the trees a patch
+    names are copies, and no other step of a build writes into a source
+    tree. That holds for every write this program makes — the tests hold
+    the whole workspace against its own bytes before and after a step —
+    and it is a statement about this program rather than about the tools
+    it drives. Where a link cannot be made — the workspace on
+    another filesystem than the step's work directory — the file is copied
+    instead, so the view is correct on such a machine too and only pays
+    for it.
 
     *skipped* are the paths, relative to the workspace's top directory,
     that the view fills in itself: a patched copy or the delivered SDK
@@ -2947,49 +2894,63 @@ def _workspace_view(
     mirrored: set[Path],
     materialized: set[Path],
 ) -> Path:
-    """§10's view of a workspace this step may not write into.
+    """§10's view of the environment, and the one workspace a step builds in.
 
     "Materialize a patched copy of it under ``work``, and build against a
     view of the environment in which that copy stands in for the original.
     Trees no patch names stay where they are." The view is that
     environment: a directory under ``work`` that has the workspace's own
-    shape, with symbolic links where the store's trees are good enough and
-    the step's own directories where they are not.
+    shape, with symbolic links where the environment's trees are good
+    enough and the step's own directories where they are not.
 
-    **What the view costs.** The patched trees are copies and that is the
-    patches' price. Everything else costs no file bytes but it is not
-    free either: the layers this step keeps are mirrored as real
-    directories with a hard link per file (:func:`_mirror_tree`), and on
-    the real workspace package that is 90 005 hard links and 17 878
-    directories for the three mirrored layers — ≈ 3 s and ≈ 71 MB of
-    directory entries, on every step, patches or none. The one machine
-    that pays more is the one whose store sits on another filesystem than
-    ``work``: no hard link can be made across that boundary, so those
-    files are copied and the view costs their bytes too.
+    **Every step builds one, and nothing decides otherwise.** §10 permits
+    a *disposable* tree to be patched in place, and this program does not
+    take that permission: it never writes into the environment's own
+    trees, whether they are a frozen store entry, an image's workspace or
+    a west workspace somebody is working in. What a profile hands over is
+    then not a question this program has to answer, and there is one code
+    path to test rather than two that differ in what a write probe
+    happened to return.
+
+    **What the view costs**, and it is paid on every step of every
+    profile. The patched trees are copies and that is the patches' price.
+    Everything else costs no file bytes but it is not free either: the
+    layers this step keeps are mirrored as real directories with a hard
+    link per file (:func:`_mirror_tree`), and on the real workspace
+    package that is 90 005 hard links and 17 878 directories for the three
+    mirrored layers — ≈ 3 s and ≈ 71 MB of directory entries, patches or
+    none. Where a hard link cannot be made — the workspace on another
+    filesystem than ``work`` — those files are copied and the view costs
+    their bytes too, and a container is such a place even though it looks
+    like one filesystem: ``work`` is the writable layer and a baked
+    workspace is a layer below it, so overlayfs copies a file up before it
+    links it. A profile that cares about that puts ``work`` where the
+    environment's workspace actually lives.
 
     Three kinds of entry, and everything else in the workspace is a link
     to the original:
 
     *linked* are trees that stand somewhere else entirely — the delivered
     SDK, which west has to find inside the workspace and which no profile
-    can put there. This is the same link :func:`_place_sdk` makes in a
-    disposable tree, made in the view instead.
+    can put there. The link is made by name and unconditionally; where the
+    delivered SDK *is* the workspace's own manifest checkout, it points at
+    that same directory and nothing is written anywhere.
 
     *materialized* are trees already copied to their own place inside the
     view: the patched ones. They are skipped rather than linked, because
     they are already there.
 
-    *mirrored* are the store's own trees that this step keeps — each one
-    reproduced inside the view as a real tree: real directories, and hard
-    links to the store's files (:func:`_mirror_tree`). **That the tree is
-    real is not cosmetic, and neither is its depth.** Two tools insist on
-    it, each in its own way.
+    *mirrored* are the environment's own trees that this step keeps — each
+    one reproduced inside the view as a real tree: real directories, and
+    hard links to the original files (:func:`_mirror_tree`). **That the
+    tree is real is not cosmetic, and neither is its depth.** Two tools
+    insist on it, each in its own way.
 
     ``os.getcwd`` resolves symbolic links, so a tool started with its
     working directory inside a *linked* tree is, as far as the kernel is
-    concerned, in the store — and west then walks up from there and finds
-    the store's workspace rather than this view. Zephyr's build does
-    exactly that: ``cmake/modules/zephyr_module.cmake`` runs
+    concerned, in the original — and west then walks up from there and
+    finds the environment's own workspace rather than this view. Zephyr's
+    build does exactly that: ``cmake/modules/zephyr_module.cmake`` runs
     ``scripts/zephyr_module.py`` with the working directory set to
     ``ZEPHYR_BASE``, and that script asks west for the workspace's
     projects. With the tree linked, the answer names the store's trees and
@@ -3018,7 +2979,7 @@ def _workspace_view(
     every project would cost a directory walk of the whole workspace on
     every step for nothing. A project *outside* the layers that declares
     ``west-commands`` is a plain link, and both sides of west's check
-    resolve into the store together, so it passes.
+    resolve into the environment's workspace together, so it passes.
     """
     substitutes = {path.relative_to(topdir): target for path, target in linked.items()}
     shadowed = {path.relative_to(topdir) for path in mirrored}
@@ -3043,8 +3004,10 @@ def _workspace_view(
         # workspace package carries *empty* for this moment, and a package
         # that carries it not at all would otherwise produce a view with no
         # SDK in it and a failure much later, in west or in CMake, about
-        # something else. This is the same link :func:`_place_sdk` makes in
-        # a disposable tree, and it makes it the same way: unconditionally.
+        # something else. A delivered SDK that already *is* the workspace's
+        # manifest checkout — a build against a workspace somebody is
+        # developing in — links to itself here, which costs one link and
+        # writes nothing anywhere.
         for relative, target in substitutes.items():
             (view / relative).parent.mkdir(parents=True, exist_ok=True)
             (view / relative).symlink_to(target)
@@ -3052,60 +3015,10 @@ def _workspace_view(
         raise BuildError(
             f"this build environment cannot assemble a view of {topdir} at {view}: "
             f"{failure.strerror}",
-            hint="a workspace that may not be written is built against a view of it "
+            hint="every step builds against a view of the environment's workspace "
             "under work, and the view needs a writable work directory",
         ) from failure
     return view
-
-
-def _place_sdk(manifest_dir: Path, tree: Path, *, replace: bool = False) -> None:
-    """Make *tree* reachable where west looks for the manifest repository.
-
-    The SDK is delivered at ``mcuhome/sdk`` (§4) and west needs the manifest
-    repository *inside* the workspace, at the path ``.west/config`` names —
-    which the workspace package carries as an empty directory for exactly
-    this moment. So the two are joined here, by replacing that directory
-    with a symbolic link to *tree*. West's workspace containment check is
-    lexical and replacing a project directory with a link is a pattern west
-    documents itself.
-
-    *tree* is the delivered SDK, or the patched copy of it under ``work``
-    when the context patches the ``sdk`` layer: §10's "a view of the
-    environment in which that copy stands in for the original" is this
-    link, and it is what makes the copy win for everything downstream —
-    west, the code generator, every include path — without any of them
-    knowing there was a patch.
-
-    Nothing happens when an SDK is already at that path: a profile that
-    mounts it into the workspace has done this job, and the baked image
-    does exactly that. *replace* is how a patched copy overrules even that
-    — it is the only tree carrying the context's patches, so it has to be
-    the one the build reaches, whatever a profile put there.
-
-    This is the one write into the environment's own trees, and §11 says to
-    assume they are read-only, so it is done only where they are not: a
-    **disposable** tree, which is pristine again next step (§3).
-    :func:`_frozen` is what decides that, and a workspace it calls frozen
-    never reaches this function — the link is made inside the view
-    assembled under ``work`` (:func:`_workspace_view`) instead, by name and
-    unconditionally, exactly as the last branch below makes it here.
-    """
-    if manifest_dir == tree:
-        return
-    if not replace and (manifest_dir / SDK_METADATA_FILE).is_file():
-        return
-    try:
-        if manifest_dir.is_symlink() or manifest_dir.is_file():
-            manifest_dir.unlink()
-        elif manifest_dir.is_dir():
-            manifest_dir.rmdir()
-        manifest_dir.symlink_to(tree)
-    except OSError as failure:
-        raise BuildError(
-            f"this build environment cannot put the SDK at {manifest_dir}: {failure.strerror}",
-            hint="west resolves the manifest repository inside the workspace, so the "
-            "SDK this step builds against has to be reachable there",
-        ) from failure
 
 
 def _viewed(
@@ -3113,11 +3026,12 @@ def _viewed(
 ) -> CarriedWorkspace:
     """*carried*, as it looks from a view of it under ``work`` (§10).
 
-    The workspace may not be written, so this step builds one it may: the
-    trees a patch names are copied to their own place inside the view, the
-    SDK is linked in where west looks for the manifest repository, and
-    everything else is a link to the store. The record is then rebased onto
-    the view, which moves every layer path with it — a workspace record
+    The environment's workspace is never written, so this step builds one
+    it may write: the trees a patch names are copied to their own place
+    inside the view, the SDK is linked in where west looks for the manifest
+    repository, and everything else is a link to the original. The record
+    is then rebased onto the view, which moves every layer path with it — a
+    workspace record
     already survives being unpacked somewhere other than where it was
     written (:func:`_rebased`), and the view is one more such place.
 
@@ -3193,23 +3107,27 @@ def _step_build(
 
     Returns the artifacts as §6.2 declares them — paths relative to ``out``.
 
-    **Every layer is patchable, and where the patched tree lives depends on
-    what may be written** (§10). The ``sdk`` layer is never patched in
-    place in either profile: it is the orchestrator's input, delivered per
+    **Every layer is patchable, and no layer is ever patched in place**
+    (§10). The ``sdk`` layer is the orchestrator's input, delivered per
     build context and shared with whoever else holds those bytes, so it
-    gets a copy under ``work`` that stands in for the original through the
-    link west follows.
+    gets a copy under ``work``. The environment's own trees get a view
+    under ``work`` (:func:`_workspace_view`): every tree a patch names is
+    copied into it, the trees no patch names are linked or mirrored into it
+    from the workspace, the delivered SDK is linked in where west looks for
+    the manifest repository, and the build runs against the view. An
+    unpatched build copies nothing; it only links.
 
-    The environment's own workspace is the profile's to hand over, and
-    which profile is running is decided here by :func:`_writable` rather
-    than by being told. A **disposable** workspace — the container
-    profile's — is patched where it stands and carries the SDK link
-    directly. A workspace that may **not** be written — the subprocess
-    profile's frozen store — is not touched at all: every tree a patch
-    names is copied into a view under ``work``
-    (:func:`_workspace_view`), the trees no patch names are linked into it
-    from the store, and the build runs against the view. An unpatched
-    build on such a store copies nothing; it only links.
+    **There is one path and it does not depend on what the workspace is.**
+    §10 permits a disposable tree to be patched where it stands, and this
+    program declines that permission: the environment's trees are the
+    profile's — a frozen store entry, an image's baked workspace, a west
+    workspace somebody is developing in — and this program treats all three
+    alike by never writing into any of them. The write probe that used to
+    tell them apart is gone with the branch it fed: it answered for the
+    filesystem rather than for the owner, so a store readable by root and a
+    developer's own workspace both came out "disposable" and were patched
+    and linked into. What is paid for the single path is the view's cost on
+    every step (:func:`_workspace_view`), the container profile's included.
     """
     root = env.get(WORKSPACE_PACKAGE_VAR)
     if not _is_absolute_path(root):
@@ -3224,24 +3142,16 @@ def _step_build(
     for directory in (step.work, step.tmp, step.out):
         directory.mkdir(parents=True, exist_ok=True)
     patched = _patched_layers(step.context)
-    own = {name: path for name, path in paths.items() if name != "sdk"}
-    frozen = _frozen(
-        package_root,
-        carried.topdir,
-        [own[name] for name in sorted(patched & own.keys())],
-    )
     if "sdk" in paths:
         tree = _delivered_sdk(step, paths["sdk"])
-        # The copy is made before the link is placed, so that what the link
-        # points at is already the tree the patches will be applied to:
-        # nothing downstream ever sees the delivered one.
+        # The copy is made before the view is assembled, so that what the
+        # view links at the manifest repository's place is already the tree
+        # the patches will be applied to: nothing downstream ever sees the
+        # delivered one.
         if "sdk" in patched:
             tree = _patched_copy(tree, step.work / STEP_PATCHED / "sdk")
-        if frozen:
-            carried = _viewed(step, carried, sdk_tree=tree, patched=patched)
-            paths = _tree_paths(carried.record_document)
-        else:
-            _place_sdk(paths["sdk"], tree, replace="sdk" in patched)
+        carried = _viewed(step, carried, sdk_tree=tree, patched=patched)
+        paths = _tree_paths(carried.record_document)
     session = document.get("session_id")
     builder = _Build(
         context_root=step.context,
@@ -3258,16 +3168,15 @@ def _step_build(
         jobs=jobs.resolve_jobs(env=env).value,
         record=carried.record,
         record_document=carried.record_document,
-        # What may be written, said honestly. In a disposable workspace
-        # that is every tree; against a frozen store it is exactly the
-        # trees this step copied a moment ago, which are exactly the ones a
-        # patch names — the others are links into a store nothing may
-        # touch. The paths are the record's throughout, rebased onto the
-        # view where there is one, so a patched copy stands in for its
-        # original everywhere without anything downstream knowing.
+        # What may be written, said honestly: exactly the trees this step
+        # copied a moment ago, which are exactly the ones a patch names.
+        # Every other tree in the view is a link or a mirror onto the
+        # environment's own workspace, which nothing here writes into. The
+        # paths are the record's throughout, rebased onto the view, so a
+        # patched copy stands in for its original everywhere without
+        # anything downstream knowing.
         given_trees={
-            name: {"path": str(path), "writable": not frozen or name in patched}
-            for name, path in paths.items()
+            name: {"path": str(path), "writable": name in patched} for name, path in paths.items()
         },
         env=env,
         extra_env=_step_extra_env(step, carried),
