@@ -108,7 +108,9 @@ purpose, and the lock is the only place they are tied together.
 A workbench reads the lock out of the archive it already verified against
 the pin, which is why the copy inside the package is the authoritative
 one; the sidecar exists so a mirror and a release page can serve the same
-statement without unpacking anything.
+statement without unpacking anything. The image dispatch of step 4 reads
+the same copy, for the same reason — which is why this file decides both
+what a device is built with and what an image is assembled from.
 
 ## 3. Publish it — the registry operator's step
 
@@ -164,13 +166,29 @@ beside it. Per architecture, on a runner of that architecture, the run asks
 `packages.mcuhome.org` for each consumed source's signed mirror list,
 fetches the served documents from every mirror named there, and verifies
 them with `mcuhome-packagetool`'s own `verify.py` against the registry's
-trust anchor. It then downloads `mcuhome-build-workspace` and that
-architecture's `mcuhome-build-tools` from the verified mirror, checks each
-archive's size and sha256 against the index bytes the verifier accepted,
-assembles the image with `scripts/build_env_image.py` — which reads the
-packages' own declaration and labels the image with it — and pushes
+trust anchor — three sources: `sdk`, `build-workspace` and `build-tools`.
+It then downloads `mcuhome-build-workspace` and that architecture's
+`mcuhome-build-tools` from the verified mirror, checks each archive's size
+and sha256 against the index bytes the verifier accepted, assembles the
+image with `scripts/build_env_image.py` — which reads the packages' own
+declaration and labels the image with it — and pushes
 `<version>-r<n>-<arch>`. A last job composes the OCI index over the two and
 pushes it as `<version>-r<n>`, the reference a client resolves.
+
+**Which versions it assembles comes from the environment lock, not from
+the tag.** The dispatched tag names an SDK release; the tools package is on
+its own counter and is regularly older than the SDK asking for it, so a run
+that assumed the tag's version for both would ask the index for a tools
+package that was never built. Instead the run downloads
+`mcuhome-sdk-<version>.tar.zst` from the verified mirror, checks it against
+the index like any other package, reads the `build-environment.lock.json`
+inside it, and resolves exactly the two versions that document states — the
+sidecar beside the archive and the release asset are deliberately not used,
+because the registry is what was verified here. The workspace version has
+to be the SDK's own, since that package is built from this tag, and the run
+refuses when it is not. So a tools release is not needed for every image:
+**bump `TOOLS_VERSION` before cutting the release, and the lock carries the
+rest** (step 2).
 
 **Prerequisite: the organisation variable `MCUHOME_REGISTRY_ANCHOR`.** It
 carries the content of `mcuhome-packagetool`'s

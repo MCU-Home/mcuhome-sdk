@@ -87,16 +87,28 @@ assembled from are not published yet, and CI cannot observe the registry
 operator's publish. `image` also makes the run an image run alone: no
 package job builds beside it.
 
-Per architecture, on a runner of that architecture: the two consumed
-sources are discovered from `packages.mcuhome.org`, their served documents
-are verified with `mcuhome-packagetool`'s reference verifier against the
-registry's trust anchor, the workspace package and *this* architecture's
-tools package are downloaded from the verified mirror, each archive is
-checked by size and sha256 against the index bytes the verifier accepted,
-the image is assembled by the script above and pushed as
+Per architecture, on a runner of that architecture: the three consumed
+sources (`sdk`, `build-workspace`, `build-tools`) are discovered from
+`packages.mcuhome.org`, their served documents are verified with
+`mcuhome-packagetool`'s reference verifier against the registry's trust
+anchor, the packages are downloaded from the verified mirror, each archive
+is checked by size and sha256 against the index bytes the verifier
+accepted, the image is assembled by the script above and pushed as
 `<version>-r<n>-<arch>`. A last job composes the OCI index over the two and
 pushes it as `<version>-r<n>`, which is the reference a client resolves —
 `amd64` and `arm64` both, because a Home Assistant box is an arm64 machine.
+
+**The tag names the SDK release, not the environment.** Which versions of
+the two packages get assembled is read out of that release's
+`build-environment.lock.json`, which the run takes from the verified SDK
+archive — the tools package is on its own counter and a release that did
+not change the toolchain names an older one, so assuming the tag's version
+for both would ask the index for a tools package that was never built. The
+workspace version the lock states must be the SDK's own (that package is
+built from this tag) and the run refuses when it is not; the tools version
+is then resolved through the family's `meta.arch` map to this
+architecture's package. It is the same document, and the same answer, a
+workbench provisioning that SDK gets.
 
 **The anchor arrives out of band**, as the organisation variable
 `MCUHOME_REGISTRY_ANCHOR` (the content of `mcuhome-packagetool`'s

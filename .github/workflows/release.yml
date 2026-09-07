@@ -14,10 +14,15 @@
 #
 #   build-environment-image and publish-environment-image-index —
 #                              `ghcr.io/mcu-home/build-environment`: the
-#                              two packages above assembled into the
-#                              container profile's image, one manifest per
-#                              architecture and the index over them. On a
-#                              dispatch only; a tag never builds it.
+#                              two build-environment packages above
+#                              assembled into the container profile's
+#                              image, one manifest per architecture and the
+#                              index over them. On a dispatch only; a tag
+#                              never builds it. Which versions of the two
+#                              it assembles is not the tag's to say: it
+#                              reads the SDK release's
+#                              `build-environment.lock.json` and resolves
+#                              what that names.
 #
 # Together they are the release chain of `docs/design/build-environment.md`
 # section 3. Every package job builds from the tagged *commit* — never a
@@ -53,7 +58,10 @@
 #   is in practice.
 # * The image is assembled from what the registry already serves, so it
 #   runs when a dispatch asks for it and never on a tag: at tag time the
-#   packages it needs are not published yet.
+#   packages it needs are not published yet. And because the tools do not
+#   follow the tag, the image run does not either — it takes both
+#   environment versions from the SDK release's environment lock, which is
+#   the one document that ties the two cadences together.
 #
 # Only `package` ever creates the release; the other two package jobs
 # require it to exist and upload into it. Two jobs racing for
@@ -567,14 +575,14 @@ jobs:
   # is built twice: a Home Assistant box is an arm64 machine, so an
   # amd64-only build environment is one no HA user can ever run.
   #
-  # Three properties, and none of them is optional:
+  # Four properties, and none of them is optional:
   #
   #   1. the packages come from the REGISTRY, not from this repository and
   #      not from the release page. What an image delivers has to be what
   #      the signed index names, byte for byte — an image built from a
   #      release asset would pin a hash no consumer can resolve if the two
   #      ever drift. And "signed" is meant literally: the served documents
-  #      of both consumed sources are verified with the registry's own
+  #      of every consumed source are verified with the registry's own
   #      reference verifier against a trust anchor that reaches this job
   #      out of band, as the organisation variable
   #      MCUHOME_REGISTRY_ANCHOR. Without that variable the job refuses —
@@ -582,11 +590,19 @@ jobs:
   #      one that failed. Each archive is then checked (size and sha256)
   #      against the index bytes the verifier accepted, off disk, so that
   #      what was verified and what is used are one document.
-  #   2. each architecture is built on a runner of that architecture and
+  #   2. WHICH versions those packages are is not the dispatched tag's to
+  #      decide. The tag names an SDK release; the release names its
+  #      environment, in the `build-environment.lock.json` it carries, and
+  #      the tools package is on its own cadence and is regularly older
+  #      than the SDK asking for it. So this job reads that lock out of the
+  #      verified SDK archive and resolves the two versions it states —
+  #      the same document, and the same answer, a workbench provisioning
+  #      that SDK gets.
+  #   3. each architecture is built on a runner of that architecture and
   #      pushed under its own tag, `<version>-r<n>-<arch>`. That tag names
   #      exactly these bytes for exactly this architecture, and it is what
   #      somebody pulls who wants one architecture on purpose.
-  #   3. the index over the two is pushed under the plain `<version>-r<n>`
+  #   4. the index over the two is pushed under the plain `<version>-r<n>`
   #      by the job below, which is what every client resolves.
   #
   # No moving tags. The naming scheme's tag is `<workspace package
@@ -649,17 +665,20 @@ jobs:
         with:
           python-version: "3.13"
 
-      # The assembler reads each package's own documents out of the
-      # archive, which is what it needs zstandard for. It only ever
-      # decompresses here, so the pin buys consistency rather than
-      # reproducible bytes — but one release should run on one library.
+      # Two readers here open an archive to take one document out of it:
+      # the assembler, for each package's own declaration, and the step
+      # below, for the SDK release's environment lock. Both only ever
+      # decompress, so the pin buys consistency rather than reproducible
+      # bytes — but one release should run on one library.
       - name: Install the pinned compressor
         run: pip install "zstandard==${ZSTANDARD_VERSION}"
 
-      # The two archives, the layers the unpack stage writes and the
-      # finished 4.7 GB image are on this disk at the same time. Free what
-      # nothing here uses, and print the result — `rm -rf` on an absent
-      # path is not an error, so the same list serves any runner image.
+      # The two package archives, the layers the unpack stage writes and
+      # the finished 4.7 GB image are on this disk at the same time — the
+      # SDK archive beside them is a quarter of a megabyte and changes
+      # nothing. Free what nothing here uses, and print the result —
+      # `rm -rf` on an absent path is not an error, so the same list serves
+      # any runner image.
       - name: Make room, and say how much there is
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
@@ -796,11 +815,18 @@ jobs:
           .venv/bin/python verify.py --help > /dev/null
 
       # The route `mcuhome-packagetool`'s own `scripts/test.d/verify-sources`
-      # takes, walked here for the two sources this image is assembled
-      # from: the bootstrap host is asked for a source's signed mirror
-      # list, and every mirror that list names is fetched from in full and
-      # verified against the anchor. Only the bootstrap host is a constant;
-      # nothing else is meant to be.
+      # takes, walked here for the three sources this job reads: the
+      # bootstrap host is asked for a source's signed mirror list, and
+      # every mirror that list names is fetched from in full and verified
+      # against the anchor. Only the bootstrap host is a constant; nothing
+      # else is meant to be.
+      #
+      # Two of the three are the packages the image is assembled from. The
+      # third is `sdk`, and it is read rather than delivered: the SDK
+      # release states which environment it was built and tested with, and
+      # that statement decides which versions of the other two this job
+      # resolves. It is exactly as trustworthy as the packages it names, so
+      # it is verified exactly the same way.
       #
       # Every mirror the list names, not only the one that is used: a
       # source whose second copy cannot be verified is a registry in
@@ -860,7 +886,7 @@ jobs:
             esac
           }
 
-          for source in build-workspace build-tools; do
+          for source in sdk build-workspace build-tools; do
             list="$tree/discovery/$source.json"
             fetch "$PACKAGE_REGISTRY/$source/mirrors.json" "$list"
             if [ -z "$(jq -r '.mirrors[]?.url' "$list")" ]; then
@@ -922,12 +948,37 @@ jobs:
           done
           echo "tree=$tree" >> "$GITHUB_OUTPUT"
 
-      # What the image delivers, taken from where consumers take it. The
-      # tools family is resolved through its meta package — the same
+      # What the image delivers, and WHICH VERSIONS of it — taken from
+      # where consumers take them.
+      #
+      # The dispatched tag names one thing only: the SDK release. It does
+      # not name the environment, because the two do not share a cadence.
+      # The workspace package is built from the SDK's tag and carries its
+      # version; the tools package has its own counter and a release that
+      # did not touch the toolchain republishes nothing — so a release's
+      # tools version is usually an older one. The release says which:
+      # `build-environment.lock.json` is the document whose whole purpose
+      # is to state the environment an SDK was built and tested with, and
+      # this job reads it instead of assuming that one version fits both.
+      #
+      # It is read out of the SDK ARCHIVE the registry serves, after that
+      # archive was checked against the verified index like any other
+      # package. Not the release asset, and not the sidecar beside the
+      # archive: the registry is the source whose bytes were verified
+      # here, and the copy inside the package is the one that cannot be
+      # substituted for the copy a reader happened to take. Whoever built
+      # the image and whoever provisions the same SDK later therefore read
+      # one document.
+      #
+      # Then the same resolution consumers do: the workspace version has
+      # to be the SDK's own — the package is built from that tag, and the
+      # image tag is `<workspace version>-r<n>`, so a lock that says
+      # otherwise means something is not the release this dispatch names.
+      # The tools family is resolved through its meta package — the same
       # `meta.arch` map an orchestrator follows — so this job cannot pick
       # a per-architecture package name that the index does not point at.
       #
-      # The index is read OFF DISK, out of the tree the verifier just
+      # Every index is read OFF DISK, out of the tree the verifier just
       # accepted, and never fetched a second time: an index that was
       # verified and an index that is downloaded again are two documents,
       # and only one of them was checked. Each archive is then held against
@@ -939,7 +990,12 @@ jobs:
       # is a refusal in `verify.py`, which is the normative implementation
       # of that rule, and a second copy of it in this file could only ever
       # drift from it.
-      - name: Download the published packages, and check them against the verified index
+      #
+      # The lock's vocabulary comes from `mcuhome.model.buildenvironment`
+      # in the checkout, the module that defines it, for the reason the
+      # image repository comes from the assembler: a second reader of one
+      # document, spelled out in a workflow, is a reader that drifts.
+      - name: Read the release's environment lock, and download the packages it names
         id: packages
         if: steps.publish.outputs.needed == 'true'
         env:
@@ -954,8 +1010,30 @@ jobs:
           import json
           import os
           import sys
+          import tarfile
           import urllib.request
           from pathlib import Path
+
+          import zstandard
+
+          from mcuhome.model.buildenvironment import (
+              LOCK_FILE,
+              TOOLS_FAMILY,
+              TOOLS_SOURCE,
+              WORKSPACE_PACKAGE,
+              WORKSPACE_SOURCE,
+              parse_lock,
+          )
+          from mcuhome.model.errors import MCUHomeError
+          from mcuhome.model.sdkindex import SDK_PACKAGE_NAME
+
+          # The source the SDK package is published under. Every package
+          # name and the other two source names come from the model, which
+          # owns them; this one string has no constant to take it from —
+          # the model spells it inside the default SDK reference, where it
+          # means "the source of a device's SDK" rather than "the source
+          # this job reads".
+          SDK_SOURCE = "sdk"
 
           tree = Path(os.environ["REGISTRY_TREE"])
           version = os.environ["VERSION"]
@@ -972,26 +1050,26 @@ jobs:
               return base, document
 
 
-          def entry(document, source, package):
+          def entry(document, source, package, wanted):
               versions = document.get("packages", {}).get(package)
               if not versions:
                   sys.exit(f"{source}/index.json carries no {package}")
-              if version not in versions:
+              if wanted not in versions:
                   sys.exit(
-                      f"{source}/index.json has no {package} {version}; "
+                      f"{source}/index.json has no {package} {wanted}; "
                       f"it carries {', '.join(sorted(versions))}"
                   )
-              return versions[version]
+              return versions[wanted]
 
 
-          def download(base, package, item):
+          def download(base, package, wanted, item):
               name = item.get("file")
               expected = item.get("sha256")
               size = item.get("size")
               if not name or not expected or not isinstance(size, int):
                   sys.exit(
-                      f"the index entry for {package} {version} names no downloadable "
-                      "archive, so it cannot be the package an image is assembled from"
+                      f"the index entry for {package} {wanted} names no downloadable "
+                      "archive, so it cannot be a package this job reads"
                   )
               # The file name is a name, not a path: it is used as a URL
               # segment and as a file under packages/, and this block exists
@@ -999,7 +1077,7 @@ jobs:
               # trust.
               if name != Path(name).name or name.startswith("."):
                   sys.exit(
-                      f"{package} {version} names its archive {name!r}, "
+                      f"{package} {wanted} names its archive {name!r}, "
                       "which is not a file name"
                   )
               path = into / name
@@ -1021,23 +1099,86 @@ jobs:
               return path
 
 
-          base, document = verified("build-workspace")
+          def locked(archive):
+              """The environment lock, out of the SDK archive's own bytes.
+
+              Streamed rather than unpacked: the one member this job wants
+              is a few hundred bytes, and nothing else in that archive has
+              a reader here.
+              """
+              with (
+                  open(archive, "rb") as raw,
+                  zstandard.ZstdDecompressor().stream_reader(raw) as stream,
+                  tarfile.open(fileobj=stream, mode="r|") as tar,
+              ):
+                  for member in tar:
+                      if member.name != LOCK_FILE:
+                          continue
+                      carried = tar.extractfile(member)
+                      if carried is None:
+                          sys.exit(f"{archive.name} carries {LOCK_FILE} as no readable file")
+                      try:
+                          stated = json.loads(carried.read().decode("utf-8"))
+                      except (UnicodeDecodeError, ValueError) as unreadable:
+                          sys.exit(
+                              f"{LOCK_FILE} in {archive.name} is not readable JSON: {unreadable}"
+                          )
+                      return parse_lock(stated)
+              sys.exit(
+                  f"{archive.name} carries no {LOCK_FILE}, so this release states no build "
+                  "environment and no version of one can be resolved from it"
+              )
+
+
+          # The release, and what it says about its environment.
+          base, document = verified(SDK_SOURCE)
+          release = download(
+              base,
+              SDK_PACKAGE_NAME,
+              version,
+              entry(document, SDK_SOURCE, SDK_PACKAGE_NAME, version),
+          )
+          try:
+              lock = locked(release)
+              workspace_version = lock.version_of(WORKSPACE_PACKAGE)
+              tools_version = lock.version_of(TOOLS_FAMILY)
+          except MCUHomeError as refusal:
+              sys.exit(str(refusal))
+          print(
+              f"{LOCK_FILE}: {WORKSPACE_PACKAGE} {workspace_version}, "
+              f"{TOOLS_FAMILY} {tools_version}"
+          )
+          if workspace_version != version:
+              sys.exit(
+                  f"the SDK release {version} states {WORKSPACE_PACKAGE} {workspace_version} "
+                  f"in its {LOCK_FILE}, and that package is built from the SDK's own tag — so "
+                  f"these are not the bytes {version} names, and an image tagged after the "
+                  "workspace version would not be the image this dispatch asked for"
+              )
+
+          base, document = verified(WORKSPACE_SOURCE)
           workspace = download(
               base,
-              "mcuhome-build-workspace",
-              entry(document, "build-workspace", "mcuhome-build-workspace"),
+              WORKSPACE_PACKAGE,
+              workspace_version,
+              entry(document, WORKSPACE_SOURCE, WORKSPACE_PACKAGE, workspace_version),
           )
 
-          base, document = verified("build-tools")
-          family = entry(document, "build-tools", "mcuhome-build-tools")
+          base, document = verified(TOOLS_SOURCE)
+          family = entry(document, TOOLS_SOURCE, TOOLS_FAMILY, tools_version)
           architectures = family.get("meta", {}).get("arch", {})
           if platform not in architectures:
               sys.exit(
-                  f"mcuhome-build-tools {version} names no {platform}; "
+                  f"{TOOLS_FAMILY} {tools_version} names no {platform}; "
                   f"it names {', '.join(sorted(architectures)) or 'no architecture at all'}"
               )
           concrete = architectures[platform]
-          tools = download(base, concrete, entry(document, "build-tools", concrete))
+          tools = download(
+              base,
+              concrete,
+              tools_version,
+              entry(document, TOOLS_SOURCE, concrete, tools_version),
+          )
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"workspace={workspace}\n")
