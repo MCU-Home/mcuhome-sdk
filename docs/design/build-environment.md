@@ -307,11 +307,13 @@ incorporate their consequences.
   work directory — that file is copied instead.
 
   **The rule applies to the layers, not to every project.** Mirrored as
-  real trees are the four a build context can patch — zephyr, the
-  manifest repository (the SDK, which is a link to what the orchestrator
-  delivered), chip and mcuboot. Every other west project of the
-  workspace — the Zephyr modules the manifest `import:`s — is a plain
-  link into the store, and `west topdir` started inside one of *those*
+  real trees are three of the four a build context can patch — zephyr,
+  chip and mcuboot. The fourth, the manifest repository, is not mirrored
+  at all: it is a symbolic link to the SDK the orchestrator delivered,
+  which stands outside the workspace, so there is nothing of the store
+  there to mirror. Every other west project of the workspace — the
+  Zephyr modules the manifest `import:`s — is a plain link into the
+  store, and `west topdir` started inside one of *those*
   does resolve to the store, as measured. That is sound rather than
   tolerated: a patch can only name a layer, so a link out of the view can
   only ever reach the same bytes the view would have shown, and mirroring

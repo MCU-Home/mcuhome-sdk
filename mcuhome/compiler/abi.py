@@ -2188,6 +2188,15 @@ class _Build:
             artifacts.append(self._deliver(bootloader, delivered, "bootloader"))
 
         memory = workspace.parse_image_memory_report(log, images=[image.name for image in images])
+        # By image name, and that is not cosmetic: the parser answers in
+        # the order the log carried, which is the order sysbuild happened
+        # to relink in. Two builds of one context can schedule those links
+        # either way round, and a report that followed the log would then
+        # differ between them although every number in it is the same —
+        # which a consumer comparing two builds byte for byte reads as a
+        # difference in the firmware. Within one image the linker's own
+        # order is kept: it comes from one block of one log, and it is the
+        # order a person reads a memory map in.
         regions = [
             {
                 "image": image,
@@ -2196,7 +2205,7 @@ class _Build:
                 "total": region.total,
                 "percent": region.percent,
             }
-            for image, found in memory.items()
+            for image, found in sorted(memory.items())
             for region in found
         ]
         for region in regions:
@@ -2945,9 +2954,18 @@ def _workspace_view(
     Trees no patch names stay where they are." The view is that
     environment: a directory under ``work`` that has the workspace's own
     shape, with symbolic links where the store's trees are good enough and
-    the step's own directories where they are not. Nothing is copied for
-    it — the copies are the patches' price, and a build without patches
-    pays a few dozen links.
+    the step's own directories where they are not.
+
+    **What the view costs.** The patched trees are copies and that is the
+    patches' price. Everything else costs no file bytes but it is not
+    free either: the layers this step keeps are mirrored as real
+    directories with a hard link per file (:func:`_mirror_tree`), and on
+    the real workspace package that is 90 005 hard links and 17 878
+    directories for the three mirrored layers — ≈ 3 s and ≈ 71 MB of
+    directory entries, on every step, patches or none. The one machine
+    that pays more is the one whose store sits on another filesystem than
+    ``work``: no hard link can be made across that boundary, so those
+    files are copied and the view costs their bytes too.
 
     Three kinds of entry, and everything else in the workspace is a link
     to the original:

@@ -45,11 +45,13 @@ filesystem tree of §4 plus the environment's own packages.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -1159,6 +1161,18 @@ Memory region         Used Size  Region Size  %age Used
            FLASH:      859672 B         1 MB     81.99%
 """
 
+#: The same build, relinked the other way round. Which image sysbuild
+#: builds first is ninja's scheduling decision, so both logs are ordinary
+#: output of one context — and the report has to come out the same.
+BUILD_LOG_APP_FIRST = """\
+[1/2] Performing build step for 'app'
+Memory region         Used Size  Region Size  %age Used
+           FLASH:      859672 B         1 MB     81.99%
+[2/2] Performing build step for 'mcuboot'
+Memory region         Used Size  Region Size  %age Used
+           FLASH:       49152 B        64 KB     75.00%
+"""
+
 #: What the built application's ``.config`` says. imgtool's ``--version``
 #: is the one of the four signing arguments the builder does not itself
 #: decide, and ``CONFIG_ROM_START_OFFSET`` is the header offset the image
@@ -1231,6 +1245,10 @@ class BuildStubs:
         self.build_raises: str | None = None
         self.omit_app_hex = False
         self.omit_config = False
+        #: The log the stubbed compile answers with. Settable, because
+        #: which image a sysbuild relinks first is ninja's decision and
+        #: the report must not depend on it.
+        self.build_log = BUILD_LOG
         monkeypatch.setattr(abi, "_run_child", self._run_child)
         monkeypatch.setattr(abi.workspace, "run_build", self._run_build)
 
@@ -1274,7 +1292,7 @@ class BuildStubs:
         if self.build_raises is not None:
             raise BuildError(self.build_raises)
         if self.build_code != 0:
-            return self.build_code, BUILD_LOG
+            return self.build_code, self.build_log
         for image in ("app", "mcuboot"):
             output = plan.build_dir / image / "zephyr"
             output.mkdir(parents=True, exist_ok=True)
@@ -1285,7 +1303,7 @@ class BuildStubs:
             (plan.build_dir / "app" / "zephyr" / ".config").write_text(
                 BUILD_KCONFIG, encoding="utf-8"
             )
-        return 0, BUILD_LOG
+        return 0, self.build_log
 
 
 class BuildSetup(BuildStubs):
@@ -1510,10 +1528,31 @@ def test_the_build_report_is_the_document_seven_two_one_describes(build: BuildSe
     assert report["signing"]["signature_type"] == "ecdsa-p256"
     assert report["signing"]["arguments"] == SIGNING_ARGUMENTS
     assert report["memory"] == [
-        {"image": "mcuboot", "region": "FLASH", "used": 49152, "total": 65536, "percent": 75.0},
         {"image": "app", "region": "FLASH", "used": 859672, "total": 1048576, "percent": 81.99},
+        {"image": "mcuboot", "region": "FLASH", "used": 49152, "total": 65536, "percent": 75.0},
     ]
     assert set(report) == {"report", "signing", "memory"}
+
+
+def test_the_build_report_states_memory_in_one_order_whatever_the_log_says(
+    build: BuildSetup,
+) -> None:
+    """Two builds of one context write the same report, byte for byte.
+
+    The footprint reports arrive in the log in the order sysbuild
+    relinked, which is the order ninja scheduled — measured against two
+    builds of one identical context, where the array came out
+    mcuboot-first once and app-first the next time. Whoever compares two
+    builds reads that as a difference in the firmware, so the array is
+    ordered by image name and the log's order decides nothing.
+    """
+    assert build.run() == abi.EXIT_SUCCESS
+    first = (build.out / "build-report.json").read_bytes()
+    assert [entry["image"] for entry in json.loads(first)["memory"]] == ["app", "mcuboot"]
+
+    build.build_log = BUILD_LOG_APP_FIRST
+    assert build.run() == abi.EXIT_SUCCESS
+    assert (build.out / "build-report.json").read_bytes() == first
 
 
 def test_a_build_never_signs_and_verifies_against_the_contexts_own_key(
@@ -3435,6 +3474,43 @@ def test_a_mirrored_tree_of_a_frozen_workspace_resolves_inside_the_view(
         assert spec.is_file(), name
         # escapes_directory(spec, project) — verbatim, in west's own terms.
         assert spec.resolve().is_relative_to(project.resolve()), name
+
+
+def test_a_mirrored_tree_is_copied_where_no_hard_link_can_be_made(
+    stepped: StepSetup, monkeypatch
+) -> None:
+    """A store on another filesystem than ``work`` still yields a real view.
+
+    ``os.link`` answers ``EXDEV`` across a filesystem boundary, and that
+    is an ordinary way to run this: the store is a per-user cache in the
+    user's home and ``work`` is wherever the session directory was put —
+    another disk, a tmpfs, a container mount. The mirror then copies
+    instead of linking, and the copy has to carry the two properties the
+    link carried: the store's own mode, which a frozen store makes
+    read-only, so a build cannot write through the view either way; and a
+    path that resolves inside the view, which is what west's containment
+    check needs and the whole reason the mirror is real directories.
+    """
+
+    def across_a_filesystem(*args: Any, **kwargs: Any) -> None:
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(os, "link", across_a_filesystem)
+    stepped.freeze()
+    assert stepped.run() == abi.EXIT_SUCCESS
+
+    view = stepped.view()
+    for name, path in stepped.layers.items():
+        original = path / "VERSION"
+        project = view / path.relative_to(stepped.topdir)
+        entry = project / "VERSION"
+        assert not entry.is_symlink(), name
+        assert entry.stat().st_ino != original.stat().st_ino, name
+        assert entry.read_bytes() == original.read_bytes(), name
+        mode = stat.S_IMODE(entry.stat().st_mode)
+        assert mode == stat.S_IMODE(original.stat().st_mode), name
+        assert not mode & 0o222, name
+        assert entry.resolve().is_relative_to(project.resolve()), name
 
 
 def test_a_patched_copy_of_a_frozen_tree_can_be_written(stepped: StepSetup) -> None:

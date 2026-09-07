@@ -33,11 +33,20 @@ device:       # identity & platform
 network:      # transports (thread/wifi) and protocols (matter/coap)
 hardware:     # buses, peripherals, GPIO — devicetree-shaped
 node:         # Matter data model: endpoints, device types, clusters
+sources:      # which packages the build fetches (all entries optional)
 automations:  # declarative on-device logic
 ```
 
 All sections except `device:` are optional; a config with only `device:`
 must build (a commissionable but featureless node).
+
+`sources:` names the SDK and the two build-environment packages, in the
+reference form `[registry/]<source>/<package>[:version][@sha256:…]`. Every
+entry is an override of a version that is otherwise resolved at build
+time, each one for its own package alone, and nothing ever writes such an
+entry into a device — a device is not to be frozen onto whatever happened
+to be current on the day it was created. What the absent entries resolve
+to is the orchestrator's rule, not this schema's.
 
 ## 3. `device:` — identity and platform
 
