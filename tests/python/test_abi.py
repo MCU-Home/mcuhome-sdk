@@ -1547,12 +1547,17 @@ def test_the_build_report_states_memory_in_one_order_whatever_the_log_says(
     ordered by image name and the log's order decides nothing.
     """
     assert build.run() == abi.EXIT_SUCCESS
-    first = (build.out / "build-report.json").read_bytes()
+    report = build.out / "build-report.json"
+    first = report.read_bytes()
     assert [entry["image"] for entry in json.loads(first)["memory"]] == ["app", "mcuboot"]
 
+    # Removed, so the second half compares a report this run wrote rather
+    # than the one still lying there from the first.
+    report.unlink()
     build.build_log = BUILD_LOG_APP_FIRST
     assert build.run() == abi.EXIT_SUCCESS
-    assert (build.out / "build-report.json").read_bytes() == first
+    assert report.is_file()
+    assert report.read_bytes() == first
 
 
 def test_a_build_never_signs_and_verifies_against_the_contexts_own_key(
