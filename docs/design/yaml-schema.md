@@ -33,20 +33,47 @@ device:       # identity & platform
 network:      # transports (thread/wifi) and protocols (matter/coap)
 hardware:     # buses, peripherals, GPIO — devicetree-shaped
 node:         # Matter data model: endpoints, device types, clusters
-sources:      # which packages the build fetches (all entries optional)
+sources:      # which packages the build fetches, and which image
+              # delivers them (all entries optional)
 automations:  # declarative on-device logic
 ```
 
 All sections except `device:` are optional; a config with only `device:`
 must build (a commissionable but featureless node).
 
-`sources:` names the SDK and the two build-environment packages, in the
-reference form `[registry/]<source>/<package>[:version][@sha256:…]`. Every
-entry is an override of a version that is otherwise resolved at build
-time, each one for its own package alone, and nothing ever writes such an
-entry into a device — a device is not to be frozen onto whatever happened
-to be current on the day it was created. What the absent entries resolve
-to is the orchestrator's rule, not this schema's.
+`sources:` names the SDK and the two build-environment packages
+(`sdk`, `build_workspace`, `build_tools`), in the reference form
+`[registry/]<source>/<package>[:version][@sha256:…]`. Every entry is an
+override of a version that is otherwise resolved at build time, each one
+for its own package alone, and nothing ever writes such an entry into a
+device — a device is not to be frozen onto whatever happened to be
+current on the day it was created. What the absent entries resolve to is
+the orchestrator's rule, not this schema's.
+
+`sources.container_image` is the fourth entry and the one that names no
+package: it pins the **container image that delivers** those two
+environment packages. Optional, with no default at all, and written into
+a device only by whoever wants it there. Four forms, told apart by what
+the value starts with:
+
+```yaml
+sources:
+  container_image: ghcr.io/mcu-home/build-environment          # that repository
+  # container_image: ":0.1.10.dev2-r1"                         # that tag
+  # container_image: "@sha256:…"                               # those bytes
+  # container_image: ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1
+```
+
+A pin narrows which images are looked at and never what is accepted: an
+image is matched by the package set its labels declare, and a mismatch
+is refused rather than built. A build that runs in a container honours
+it; a build that starts none cannot — a development build against a
+workspace of your own is refused over it, like every other `sources.*`
+entry, and a build that runs as a child process against an unpacked
+environment says in its log that the pin has no effect there. An
+orchestrator may let a single build override it (`mcuhome device build
+--container-image`); what a device carries is the pin for every build of
+it.
 
 ## 3. `device:` — identity and platform
 
