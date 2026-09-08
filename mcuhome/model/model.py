@@ -39,7 +39,6 @@ from typing import Any
 
 from mcuhome.model import ota
 from mcuhome.model.buildenvironment import DEFAULT_BUILD_TOOLS, DEFAULT_BUILD_WORKSPACE
-from mcuhome.model.buildimage import DEFAULT_ENVIRONMENT
 from mcuhome.model.sdkindex import DEFAULT_SDK
 
 __all__ = [
@@ -246,12 +245,11 @@ class SourcesModel:
     """Where the things a build needs and nobody stores come from.
 
     A device folder holds no SDK and no toolchain, and it never will:
-    they are hash-pinned packages and a container image, and all of them
-    are fetched. This says *which* — in the reference form
-    :mod:`mcuhome.model.imageref` parses, the spelling a person already
-    knows from docker.
+    they are hash-pinned packages, and all of them are fetched. This says
+    *which* — in the reference form :mod:`mcuhome.model.imageref` parses,
+    the spelling a person already knows from docker.
 
-    **Every entry here is an override with a default that decides
+    **Every package entry here is an override with a default that decides
     nothing.** A reference without a version resolves at build time —
     the SDK against the version this workbench was released alongside,
     the two environment packages against what that SDK release states —
@@ -259,22 +257,25 @@ class SourcesModel:
     day it was created. A device that wants to be frozen names a
     version, and then that is honoured exactly.
 
-    **Both carry a default and the default is written down** rather than
-    assumed further downstream. That is the whole point of the block: the
-    value a build resolves against is a property of the device, recorded
-    in its model, so that changing what MCUHome ships as its default
-    cannot silently change what an existing device builds into. Today the
-    defaults are these constants; the step that makes them configurable
-    replaces where the values come *from* and nothing below it.
+    **The three package entries carry a default and the default is
+    written down** rather than assumed further downstream. That is the
+    whole point of the block: the value a build resolves against is a
+    property of the device, recorded in its model, so that changing what
+    MCUHome ships as its default cannot silently change what an existing
+    device builds into. Today the defaults are these constants; the step
+    that makes them configurable replaces where the values come *from*
+    and nothing below it.
+
+    :attr:`container_image` is the one entry with **no** default, because
+    it names no input of a build: which image delivers the packages is a
+    delivery question, and the packages above are what a build is
+    compiled against. Unset — the ordinary case — the image is found by
+    the package set its labels declare.
     """
 
     #: The SDK package: ``sdk/mcuhome-sdk``, optionally ``:version`` and
     #: ``@sha256:…``, optionally under another registry.
     sdk: str = DEFAULT_SDK
-    #: The build environment: a container repository, optionally with a
-    #: tag and a digest. An untagged one is resolved against
-    #: :attr:`ToolchainModel.zephyr_constraint`.
-    build_environment: str = DEFAULT_ENVIRONMENT
     #: The build environment's workspace package, in the same reference
     #: form as :attr:`sdk`. Naming **no version** — which is the default —
     #: means "whatever the resolved SDK release states it was built and
@@ -286,22 +287,36 @@ class SourcesModel:
     #: which is what lets one context build on hosts of two
     #: architectures.
     build_tools: str = DEFAULT_BUILD_TOOLS
+    #: The container image that delivers this device's build environment,
+    #: as a persistent pin: a repository, ``:tag``, ``@sha256:…``, or a
+    #: repository with either. ``None`` — and nothing is written into a
+    #: device unless somebody set it — leaves the choice to the image
+    #: search, which accepts an image by the packages its labels declare.
+    #: A pinned image is checked against that same package set, so a pin
+    #: narrows what is looked at and never what is accepted.
+    container_image: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        document: dict[str, Any] = {
             "sdk": self.sdk,
-            "build_environment": self.build_environment,
             "build_workspace": self.build_workspace,
             "build_tools": self.build_tools,
         }
+        # Written only where somebody wrote it: the model is the document
+        # a build context is identified over, and a key that appears in
+        # every device would make "no image pinned" a statement rather
+        # than the absence of one.
+        if self.container_image is not None:
+            document["container_image"] = self.container_image
+        return document
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> SourcesModel:
         return SourcesModel(
             sdk=data["sdk"],
-            build_environment=data["build_environment"],
             build_workspace=data["build_workspace"],
             build_tools=data["build_tools"],
+            container_image=data.get("container_image"),
         )
 
 
