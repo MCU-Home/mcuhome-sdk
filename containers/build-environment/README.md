@@ -180,10 +180,13 @@ docker run --rm --network none \
     --volume "$PWD/sdk:/mcuhome/sdk:ro" \
     --volume "$PWD/context:/mcuhome/build-context:ro" \
     --volume "$PWD/out:/mcuhome/out" \
-    ghcr.io/mcu-home/build-environment:<version>-r<n>
+    ghcr.io/mcu-home/build-environment:<version>-r<n> \
+    /mcuhome/bin/build-environment-entry
 ```
 
-`MCUHOME_BUILDER_BASE_DIR` is `/` in this profile, the entry point takes no
-arguments, and the answer is `out/result-<invocation_id>.json` (§6). The
+`MCUHOME_BUILDER_BASE_DIR` is `/` in this profile, the entry point is named by
+the path §6 fixes and takes no arguments — the image declares it as its `CMD`
+as well, but an orchestrator runs it by path, because that is what the
+specification fixes — and the answer is `out/result-<invocation_id>.json` (§6). The
 SDK is **not** environment content: each build context pins its own, and
 the orchestrator delivers it at `mcuhome/sdk`.
