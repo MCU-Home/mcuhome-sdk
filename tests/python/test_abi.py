@@ -3166,6 +3166,55 @@ def test_the_delivered_sdk_is_placed_where_west_looks_for_it(stepped: StepSetup)
     assert stepped.manifest_dir.is_dir() and not stepped.manifest_dir.is_symlink()
 
 
+def test_a_step_sizes_its_parallelism_from_the_recommended_limits(
+    stepped: StepSetup, monkeypatch
+) -> None:
+    """§6.1's ``limits``: what the orchestrator says the step should fit
+    in is what the step plans with.
+
+    The auto-detection behind the fallback is made to explode, so a step
+    that sized itself from the machine — which, in a container, is the
+    host and not what this build was given — fails this test rather than
+    passing it quietly.
+    """
+    monkeypatch.setattr(jobs, "detect_jobs", lambda: pytest.fail("the machine was asked"))
+    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(jobs, "available_ram_bytes", lambda: 64 * 1024**3)
+    assert stepped.run(limits={"cpus": 3, "memory_bytes": 64 * 1024**3}) == abi.EXIT_SUCCESS
+    plan = stepped.plans[0]
+    assert "-o=-j3" in plan.command
+    assert plan.env[abi.workspace.CHIP_JOBS_VAR] == "3"
+    assert plan.env[abi.workspace.CMAKE_JOBS_VAR] == "3"
+
+
+def test_a_step_without_limits_sizes_itself(stepped: StepSetup, monkeypatch) -> None:
+    """An orchestrator that states no limits has said nothing about the
+    machine, so the machine answers."""
+    monkeypatch.setattr(jobs, "detect_jobs", lambda: 7)
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert "-o=-j7" in stepped.plans[0].command
+
+
+def test_a_limits_object_that_states_neither_figure_is_the_same_as_none(
+    stepped: StepSetup, monkeypatch
+) -> None:
+    monkeypatch.setattr(jobs, "detect_jobs", lambda: 7)
+    assert stepped.run(limits={}) == abi.EXIT_SUCCESS
+    assert "-o=-j7" in stepped.plans[0].command
+
+
+def test_a_step_never_takes_a_job_count_out_of_the_environment(
+    stepped: StepSetup, monkeypatch
+) -> None:
+    """The one environment variable this boundary defines is the base
+    directory (§4). A job count in the environment would be a second
+    channel for something the request document carries."""
+    monkeypatch.setattr(jobs, "detect_jobs", lambda: 5)
+    stepped.env["MCUHOME_JOBS"] = "11"
+    assert stepped.run() == abi.EXIT_SUCCESS
+    assert "-o=-j5" in stepped.plans[0].command
+
+
 def test_a_record_without_an_sdk_layer_fails_the_step(stepped: StepSetup) -> None:
     """The view is built around the manifest repository's place, and a
     record that names none has no workspace this program can build in.

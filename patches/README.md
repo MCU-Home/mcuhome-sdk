@@ -101,12 +101,11 @@ targets (the Home-Assistant-add-on class hardware ADR 0007 targets). The
 patch adds a job cap read from the `MCUHOME_CHIP_JOBS` environment
 variable at CMake configure time; unset or empty keeps the upstream
 default. The builder sets it to the same value as its own `-o=-jN` job
-cap — auto-detected from CPU count and available RAM, `--jobs`/
-`MCUHOME_JOBS` override it (`mcuhome.model.jobs.resolve_jobs`,
-`mcuhome.model.jobs.auto_jobs`) — resolved on the host and handed down,
-and the environment it lands in is one function
-(`mcuhome/compiler/workspace.py:build_environment`) called from the
-invocation ABI on the container side.
+cap — derived from the `limits` the orchestrator recommends in the
+request document, and from the machine's CPU count and available RAM
+where it recommends none (`mcuhome.model.jobs.resolve_jobs`,
+`mcuhome.model.jobs.auto_jobs`) — and the environment it lands in is one
+function (`mcuhome/compiler/workspace.py:build_environment`).
 
 CHIP codegen also needs a build prerequisite outside these patches: its
 release tarball is missing the `python_path` helper its codegen scripts

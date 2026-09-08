@@ -82,38 +82,75 @@ def test_detect_jobs_survives_an_unknown_cpu_count(monkeypatch) -> None:
     assert jobs.detect_jobs() == 1
 
 
-def test_a_command_line_flag_beats_everything() -> None:
-    """The environment is passed in, so it has to be passed in here too.
-
-    This test used to `monkeypatch.setenv` and hand `resolve_jobs` an
-    empty environment, which stopped meaning anything once `env` became
-    a required argument: it proved "flag beats auto-detection", which the
-    next test over already covers, under a name promising more.
-    """
-    resolved = jobs.resolve_jobs(env={jobs.JOBS_VAR: "6"}, cli_jobs=3)
+def test_a_stated_job_count_beats_everything() -> None:
+    """A caller that resolved the number itself is answered with it."""
+    resolved = jobs.resolve_jobs(cli_jobs=3, limits=jobs.BuildLimits(cpus=16))
     assert (resolved.value, resolved.source) == (3, "flag")
 
 
-def test_the_environment_variable_beats_auto_detection(monkeypatch) -> None:
+def test_the_recommended_limits_beat_auto_detection(monkeypatch) -> None:
+    """What the orchestrator said the step should fit in is what the step
+    plans with — the machine's own answer is about a machine this build
+    was not given all of."""
     monkeypatch.setattr(jobs, "detect_jobs", lambda: pytest.fail("auto-detection ran"))
-    resolved = jobs.resolve_jobs(env={jobs.JOBS_VAR: "6"})
-    assert (resolved.value, resolved.source) == (6, "env")
+    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(jobs, "available_ram_bytes", lambda: 64 * _GIB)
+    resolved = jobs.resolve_jobs(limits=jobs.BuildLimits(cpus=6, memory_bytes=64 * _GIB))
+    assert (resolved.value, resolved.source) == (6, "limits")
 
 
-def test_neither_flag_nor_environment_falls_back_to_auto_detection(monkeypatch) -> None:
+def test_limits_that_state_nothing_are_the_same_as_none(monkeypatch) -> None:
     monkeypatch.setattr(jobs, "detect_jobs", lambda: 5)
-    resolved = jobs.resolve_jobs(env={})
-    assert (resolved.value, resolved.source) == (5, "auto")
+    assert jobs.resolve_jobs(limits=jobs.BuildLimits()).source == "auto"
+    assert jobs.resolve_jobs().value == 5
 
 
-def test_a_nonsense_environment_value_is_treated_as_unset(monkeypatch) -> None:
-    """A typo in a shell rc file falls back to auto rather than breaking every build."""
-    monkeypatch.setattr(jobs, "detect_jobs", lambda: 5)
-    resolved = jobs.resolve_jobs(env={jobs.JOBS_VAR: "not-a-number"})
-    assert (resolved.value, resolved.source) == (5, "auto")
+def test_the_memory_limit_is_divided_by_the_same_budget_auto_detection_uses() -> None:
+    """A build sized from a limit and a build sized from the machine
+    differ in where the figure came from and in nothing else."""
+    limits = jobs.BuildLimits(memory_bytes=8 * _GIB)
+    assert limits.jobs(cpu_count=16, available=64 * _GIB) == 4
+    assert jobs.auto_jobs(16, 8 * _GIB) == 4
 
 
-def test_a_zero_environment_value_is_also_treated_as_unset(monkeypatch) -> None:
-    monkeypatch.setattr(jobs, "detect_jobs", lambda: 5)
-    resolved = jobs.resolve_jobs(env={jobs.JOBS_VAR: "0"})
-    assert (resolved.value, resolved.source) == (5, "auto")
+def test_a_fractional_cpu_limit_rounds_down() -> None:
+    """``--cpus 1.5`` is one and a half cores' worth of time; half a core
+    is not half a compile, so the ceiling is one — and the floor of two
+    that every other path has still applies."""
+    assert jobs.BuildLimits(cpus=1.5).jobs(cpu_count=16, available=64 * _GIB) == 1
+    assert jobs.BuildLimits(cpus=3.9).jobs(cpu_count=16, available=64 * _GIB) == 3
+
+
+def test_the_machine_answers_for_whichever_figure_was_not_stated() -> None:
+    """An orchestrator that can bound the memory but not the CPU states
+    the one it means, and the other is the machine's.
+
+    A limit only ever narrows: a step told it may use more than the
+    machine has is still a step on that machine.
+    """
+    # Memory limited far above what the machine has: the machine decides.
+    assert jobs.BuildLimits(memory_bytes=64 * _GIB).jobs(cpu_count=8, available=6 * _GIB) == 3
+    # CPU limited above the machine's count: the machine decides again.
+    assert jobs.BuildLimits(cpus=99).jobs(cpu_count=8, available=6 * _GIB) == 3
+    # And the limit decides wherever it is the narrower of the two.
+    assert jobs.BuildLimits(memory_bytes=4 * _GIB).jobs(cpu_count=8, available=64 * _GIB) == 2
+
+
+def test_a_limits_member_that_is_not_a_positive_number_is_read_as_absent() -> None:
+    """The soft copy of a limit is not worth failing a step over: what
+    actually holds is enforced from outside, and refusing here would turn
+    a cosmetic bug into a failed build."""
+    assert jobs.BuildLimits.from_document(None) == jobs.BuildLimits()
+    assert jobs.BuildLimits.from_document({"cpus": "four"}) == jobs.BuildLimits()
+    assert jobs.BuildLimits.from_document({"cpus": 0, "memory_bytes": -1}) == jobs.BuildLimits()
+    assert jobs.BuildLimits.from_document({"cpus": True}) == jobs.BuildLimits()
+    assert jobs.BuildLimits.from_document({"cpus": 2.5}) == jobs.BuildLimits(cpus=2.5)
+
+
+def test_the_document_form_states_only_what_was_limited() -> None:
+    assert jobs.BuildLimits().to_dict() == {}
+    assert jobs.BuildLimits(cpus=2).to_dict() == {"cpus": 2}
+    assert jobs.BuildLimits(cpus=2, memory_bytes=17).to_dict() == {
+        "cpus": 2,
+        "memory_bytes": 17,
+    }

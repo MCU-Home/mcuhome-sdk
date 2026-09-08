@@ -304,7 +304,8 @@ The entry point must be executable by the user the orchestrator runs it as.
   "session_id": "9f2c1a",
   "invocation_id": "9f2c1a-3",
   "action": "build",
-  "parameters": {}
+  "parameters": {},
+  "limits": { "cpus": 4, "memory_bytes": 8589934592 }
 }
 ```
 
@@ -315,8 +316,38 @@ The entry point must be executable by the user the orchestrator runs it as.
 | `invocation_id` | Identifies this step. Safe to use directly in a filename. |
 | `action` | What to do. Which actions exist is not part of this specification; the orchestrator documents them — MCUHome's are in [build actions](build-actions.md). |
 | `parameters` | Arguments for the action, or `{}`. |
+| `limits` | What this step should keep itself within, or absent. See below. |
 
 Ignore fields you do not know.
+
+#### `limits` — what the step is expected to fit in
+
+An optional object, with two optional members:
+
+| Member | Meaning |
+|---|---|
+| `cpus` | How much CPU time the step should use, as a number of cores. Fractional values are allowed, and mean what they mean everywhere else: `1.5` is one and a half cores' worth of time, not two cores half the time. |
+| `memory_bytes` | How much memory the step should use, as a whole number of bytes. |
+
+**It is a recommendation, and the orchestrator is not asking politely.**
+Honour it: size your parallelism from it rather than from what the
+machine appears to have, because what the machine appears to have is not
+what you were given. You *may* exceed it — a link that needs more memory
+than one job's share is a normal thing to do — but expect the
+orchestrator to enforce its own hard limits from outside, and those it
+does not negotiate (§11): it may kill a process of yours, or the whole
+step, at any point. An environment that treats the recommendation as the
+budget it plans with is the one that never finds out how that is
+implemented.
+
+**Absent means: decide for yourself.** An orchestrator that states no
+limits has said nothing about the machine, so size the build the way you
+would on a machine of your own.
+
+`MCUHOME_BUILDER_BASE_DIR` remains the only environment variable this
+specification defines (§4). Limits travel in this document and nowhere
+else — an orchestrator that put them in the environment would be adding
+to a boundary that is deliberately one variable wide.
 
 ### 6.2 The result document
 
@@ -554,7 +585,10 @@ step starts from pristine trees again.
   assume read-only — your own trees included.
 - **Limits are enforced.** Whatever CPU, memory, disk and time budget the
   orchestrator has set, it may enforce hard. Be prepared to be killed;
-  behave accordingly.
+  behave accordingly. Where it tells you the budget it is holding you to,
+  it does so in the request document's `limits` (§6.1) — that is the one
+  place to read it, and reading it is how you avoid finding out the rest
+  of this rule.
 - **Nothing survives a step** except `out` and the writable cache tiers.
 - **You are not alone.** Another build of the same project may be running
   against the same `project` cache right now — and in the subprocess

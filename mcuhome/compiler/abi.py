@@ -3162,10 +3162,13 @@ def _step_build(
         # own invocation and nothing else; an id-less request is answered
         # with the one token this step is certain of.
         session=session if isinstance(session, str) else invocation_id,
-        # Nobody states a job count: the orchestrator enforces its limits
-        # (§11) rather than negotiating them, so the environment sizes its
-        # own build.
-        jobs=jobs.resolve_jobs(env=env).value,
+        # The parallelism this step plans with: derived from the
+        # `limits` the orchestrator recommended (§6.1) and from this
+        # machine only where it recommended nothing. What is enforced is
+        # enforced from outside and is not negotiated (§11) — a step that
+        # planned with what the machine appears to have is the step that
+        # gets killed.
+        jobs=jobs.resolve_jobs(limits=jobs.BuildLimits.from_document(document.get("limits"))).value,
         record=carried.record,
         record_document=carried.record_document,
         # What may be written, said honestly: exactly the trees this step

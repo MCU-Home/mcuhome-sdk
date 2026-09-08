@@ -1,21 +1,26 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""How many compile jobs this machine can sustain, and why that number.
+"""How many compile jobs a build can sustain, and out of what.
 
 Vocabulary rather than machinery, which is why it sits here: *both* ends
-of a build need it and neither owns it. A command line resolves the
-number once, on the host, before anything starts — the host is where the
-RAM budget is knowable — and hands it down; the program inside a build
-container takes the resolved figure as given and only falls back to
-resolving it itself when nobody stated one.
+of a build need it and neither owns it. The orchestrator states what a
+step should keep itself within — the build environment specification's
+``limits`` in the request document, a CPU figure and a memory figure —
+and the builder sizes its parallelism from that. Where nothing was
+stated, the machine answers for itself.
 
-It used to live in the compiler, beside the west invocation that consumes
-it, and that was one edge too many: a host that drives a build container
-needs the number and must not need a toolchain to learn it.
+**The limits are a recommendation and the parallelism is derived from
+them.** The orchestrator enforces its own hard limits from outside
+(a container's ``--cpus``/``--memory``), so a build that planned with
+what the machine appears to have rather than with what it was given is
+the build that gets killed. Nothing here enforces anything: it turns two
+numbers into a job count.
 
-Nothing here reads the process environment (:mod:`mcuhome.model.userpaths`
-says why). It reads ``/proc/meminfo``, which is a fact about the machine
-rather than about a caller.
+Nothing here reads the process environment
+(:mod:`mcuhome.model.userpaths` says why), and nothing takes a job count
+out of one: limits travel in the request document and nowhere else. It
+reads ``/proc/meminfo``, which is a fact about the machine rather than
+about a caller.
 """
 
 from __future__ import annotations
@@ -23,9 +28,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 __all__ = [
-    "JOBS_VAR",
+    "BYTES_PER_JOB",
+    "BuildLimits",
     "ResolvedJobs",
     "auto_jobs",
     "available_ram_bytes",
@@ -33,14 +40,15 @@ __all__ = [
     "resolve_jobs",
 ]
 
-#: Environment variable that overrides job-count auto-detection outright
-#: (see :func:`resolve_jobs`) — the escape hatch for a machine
-#: :func:`auto_jobs` still guesses wrong for, e.g. a container with a
-#: cgroup memory limit ``/proc/meminfo`` does not reflect. ``--jobs`` on
-#: the command line beats it; it beats auto-detection.
-JOBS_VAR = "MCUHOME_JOBS"
-
 _GIB = 1024**3
+
+#: What one compile job is budgeted. Measured CHIP C++ compiles peak
+#: around 1-1.5 GiB; the final link spikes higher, but only one link runs
+#: at a time, so it does not change the per-job budget. Stated here
+#: because :func:`auto_jobs` and a stated memory limit have to divide by
+#: the same number — a build sized from a limit and a build sized from
+#: the machine differ in where the figure came from and in nothing else.
+BYTES_PER_JOB = 2 * _GIB
 
 #: :func:`available_ram_bytes` rather than a hardcoded path only inside
 #: it, so the test suite can point it at a fixture file instead of
@@ -84,7 +92,7 @@ def available_ram_bytes(path: Path | None = None) -> int:
 def auto_jobs(cpu_count: int, available_ram_bytes: int) -> int:
     """Parallelism this hardware can sustain without swapping.
 
-    ``min(cpu_count, max(2, available_ram_gb // 2))``. Measured CHIP C++
+    ``min(cpu_count, max(2, available_ram_bytes // BYTES_PER_JOB))``. Measured CHIP C++
     compiles peak around 1-1.5 GiB per job; the final link spikes higher,
     but only one link runs at a time (ninja serializes it), so it does not
     change the per-job budget. Budgeting 2 GiB per job keeps a no-swap
@@ -98,8 +106,7 @@ def auto_jobs(cpu_count: int, available_ram_bytes: int) -> int:
     :param cpu_count: usually ``os.cpu_count()``.
     :param available_ram_bytes: usually :func:`available_ram_bytes`.
     """
-    ram_gb = available_ram_bytes // _GIB
-    return min(cpu_count, max(2, ram_gb // 2))
+    return min(cpu_count, max(2, available_ram_bytes // BYTES_PER_JOB))
 
 
 def detect_jobs() -> int:
@@ -108,44 +115,110 @@ def detect_jobs() -> int:
 
 
 @dataclass(frozen=True)
+class BuildLimits:
+    """What a step is expected to fit in: the request document's ``limits``.
+
+    Both members are optional and each is read on its own — an
+    orchestrator that can bound the memory but not the CPU states the one
+    it means. Absent throughout is a limits object that says nothing,
+    which is the same as none at all.
+
+    :attr:`cpus` is a number of cores and may be fractional, exactly as
+    ``docker run --cpus`` is: ``1.5`` is one and a half cores' worth of
+    time. A job count derived from it rounds **down** — half a core is
+    not half a compile.
+    """
+
+    cpus: float | None = None
+    memory_bytes: int | None = None
+
+    @property
+    def stated(self) -> bool:
+        """Whether anything was limited at all."""
+        return self.cpus is not None or self.memory_bytes is not None
+
+    def to_dict(self) -> dict[str, float | int]:
+        """The document form: only the members that were stated."""
+        document: dict[str, float | int] = {}
+        if self.cpus is not None:
+            document["cpus"] = self.cpus
+        if self.memory_bytes is not None:
+            document["memory_bytes"] = self.memory_bytes
+        return document
+
+    @staticmethod
+    def from_document(value: Any) -> BuildLimits:
+        """Read ``limits`` out of a request document, tolerantly.
+
+        A member that is not a positive number is read as absent rather
+        than refused. This is the recommendation, not the enforcement: an
+        orchestrator that writes nonsense into it has already set the
+        hard limits that actually hold, and refusing the step over the
+        soft copy would turn a cosmetic bug into a failed build.
+        """
+        if not isinstance(value, dict):
+            return BuildLimits()
+        return BuildLimits(
+            cpus=_positive_number(value.get("cpus")),
+            memory_bytes=_positive_int(value.get("memory_bytes")),
+        )
+
+    def jobs(self, *, cpu_count: int | None = None, available: int | None = None) -> int:
+        """The parallelism these limits allow, on this machine.
+
+        The same arithmetic :func:`auto_jobs` does, with what was stated
+        standing in for what the machine has: the CPU figure rounded down
+        is the ceiling, the memory figure divided by :data:`BYTES_PER_JOB`
+        is the budget, and the machine answers for whichever of the two
+        was not stated.
+        """
+        cores = cpu_count if cpu_count is not None else (os.cpu_count() or 1)
+        memory = available if available is not None else available_ram_bytes()
+        if self.cpus is not None:
+            cores = min(cores, int(self.cpus))
+        if self.memory_bytes is not None:
+            memory = min(memory, self.memory_bytes)
+        return auto_jobs(max(1, cores), memory)
+
+
+def _positive_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if value > 0 else None
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value > 0 else None
+
+
+@dataclass(frozen=True)
 class ResolvedJobs:
     """A job count together with why it was chosen — for the build summary."""
 
     value: int
-    #: ``"flag"`` (``--jobs``), ``"env"`` (:data:`JOBS_VAR`), or ``"auto"``
+    #: ``"flag"`` (a job count a caller stated outright), ``"limits"``
+    #: (derived from the request document's ``limits``), or ``"auto"``
     #: (:func:`detect_jobs`).
     source: str
 
 
-def resolve_jobs(*, env: dict[str, str], cli_jobs: int | None = None) -> ResolvedJobs:
+def resolve_jobs(*, cli_jobs: int | None = None, limits: BuildLimits | None = None) -> ResolvedJobs:
     """The parallelism this build uses, and why — the single resolution point.
 
-    Precedence, most specific wins: ``--jobs`` on the command line, then
-    :data:`JOBS_VAR` in the environment, then :func:`detect_jobs`. This
-    runs once, on the host, before a container build even starts docker —
-    the container would see the host's CPU count either way, but its RAM
-    budget is the host's (or the WSL VM's), not a figure guessed at from
-    inside a container that may itself be memory-limited by a cgroup.
-    Everything downstream then takes the resulting number as given rather
-    than resolving it again.
+    Precedence, most specific wins: a job count a caller stated outright,
+    then the limits the orchestrator recommended, then this machine's own
+    answer. Nothing is read from the environment: the limits travel in
+    the request document, which is the one place the specification puts
+    them.
 
-    A :data:`JOBS_VAR` that is not a positive whole number is treated as
-    unset rather than refused: a typo in a shell rc file should not be
-    able to break every build until someone finds it, and auto-detection
-    is always a reasonable answer.
-
-    *env* is stated, never read from the process: one process serves
-    several sessions, and "the environment" of a server is the operator's
-    rather than any requesting user's. The command line passes its own.
+    Limits that state neither figure are the same as none — an
+    orchestrator that wrote an empty object said nothing about the
+    machine, and the machine can still answer for itself.
     """
     if cli_jobs is not None:
         return ResolvedJobs(cli_jobs, "flag")
-    raw = env.get(JOBS_VAR)
-    if raw:
-        try:
-            parsed = int(raw)
-        except ValueError:
-            parsed = 0
-        if parsed >= 1:
-            return ResolvedJobs(parsed, "env")
+    if limits is not None and limits.stated:
+        return ResolvedJobs(limits.jobs(), "limits")
     return ResolvedJobs(detect_jobs(), "auto")
