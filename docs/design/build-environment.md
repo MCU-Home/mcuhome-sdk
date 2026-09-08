@@ -131,13 +131,35 @@ builder does not take that permission and views it like any other
 workspace (section 5), so this profile pays the view's cost too — and in
 a container that cost is the mirrored layers' **bytes**, because `work`
 is the container's writable layer and the workspace a layer below it
-(measured, section 9). Before the container backend moves to the v3
-invocation (section 8) this profile therefore has to put `work` where the
-workspace is, rather than take that copy on every step. The public build
-server runs
-step containers without network as operator policy; a private operator
-may relax that. Which cache tiers exist, and what backs them, is the
-operator's decision (specification §8).
+(measured, section 9). This profile accepts that cost: `work` stays in
+the container's writable layer, the builder is unchanged, and the
+launcher mounts exactly the tree specification §4 defines and nothing
+else. Measured, the view of all three mirrored layers costs 12.0 s and
+587 MB of writable layer per step (392 MB for the `zephyr` layer alone)
+where the kernel copies a file's metadata up only, and about 1.3 GB
+where it copies the bytes; the container is discarded at the end of the
+step, so this is throughput cost and not growth. Every cheaper
+arrangement measured either hands the step an environment it can write
+and its successors inherit, or asks the orchestrator to know how the
+image and the builder are built inside (section 9). The public build
+server runs step containers without network as operator policy; a
+private operator may relax that. Which cache tiers exist, and what backs
+them, is the operator's decision (specification §8).
+
+**What the side that builds the environment may rely on.** The
+specification is the whole of it. An environment declares its package
+set and its entry point; the orchestrator delivers the tree of
+specification §4 and starts a step. Layer names, west paths, where an
+image keeps its workspace, where the builder assembles its view are
+internal to the environment and to the builder, and nothing on the
+orchestrating side may act on them — MCUHome's own image and MCUHome's
+own builder happen to be built the way this document describes, which
+makes the shortcut available, not legitimate. The boundary is not
+tidiness: it is what lets an environment with no west workspace and no
+Zephyr in it at all — an ESP-IDF one, say — be offered later behind the
+same orchestration. It binds both profiles equally, and the subprocess
+profile's provisioner may assume no more about a store than the
+container launcher may about an image.
 
 ## 5. The subprocess profile
 
@@ -265,12 +287,17 @@ in every compile invocation, so hit rates follow path stability:
    out of the project root into a dedicated workspace directory (the
    manifest repository lives physically in that directory; the
    accustomed dev-root path stays as a symlink pointing into it —
-   section 9). One thing has to be settled before that move and is
-   nobody's business until then: a step's `work` has to sit where the
-   environment's workspace does, or the view the builder assembles copies
-   the mirrored layers into the container's writable layer on every step
-   (measured, section 9). The legacy invocation the container backend
-   still uses builds no view and does not pay it.
+   section 9). The one thing that had to be settled before that move is
+   settled and measured (section 9): the copy-up is paid. A step's
+   `work` stays in the container's writable layer, the view is mirrored
+   there as it is everywhere else, and the layer it costs — 587 MB per
+   step where the kernel copies metadata up only, about 1.3 GB where it
+   copies the files — goes away with the container it belongs to. The
+   arrangements that avoid it either put the environment on a filesystem
+   the step can write, which is a worse thing to own than a large
+   writable layer, or need the launcher to know internals the boundary
+   does not hand it (section 4). The legacy invocation the container
+   backend still uses builds no view and pays neither.
 
 ## 9. Feasibility findings
 
@@ -354,23 +381,85 @@ incorporate their consequences.
   project may declare `west-commands` too, and west's check passes for it
   because *both* sides resolve into the store together.
 
-  **The findings were measured on a read-only store and the rule is not
-  limited to one.** The builder assembles this view for every step of
-  every profile (section 5), so the container profile's baked workspace
-  and a west workspace somebody is developing in are viewed the same way.
-  What differs is what the mirror costs, and it costs bytes wherever a
-  hard link cannot be made: the workspace on another filesystem than
-  `work`, and — measured 2026-09-07 against
-  `ghcr.io/mcu-home/build-environment:0.1.10.dev1-r1` on the overlayfs
-  driver — a container, where `work` is the writable layer and the baked
-  workspace a layer below it. Hard-linking the `zephyr` layer alone
-  (59 536 files, 612 MB in the image) into `/mcuhome/work` grew that
-  container's writable layer from nothing to 392 MB: `link()` succeeds
-  and the two paths share an inode afterwards, but overlayfs copies the
-  file up first. Putting a step's `work` where the environment's
-  workspace actually lives is therefore a property a profile owes its
-  builds rather than a detail, and for the container profile it is work
-  to do before its backend moves to this invocation (section 8).
+  **The findings were measured on a read-only store, and a container is
+  not one.** The builder assembles this view for every step of every
+  profile (section 5), so the container profile's baked workspace and a
+  west workspace somebody is developing in are viewed the same way. What
+  differs is what the mirror costs. It costs a copy wherever a hard link
+  cannot be made — the workspace on another filesystem than `work` — and
+  a container is such a place even though it looks like one filesystem:
+  `work` is the writable layer and the baked workspace a layer below it,
+  so overlayfs copies a file up before it links it. Measured 2026-09-08
+  against `ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1` (Docker
+  29.7.2, containerd image store, overlayfs over ext4), the full view of
+  the three mirrored layers takes 12.0 s and grows the container's
+  writable layer by 587 MB, of which the `zephyr` layer alone is 392 MB —
+  the figure the earlier measurement of that layer by itself had
+  produced. The links are real: `link()` succeeds and the two paths share
+  an inode afterwards. What the copy-up costs is the kernel's option
+  rather than a constant: with overlayfs `metacopy` on, as it is on the
+  machine measured, only the metadata is copied and a 2 027 256-byte file
+  costs 45 056 bytes of writable layer; with `metacopy` off it costs its
+  own size (2 043 904 bytes, measured on an overlay mounted for the
+  purpose), which puts the same view at about 1.3 GB. That is what the
+  container profile pays per step (section 4), into a layer thrown away
+  with the container that step ran in.
+
+  **A hard link needs a permission the mirror never had to ask a store
+  for.** `fs.protected_hardlinks` is 1 on any current Linux, and it lets
+  a process link only to a file it owns or may both read and write. The
+  image's workspace is unpacked as root, the step runs as whatever UID
+  the orchestrator chose, and the mirror succeeds only because that
+  workspace is world-writable. Made `a+rX` — which is what a workspace
+  nothing writes should be — every `link()` is refused, the builder falls
+  back to copying, and the same view costs 21.5 s and 1.28 GB. Tightening
+  the image's workspace permissions is therefore not a free hardening
+  step: it waits on a view that does not link.
+
+  **One filesystem is not enough; it has to be one mount.** Hard links do
+  not cross a mount even inside a single filesystem: a store bind-mounted
+  read-only beside a `work` bind of the same ext4 answers `EXDEV`, and so
+  does a `work` on tmpfs (both measured). The two arrangements that do
+  link were measured and rejected. A named volume populated from the
+  image and holding the step's directories as well costs 56.4 s and
+  1.9 GB once per environment, then 4.6 s and 74 MB per step; the
+  workspace unpacked on the host with `work` beside it under one bind
+  mount costs 55 s and 1.5 GB once, then 4.8 s and 74 MB per step, and
+  leaves the image's own workspace unused. Both hand the step a writable
+  environment that outlives it, which is the property this profile exists
+  to deny. Moving `work` elsewhere in the image's rootfs is not a third
+  arrangement: `/tmp/work` and `/mcuhome/work` are the same writable
+  layer and cost the same to the megabyte.
+
+  **The view would not have to be mirrored at all, and that is where the
+  boundary bites.** What west and CMake need of a mirrored layer is a
+  real directory whose paths resolve to themselves, and a *mount* of that
+  layer at its place inside the view is one, exactly as a tree of hard
+  links is — at no cost, because nothing is written to make it. Measured
+  2026-09-08 with the three layers mounted read-only at their view paths
+  straight out of the image (`docker run --mount
+  type=image,…,image-subpath=…`, which the containerd image store makes
+  possible): assembling the rest of the view — the workspace's top
+  level, the links to the other projects, the delivered SDK — writes
+  542 bytes and takes a millisecond, and the result is a west workspace
+  by every check the mirror was built for. `west topdir` answers with
+  the view, `west manifest --path` names the view's manifest, `west list`
+  resolves every project including the ones the Zephyr manifest
+  `import:`s, `west build --help` loads the
+  extension command out of the mounted `zephyr` — west's `west-commands`
+  containment check passing on a mounted tree — `scripts/zephyr_module.py`
+  runs from inside it, and `git describe` answers with the pinned tag. It
+  needs `safe.directory` for the view's path, because the mounted trees
+  belong to whoever built the image; without it west stops at "failed
+  manifest import in zephyr". What it needs beyond that is a launcher
+  that knows which layers the workspace package has, where the image
+  keeps them, and where the builder places them in the view — three
+  things the boundary does not tell an orchestrator and section 4 does
+  not let it assume. The arrangement is therefore possible only behind an
+  explicit extension of that boundary, in which an environment declares
+  the layers it can have mounted and the builder declares the view layout
+  that receives them. That extension is deferred; until it exists, the
+  container profile mirrors and pays.
 - **Offline venv**: creating and populating a venv from a bundled wheel
   set works fully offline (`--no-index`, verified with an unreachable
   proxy) at arbitrary paths; `python3 -m venv` itself needs no network.
