@@ -287,7 +287,15 @@ in every compile invocation, so hit rates follow path stability:
    out of the project root into a dedicated workspace directory (the
    manifest repository lives physically in that directory; the
    accustomed dev-root path stays as a symlink pointing into it —
-   section 9). The one thing that had to be settled before that move is
+   section 9). **Done for the builds themselves**: a local build in a
+   container, a local build in a subprocess and a remote build through
+   the build server all run the package-built image on the invocation
+   this specification defines, and the vocabulary a user states them in
+   is a target (`local` | `remote`) crossed with a mode (`container` |
+   `subprocess`). This repository's own CI compiles the Zephyr suites
+   and the reference Matter firmware in that same environment. What
+   remains of this step is the workspace move and the documentation.
+   The one thing that had to be settled before the workspace move is
    settled and measured (section 9): the copy-up is paid. A step's
    `work` stays in the container's writable layer, the view is mirrored
    there as it is everywhere else, and the layer it costs — 587 MB per
@@ -296,8 +304,7 @@ in every compile invocation, so hit rates follow path stability:
    arrangements that avoid it either put the environment on a filesystem
    the step can write, which is a worse thing to own than a large
    writable layer, or need the launcher to know internals the boundary
-   does not hand it (section 4). The legacy invocation the container
-   backend still uses builds no view and pays neither.
+   does not hand it (section 4).
 
 ## 9. Feasibility findings
 
