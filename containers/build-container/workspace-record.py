@@ -13,7 +13,7 @@ revisions in ``west.yml`` are *tags*, and a tag is movable at the remote,
 so a rebuild of the same Dockerfile can silently produce a different
 workspace. Recording the resolved 40-character commit per layer turns
 that from something to trust into something to check. The same argument
-ADR 0018 makes with ``sdk.sha256``, and the reason a build container is
+the SDK pin makes with ``sdk.sha256``, and the reason a build container is
 recorded by digest rather than by tag once a backend has chosen one.
 
 **Why the layer names are the builder program's.** ``zephyr``, ``sdk``,
@@ -27,7 +27,7 @@ an identity and a name alone cannot tell two patch sets apart. The
 SHA-256 can.
 
 The ``sdk`` layer is recorded with ``mounted: true`` and no version: it
-is deliberately not in the image (ADR 0018 makes it a hash-pinned package
+is deliberately not in the image (it is a hash-pinned package
 fetched per build), and the contract already models exactly that case as
 a ``trees`` entry without a version.
 """

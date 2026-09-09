@@ -1,7 +1,7 @@
 # containers/build-container/
 
 The **MCUHome builder image** — the single build environment
-([ADR 0007](../../docs/adr/0007-containerized-toolchain.md)). Developers,
+one containerized toolchain for every build. Developers,
 CI and the Home Assistant add-on all compile in this image, which is what
 makes "works on my machine" and "passes in CI" the same statement.
 
@@ -25,7 +25,7 @@ mcuhome device build <device>                                 # uses it by defau
 
 Not in it, on purpose: the Zephyr SDK's other ~20 target toolchains and
 its host-tool bundle (qemu, openocd — flashing does not happen in a
-container, see ADR 0007), and the heavy half of Zephyr's Python
+container), and the heavy half of Zephyr's Python
 requirements (pyocd, opencv, numpy). The zap **GUI** binary ships in the
 same archive as `zap-cli` and is on `PATH`, but does not start: editing a
 `.zap` needs a display, so the desktop libraries beyond what headless
@@ -54,14 +54,14 @@ workspace and compiles it into the boot banner, so the workspace's git
 state is a build input — and one that appears in no build context. The
 same example built here and on a CI runner differed for exactly that
 reason (measured 2026-08-09: 748960 against 748964 bytes; a shallow clone
-cannot see its tag, so `describe` answers with the commit). ADR 0018
+cannot see its tag, so `describe` answers with the commit). The design
 promises that a build context plus a pinned container digest reproduces a
 build; baking the workspace is what makes that true, because the git state
 becomes a property of the image digest.
 
 Three consequences worth knowing:
 
-- **The SDK is not baked.** ADR 0018 makes it a hash-pinned package
+- **The SDK is not baked.** It is a hash-pinned package
   fetched per build, so `/mcuhome/workspace/mcuhome/` is present and
   empty, ready to be mounted into. West re-reads `west.yml` from there on
   *every* CMake configure, so a forgotten mount stops the build at
@@ -101,7 +101,7 @@ The build-environment boundary is now specified by
 [`docs/spec/build-environment-specification.md`](../../docs/spec/build-environment-specification.md),
 which this image predates and will be aligned to.
 
-That module path is why **r6** exists: ADR 0020's package split moved the
+That module path is why **r6** exists: the package split moved the
 ABI from `mcuhome.abi` into `mcuhome.compiler.abi`, and this launcher is
 the one piece of *image* content that spells it. The module it launches
 is not image content — it arrives with the SDK mount — so nothing else
@@ -194,7 +194,7 @@ constants behind `contract`, `request`, `result` and `actions`.
 Everything else in `mcuhome/` can change without touching this image,
 because the body arrives with the SDK mount. The version half needs no
 discipline of its own: one tag cuts the wheels, the SDK archive and this
-image (ADR 0020 decision 8).
+image, which the release version covers.
 
 ## Two architectures (r11)
 
@@ -280,7 +280,7 @@ justifies still stands.
 To use a locally built image, tag it however you like and select it per
 build with `--build-mode local --container-image …`, for a whole shell with
 `MCUHOME_BUILDER_IMAGE=…`, or durably as a local builder's `image:`
-(ADR 0023).
+by design.
 
 Inspecting what a given image actually carries needs no build:
 
@@ -370,7 +370,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 ## Bumping Zephyr
 
-The Zephyr pin, the CHIP pin and this image move together (ADR 0008). In
+The Zephyr pin, the CHIP pin and this image move together. In
 one commit: `west.yml`, `ZEPHYR_RELEASE` in `mcuhome/model/buildimage.py`,
 `IMAGE_REVISION` back to 1, and the SDK version and checksums in the
 `Dockerfile`.

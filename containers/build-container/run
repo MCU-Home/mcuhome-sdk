@@ -28,7 +28,7 @@
 #   /opt/venv                the image's Python environment
 #   /mcuhome/workspace/mcuhome
 #       the west manifest repository's directory in the baked workspace,
-#       which is where ADR 0018's hash-pinned SDK package is mounted per
+#       which is where the hash-pinned SDK package is mounted per
 #       session. The mcuhome Python package sits inside it, so this is a
 #       PYTHONPATH entry and not a module path.
 

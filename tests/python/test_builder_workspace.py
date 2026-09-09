@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The west workspace baked into the builder image (r3, ADR 0020 E5).
+"""The west workspace baked into the builder image (r3).
 
 **Docker never runs here**, same rule as ``test_container.py``: building
 the image takes minutes and gigabytes, and the pytest half of the strategy
@@ -299,7 +299,7 @@ def test_describe_json_is_written_by_the_program_that_answers_describe() -> None
 
 
 def test_the_program_body_is_borrowed_for_that_and_never_installed() -> None:
-    """ADR 0018 makes the SDK a hash-pinned package fetched per build.
+    """The SDK is a hash-pinned package fetched per build.
 
     So the tree the describe step imports must live outside the ``/mcuhome``
     namespace this stage exports, and reach the final image through
@@ -415,7 +415,7 @@ def test_the_record_names_the_resolved_commit_and_the_patch_digest(tmp_path, mon
 
 
 def test_the_sdk_layer_is_recorded_as_absent(tmp_path, monkeypatch) -> None:
-    """ADR 0018 makes it a hash-pinned package fetched per build.
+    """It is a hash-pinned package fetched per build.
 
     So it is a tree the image knows the location of and not the content
     of — which the contract already models as a ``trees`` entry without a

@@ -4,7 +4,7 @@
 # Python environment of the MCUHome builder image (containers/builder/).
 #
 # Fully pinned, including transitive dependencies: the image is the one
-# build environment (ADR 0007), so "same image tag" has to mean "same
+# build environment, so "same image tag" has to mean "same
 # packages" — a floating dependency would make two builds of the same
 # image tag differ. Regenerate with `pip freeze` inside the image after
 # changing the direct dependencies below, and bump the image revision in

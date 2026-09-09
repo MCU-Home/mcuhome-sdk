@@ -1997,7 +1997,7 @@ class _Build:
         then absorbed into the session's ``work/tree`` content-aware —
         a file whose bytes are already there is left alone, mtime and
         all. Handing the child ``work/tree`` directly would be cheaper
-        and wrong twice over: a foreign SDK entry point (E30's whole
+        and wrong twice over: a foreign SDK entry point (the whole
         point is that it need not be MCUHome's) may rely on the emptiness
         the contract states, and one that lists ``out`` before writing
         would see another invocation's files. The absorb is what keeps

@@ -1,22 +1,22 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The MCUHome builder image (ADR 0007): the single build environment used
+# The MCUHome builder image: the single build environment used
 # by developers, CI and the Home Assistant add-on. Since r3 it carries two
 # things: the TOOLS (Zephyr SDK, west, gn, zap, ccache) and a real WEST
 # WORKSPACE at /mcuhome/workspace — Zephyr, the modules it imports, MCUboot
 # and the Matter SDK, at the revisions west.yml pins, with the patch set in
 # patches/ applied. What it does NOT carry is MCUHome itself: the manifest
 # repository's directory (/mcuhome/workspace/mcuhome) is present and empty,
-# because ADR 0018 makes the SDK a hash-pinned package fetched per build
+# because the SDK is a hash-pinned package fetched per build
 # and mounted there at run time.
 #
-# Why the workspace is baked (ADR 0020 decision E5). Zephyr stamps
+# Why the workspace is baked. Zephyr stamps
 # BUILD_VERSION from `git describe` in the workspace and compiles it into
 # the boot banner, so the git state of the workspace is a build input —
 # one that appears in no build context. The same example built from a full
 # checkout and from CI's shallow one differ (measured 2026-08-09: 748960
-# against 748964 bytes), which contradicts ADR 0018's promise that a
+# against 748964 bytes), which contradicts the promise that a
 # context plus a pinned container digest reproduces the build. Baked, that
 # state becomes a property of the image digest, and the gap closes.
 #
@@ -57,7 +57,7 @@
 # Everything else in mcuhome/ can change without touching this image,
 # because the body arrives with the SDK mount. The version half needs no
 # discipline: one tag cuts the wheels, the SDK archive and this image
-# (ADR 0020 decision 8), so a release rebuilds it anyway.
+# with the release, so a release rebuilds it anyway.
 #
 # Build (from the repository root — the context is the REPOSITORY, not
 # this directory, because west.yml and patches/ live outside it):
@@ -97,7 +97,7 @@ ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6
 # when a new architecture ships. The SDK's own host tools (qemu, openocd,
 # a second dtc) are deliberately not installed — Debian's dtc and gperf
 # are what the build uses, and flashing does not happen in this container
-# (ADR 0007).
+# by design.
 # Two hashes per download since r11, because the archive is per host
 # architecture and a hash is a statement about bytes. The host spelling
 # differs three ways across the three publishers — linux-x86_64 /
@@ -111,7 +111,7 @@ ARG ZEPHYR_TOOLCHAIN=arm-zephyr-eabi
 ARG ZEPHYR_TOOLCHAIN_SHA256_AMD64=21b85981cb5a1818d9bc53d82af80f208946ec038b982ff1907287572ed3a634
 ARG ZEPHYR_TOOLCHAIN_SHA256_ARM64=b9805b691f2f0a8926c92694cae378d05ba07b76abca745e216fcc52753cc4d6
 
-# gn: the Matter SDK builds its own libraries with it (ADR 0006). Taken
+# gn: the Matter SDK builds its own libraries with it. Taken
 # from the CIPD package Chromium infrastructure publishes, pinned by the
 # gn git revision — `gn --version` reports `2502 (17b0057970fa)`, which
 # is the version the MCUHome prototype was verified with. Pigweed's own
@@ -387,7 +387,7 @@ RUN python3 /tmp/workspace-record.py \
 
 # The manifest repository's directory is emptied and left in place. west
 # needed west.yml to get here; the SDK mount brings it back at run time,
-# because ADR 0018 makes the SDK a hash-pinned package fetched per build
+# because the SDK is a hash-pinned package fetched per build
 # rather than image content.
 #
 # It is re-read on EVERY CMake configure — zephyr/scripts/zephyr_module.py
@@ -542,7 +542,7 @@ RUN chmod 0755 /mcuhome/run
 # the grammar precisely because a constraint is *evaluated* against these
 # values:
 #
-#   the NAME was org.mcuhome.model.toolchain — a casualty of ADR 0020's
+#   the NAME was org.mcuhome.model.toolchain — a casualty of the
 #       mcuhome.toolchain -> mcuhome.model.toolchain rename, which walked
 #       into a label the contract owns. A backend looks for
 #       org.mcuhome.build-environment.toolchain (§2.1) and finds nothing, and "a container

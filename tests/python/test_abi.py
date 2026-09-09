@@ -987,7 +987,7 @@ def test_a_manifest_that_states_no_format_version_is_not_unsupported(
     That reason means the program "found a ``context`` format version it
     does not implement" (§5.4) and §3.2 justifies the status with "nothing
     about this context is broken". A manifest with no ``context`` key is
-    broken — §7.3 says it in as many words since the E36 erratum: "no
+    broken — §7.3 says it in as many words: "no
     other image would fare better with it, so there is nothing for a
     backend to reschedule onto". So it is ``error.context.unreadable``,
     the reason the registry provides for every manifest that cannot be
@@ -1206,7 +1206,7 @@ def device_model_json() -> str:
     the reference device's golden wire document — the same document a
     remote build sends — because resolving a configuration into one is
     the workbench's half of the pipeline and lives in the tools
-    repository (ADR 0024).
+    repository.
     """
     return resolve_file(EXAMPLE).to_json()
 
@@ -2013,7 +2013,7 @@ def test_the_generate_child_is_invoked_over_this_same_abi(build: BuildSetup) -> 
     the *backend* of that invocation" — and a backend owes every
     invocation what §4's table promises, so the ``out`` the child
     receives is a **fresh, empty** per-invocation directory, not the
-    session's tree. A foreign entry point (E30: it need not be MCUHome's)
+    session's tree. A foreign entry point (it need not be MCUHome's)
     may rely on that emptiness; one that listed ``out`` before writing
     would otherwise see another invocation's files. What the child
     produced is then absorbed into ``work/tree`` content-aware, which is
@@ -2207,7 +2207,7 @@ def test_a_build_that_leaves_no_kconfig_cannot_state_the_signing_block(
 
 
 def test_a_board_without_an_update_scheme_cannot_be_built(build: BuildSetup) -> None:
-    """The registry is what knows the MCUboot layout (ADR 0015 decision 2).
+    """The registry is what knows the MCUboot layout.
 
     A model naming a board this builder has no update scheme for cannot
     produce the ``signing`` block §7.2.1 makes mandatory, so the refusal
@@ -2391,7 +2391,7 @@ def test_the_trees_come_from_the_images_own_record(backend: Backend) -> None:
 
     The ``mounted`` layer is reported **at the path the record names**,
     with no version: the SDK is a hash-pinned package fetched per session
-    (ADR 0018), but west resolves project paths from ``.west/config``
+    (a hash-pinned package), but west resolves project paths from ``.west/config``
     plus the manifest, so this image needs it mounted at exactly that
     directory — and ``build`` refuses any other. Reporting ``null`` here
     ("put it wherever you like", §7.1.1) once made ``describe`` and
