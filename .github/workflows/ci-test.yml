@@ -8,7 +8,8 @@
 #   test-pytest  — the Python suite in tests/python/ (the fast half of
 #                  the test strategy, docs/design/builder-pipeline.md
 #                  section 9): model, compiler, the golden generator
-#                  output. `-rs` keeps any skip loud in the log rather
+#                  output, and the closure the SDK entry point is allowed
+#                  to import. `-rs` keeps any skip loud in the log rather
 #                  than a dot.
 #   test-twister — the Zephyr test suites in tests/, compiled and run
 #                  inside MCUHome's build environment image: the same

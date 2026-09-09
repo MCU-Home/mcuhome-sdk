@@ -256,10 +256,10 @@ def build_environment(
     override an inherited value on purpose. The scratch directory a step
     is handed is per step and nobody else's, which is exactly what a child
     process should be scribbling in; and an inherited ``HOME`` inside a
-    container belongs to whoever built the
-    image, not to the UID the build runs as — see
-    :data:`mcuhome.model.buildimage.CONTAINER_HOME` for what that costs when it
-    is missing.
+    container belongs to whoever built the image, not to the UID the
+    build runs as. That UID has no ``/etc/passwd`` entry — it comes from
+    the host — so without a writable ``HOME`` of its own every tool that
+    caches in one fails obscurely.
     """
     prepared = dict(env)
     existing = prepared.get("PYTHONPATH", "")

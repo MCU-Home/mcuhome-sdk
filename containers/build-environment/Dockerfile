@@ -26,7 +26,9 @@
 # orchestrator will ever match it.
 #
 # The image the baked `containers/build-container/` produces is untouched
-# by all of this and continues in parallel until the switchover.
+# by all of this. No device is built in it any more; it survives as the
+# toolchain `scripts/build_env_package.py` builds the two packages
+# assembled here in.
 
 # The pinned Debian base, digest-pinned exactly as
 # `containers/build-container/Dockerfile` pins it — `trixie-slim` moves with

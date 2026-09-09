@@ -516,10 +516,12 @@ jobs:
           lscpu | grep -Ei 'model name|^cpu\(s\)|thread|core|socket|mhz|bogomips' || lscpu
           free -h
 
-      # Logged in so the environment image is pulled with this run's own
-      # token rather than anonymously. The pull itself is the workbench's:
-      # it resolves which image delivers the package set the build context
-      # pins and fetches that one, exactly as it does on a workstation.
+      # Logged in so the *pull* the workbench makes carries this run's own
+      # token rather than being anonymous. Resolution itself is anonymous:
+      # which image delivers the package set the build context pins is
+      # answered by reading candidates' labels out of the registry, and
+      # that read needs no credential for a public repository. Only the
+      # daemon fetching the bytes uses the login below.
       - name: Log in to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:

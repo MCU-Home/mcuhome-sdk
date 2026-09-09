@@ -47,13 +47,14 @@ below has a consumer that fails without it:
 ``bin/generate``                 the entry point itself — spawned as a child by
                                  absolute path, so its **exec bit** is archive
                                  content and not repository cosmetics
-``mcuhome/model``,               the program body:
-``mcuhome/compiler``             ``containers/build-container/run`` refuses
-                                 (exit 70) without ``mcuhome/compiler/abi.py``,
-                                 whose import closure since the repository
-                                 split is the model and the compiler itself —
-                                 the workbench neither travels in the SDK
-                                 package nor exists in a build container
+``mcuhome/model``,               the program body: a build environment's
+``mcuhome/compiler``             entry point hands over to
+                                 ``mcuhome/compiler/abi.py`` and refuses the
+                                 step without it, and that module's import
+                                 closure since the repository split is the
+                                 model and the compiler themselves — the
+                                 workbench neither travels in the SDK package
+                                 nor exists in a build environment
 ``west.yml``                     west re-reads it on every CMake configure, out
                                  of the manifest repository's directory, which
                                  is exactly where the SDK is mounted

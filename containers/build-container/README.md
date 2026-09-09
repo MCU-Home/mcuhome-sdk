@@ -1,13 +1,24 @@
 # containers/build-container/
 
-The **MCUHome builder image** — the single build environment
-one containerized toolchain for every build. Developers,
-CI and the Home Assistant add-on all compile in this image, which is what
-makes "works on my machine" and "passes in CI" the same statement.
+The **baked builder image**: a Debian base carrying the Zephyr SDK, the
+host tools, `zap` and a west workspace at the revisions
+[`west.yml`](../../west.yml) pins, all in one layer stack.
+
+**No device is built in it any more.** MCUHome's build environment is a
+package set, delivered as `ghcr.io/mcu-home/build-environment`
+([`containers/build-environment/`](../build-environment/README.md)), and
+that is what a build runs in. What this image is still needed for is the
+one thing no other image can do yet:
+[`scripts/build_env_package.py`](../../scripts/build_env_package.py)
+builds those two packages *inside* it. It lays the west workspace out
+with the exact `west` that will later read it, writes the workspace
+record, pre-generates the Matter data model with a `zap` no lean build
+environment carries, and installs the tools package's wheel set with this
+base image's interpreter — which is the interpreter that wheel set has to
+match.
 
 ```sh
 docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11   # or build it, below
-mcuhome device build <device>                                 # uses it by default
 ```
 
 ## What is in it, and what is not
@@ -277,10 +288,11 @@ justifies still stands.
   connection; it is a network figure and will differ elsewhere. The tool
   half is unchanged at ≈ 10 min cold.
 
-To use a locally built image, tag it however you like and select it per
-build with `--build-mode local --container-image …`, for a whole shell with
-`MCUHOME_BUILDER_IMAGE=…`, or durably as a local builder's `image:`
-by design.
+A locally built image is used by tagging it as the reference
+[`mcuhome/model/buildimage.py`](../../mcuhome/model/buildimage.py) names,
+because that is the one place `scripts/build_env_package.py` reads it
+from. The package build takes no image argument on purpose: which bytes a
+package was laid out by is not a per-invocation choice.
 
 Inspecting what a given image actually carries needs no build:
 
@@ -291,9 +303,8 @@ docker run --rm ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11 \
 
 ## How the builder runs it
 
-`mcuhome device build` assembles the invocation in
-[`mcuhome/model/buildimage.py`](../../mcuhome/model/buildimage.py); `mcuhome device build …`
-prints it before it runs. In short:
+The package build (`scripts/build_env_package.py`) runs it, and the
+legacy invocation below is what the retired build path used. In short:
 
 - `--user <your uid>:<your gid>` — nothing is left behind owned by root.
 - the workspace mounted onto itself, and the build directory too when it

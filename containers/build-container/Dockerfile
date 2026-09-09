@@ -507,9 +507,9 @@ COPY --from=workspace /mcuhome /mcuhome
 # 0755 rather than the mode git happens to carry, because the legacy
 # container contract this image still implements requires it to be
 # executable by EVERY user the backend may exec as — the backend
-# runs the program as the calling user where it can (the `--user` argument
-# in mcuhome/model/buildimage.py), and that user owns nothing in this image and
-# has no /etc/passwd entry here. Set with a RUN rather than with COPY
+# runs the program as the calling user where it can, passing that UID to
+# the container runtime, and that user owns nothing in this image and has
+# no /etc/passwd entry here. Set with a RUN rather than with COPY
 # --chmod so the classic builder can build this image too.
 #
 # After the COPY above, not before: that one lands the whole /mcuhome

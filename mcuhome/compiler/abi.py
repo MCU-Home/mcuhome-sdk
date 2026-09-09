@@ -1748,9 +1748,10 @@ class _Build:
 
         **``HOME`` is in ``work``, and it is not decoration.** The backend
         "runs the program as the calling user where it can" (§2.2), which
-        in a container is a UID with no ``/etc/passwd`` entry; tools that
-        cache in ``$HOME`` fail obscurely without a writable one
-        (:data:`mcuhome.model.buildimage.CONTAINER_HOME` records what that cost).
+        in a container is a UID that has no ``/etc/passwd`` entry — it
+        comes from the host — and therefore no home directory either;
+        tools that cache in ``$HOME`` fail obscurely without a writable
+        one.
         ``work`` rather than ``tmp`` because those caches are worth
         keeping for the next invocation of the session, and §9.2 point 1
         makes ``work`` a place this program may write.
