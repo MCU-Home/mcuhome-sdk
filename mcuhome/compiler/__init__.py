@@ -19,7 +19,7 @@ only ever drives builds through a container never installs it at all.
 :mod:`mcuhome.compiler.generate`       stage 4: the per-device build tree
 :mod:`mcuhome.compiler.workspace`      stage 5: compile in a west workspace
 :mod:`mcuhome.compiler.report`         stage 5: what to sign the result with
-:mod:`mcuhome.compiler.abi`            the invocation ABI of the build container
+:mod:`mcuhome.compiler.abi`            the builder a build environment runs
 :mod:`mcuhome.compiler.sdkentry`       the SDK package's ``generate`` entry point
 =====================================  ======================================
 

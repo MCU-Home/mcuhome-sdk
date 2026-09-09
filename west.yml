@@ -55,7 +55,7 @@ manifest:
                            # `select` on a module that the manifest did not
                            # pull fails the build at Kconfig time.
 
-    # Matter SDK (upstream CHIP, prototype pin — ADR 0006 evaluation).
+    # Matter SDK (upstream CHIP, prototype pin, not a Nordic fork).
     # CHIP vendors its dependencies as git submodules, hence the explicit
     # `submodules:` list. In the optional "matter" west group so it can
     # be skipped via group-filter.

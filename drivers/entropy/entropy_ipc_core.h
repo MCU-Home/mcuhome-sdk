@@ -71,7 +71,8 @@ BUILD_ASSERT(MCUHOME_ENTROPY_SEED_BYTES <= MCUHOME_ENTROPY_IPC_MAX_BYTES,
  * The seam that keeps this layer independent of how the bytes are
  * obtained. The shipped implementation is the network-core IPC service
  * (entropy_mcuhome_ipc.c); a build that gains a local TRNG — on Nordic
- * silicon by way of the `nrf_cc3xx` blob, subject to ADR 0013 — replaces
+ * silicon by way of the `nrf_cc3xx` blob, subject to the binary-blob
+ * policy — replaces
  * this structure and nothing else.
  *
  * @c request is asynchronous by contract: it must not block, and it must

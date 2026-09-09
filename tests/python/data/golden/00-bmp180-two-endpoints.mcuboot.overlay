@@ -31,12 +31,12 @@
 	};
 };
 
-/* Flash layout (ADR 0015). MCUHome fixes the partition table itself rather than inheriting the
- * board's, because no upstream default holds an MCUHome image: the two-slot table this board ships
- * with gives the application 464 KiB, and a commissioned Matter node is over 550 KiB.
+/* Flash layout. MCUHome fixes the partition table itself rather than inheriting the board's,
+ * because no upstream default holds an MCUHome image: the two-slot table this board ships with
+ * gives the application 464 KiB, and a commissioned Matter node is over 550 KiB.
  * The storage partition keeps the address and size the board's own devicetree gives it. That is
  * what makes an update not a re-commissioning: the Matter fabric credentials and the Thread dataset
- * live there, and every layout in ADR 0015 preserves them.
+ * live there, and every layout here preserves them.
  *
  *   mcuboot  internal 0x000000..0x014000    80 KiB
  *   image-0  internal 0x014000..0x0f8000   912 KiB

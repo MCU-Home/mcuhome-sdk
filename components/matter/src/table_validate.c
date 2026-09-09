@@ -2,8 +2,8 @@
  * SPDX-FileCopyrightText: 2026 The MCUHome Contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Pure-C validation of the generated-tables contract (ADR 0014,
- * <mcuhome/matter_tables.h>). Extracted out of endpoint_registry.cpp so it
+ * Pure-C validation of the generated-tables contract
+ * (<mcuhome/matter_tables.h>). Extracted out of endpoint_registry.cpp so it
  * builds and is unit-testable on native_sim, where CHIP cannot compile
  * (tests/twister/matter_tables/): this file includes no CHIP/ember header and no
  * Zephyr kernel API, only <mcuhome/matter_tables.h> and Zephyr logging.
@@ -39,7 +39,7 @@ LOG_MODULE_REGISTER(mcuhome_matter_tables, CONFIG_LOG_DEFAULT_LEVEL);
  * endpoint range. Mirrors CHIP's FIXED_ENDPOINT_COUNT
  * (zap-generated/endpoint_config.h), which a static_assert in
  * matter_init.cpp pins to 1: the framework ZAP defines the root endpoint
- * (EP0) and nothing else (ADR 0014, decision B). Restated as a literal
+ * (EP0) and nothing else. Restated as a literal
  * here so this file does not need the generated header to know it. */
 #define MCUHOME_MATTER_ROOT_ENDPOINT_COUNT 1u
 
@@ -71,7 +71,7 @@ LOG_MODULE_REGISTER(mcuhome_matter_tables, CONFIG_LOG_DEFAULT_LEVEL);
  * The one and only place in this file where the contract's type enum
  * meets a wire size. This is NOT the CHIP/ember type mapping — that stays
  * solely in endpoint_registry.cpp's MapType(), which is the one place
- * that may know ZAP_TYPE()/EmberAfAttributeType (ADR 0014) — it is the
+ * that may know ZAP_TYPE()/EmberAfAttributeType — it is the
  * independent, CHIP-free half of the same fact. Adding a
  * mcuhome_attr_type enumerator means extending both switches and bumping
  * MCUHOME_MATTER_TABLES_VERSION (see <mcuhome/matter_tables.h>).

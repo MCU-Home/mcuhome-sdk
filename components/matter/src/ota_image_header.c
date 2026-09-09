@@ -19,8 +19,8 @@
  * A note on what is deliberately NOT here: the digest. CHIP does not
  * verify it on any platform, so verifying it here would create the
  * impression the payload is authenticated when the only thing that
- * authenticates it is MCUboot's signature over the image inside
- * (ADR 0015 decision 6). Parsing a field in order to ignore it is honest;
+ * authenticates it is MCUboot's signature over the image inside.
+ * Parsing a field in order to ignore it is honest;
  * checking a digest that proves nothing about origin is not.
  */
 

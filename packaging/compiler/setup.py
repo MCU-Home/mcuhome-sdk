@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """This distribution's dependencies, which cannot be written down.
 
-One dynamic field, one reason: ADR 0020 decision 8 makes the pin on the
+One dynamic field, one reason: the release makes the pin on the
 sibling distribution exact, and an exact pin spelled out here would be a
 second place the release version lives.
 
-``mcuhome-model`` and nothing above it (ADR 0024): the compiler ships
+``mcuhome-model`` and nothing above it: the compiler ships
 inside the SDK package and runs in the build container, where the
 workbench neither exists nor belongs — its own context reading lives in
 :mod:`mcuhome.compiler.contextread`.
@@ -23,7 +23,7 @@ from mcuhome.model import __version__  # noqa: E402 - needs the path above
 
 setup(
     install_requires=[
-        # The model and nothing above it (ADR 0024): the compiler ships
+        # The model and nothing above it: the compiler ships
         # inside the SDK package and runs in the build container, where
         # the workbench neither exists nor belongs. The workbench pulls
         # THIS package through its `local` extra, never the other way.

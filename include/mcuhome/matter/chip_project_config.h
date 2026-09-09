@@ -41,7 +41,7 @@
 	"Expected -imacros .../generated/zephyr/autoconf.h in the flags the " \
 	"Zephyr chip-module forwards to the CHIP GN build. Do not paper over " \
 	"this with literals — an out-of-sync CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT " \
-	"drops Descriptor cluster registration silently (ADR 0014)."
+	"drops Descriptor cluster registration silently."
 #endif
 
 /*
@@ -49,7 +49,7 @@
  * symbol that sizes the framework's own translation pools, on purpose: if
  * CHIP's registry is smaller than the framework's pools, endpoint
  * registration still succeeds but the Descriptor cluster instance is
- * dropped upstream without an error (ADR 0014, decision B). The SDK
+ * dropped upstream without an error. The SDK
  * default is 0, which makes every emberAfSetDynamicEndpoint() fail with
  * CHIP_ERROR_NO_MEMORY.
  */

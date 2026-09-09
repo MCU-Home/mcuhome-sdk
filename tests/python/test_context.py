@@ -119,10 +119,10 @@ def test_the_conformance_vectors_hold(vector) -> None:
     """The suite a *second* implementation is checked against.
 
     The golden vector above proves this builder does not drift. It cannot
-    prove anything about the build server, which ADR 0019 §8 obliges to
-    recompute the same ID from the bytes it received — and which, per ADR
-    0020 decision 4, is entitled to do so with nothing but the model
-    package. :data:`CONTEXT_ID_VECTORS` ships inside that package so the
+    prove anything about the build server, which is obliged to
+    recompute the same ID from the bytes it received — and which is
+    entitled to do so with nothing but the model package.
+    :data:`CONTEXT_ID_VECTORS` ships inside that package so the
     obligation is checkable rather than asserted, and this test is the
     Python side running it.
 
@@ -335,8 +335,8 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
     into an identity §6 computes from resolved values alone — but the
     shared vocabulary accepted it anyway, leaving the exclusion to every
     caller separately. The build server recomputes IDs from received
-    bytes (ADR 0019 §8), so the one implementation both sides share must
-    be the place that refuses.
+    bytes, so the one implementation both sides share must be the place
+    that refuses.
     """
     with pytest.raises(BuildError) as caught:
         context_id(
@@ -424,8 +424,9 @@ def test_the_line_a_release_belongs_to(version: str, expected: str | None) -> No
     """``satisfies_line``'s inverse, for telling a client what is served.
 
     A backend that cannot answer a context reports what it *could*
-    answer, and both ADR 0019 and the build server's error registry call
-    those values "the lines available" — while the values they are read
+    answer, and both the session protocol and the build server's error
+    registry call those values "the lines available" — while the values
+    they are read
     off, ``org.mcuhome.zephyr`` labels, are releases. The reduction lives
     beside the match so that "serves 4.4" and "offers 4.4" cannot drift
     apart.

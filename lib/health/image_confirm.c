@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2026 The MCUHome Contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Image self-confirmation (<mcuhome/health.h>, ADR 0015 health amendment).
+ * Image self-confirmation (<mcuhome/health.h>).
  *
  * MCUboot's swap-with-revert scheme installs a downloaded image as a TEST
  * image: it runs once, and unless something calls

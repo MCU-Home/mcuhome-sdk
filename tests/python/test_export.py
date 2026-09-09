@@ -3,8 +3,8 @@
 """The registry, as exported data (:mod:`mcuhome.model.export`).
 
 The model half of the subject. ``registry.json`` is a contract with a
-consumer that is not in this repository (dashboard ADR 0011): a board
-picker populates itself from it. It is therefore golden-tested byte for
+consumer that is not in this repository: a board picker populates
+itself from it. It is therefore golden-tested byte for
 byte — a change to it is a change a human approves, not one that
 happens.
 
@@ -78,7 +78,7 @@ def test_a_board_says_which_buses_a_peripheral_can_sit_on() -> None:
 
 
 def test_every_board_carries_its_bootstrap_instructions() -> None:
-    """ADR 0016: the bootstrap path is registry data, instructions included."""
+    """The bootstrap path is registry data, instructions included."""
     for board in export.registry_data()["boards"]:
         bootstrap = board["bootstrap"]
         assert bootstrap is not None, board["name"]

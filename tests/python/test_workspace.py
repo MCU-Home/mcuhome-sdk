@@ -353,7 +353,7 @@ def test_an_empty_build_directory_has_no_images(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
-# Two images, not one (ADR 0015)
+# Two images, not one — bootloader and application build separately
 # --------------------------------------------------------------------------
 
 

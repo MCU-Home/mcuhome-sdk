@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2026 The MCUHome Contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * MCUHome Matter runtime API (ADR 0014).
+ * MCUHome Matter runtime API.
  *
  * The C-callable surface of components/matter. Application code — including
  * everything the builder generates — talks to Matter exclusively through

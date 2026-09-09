@@ -2,8 +2,7 @@
  * SPDX-FileCopyrightText: 2026 The MCUHome Contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Matter OTA Requestor wiring — the application half of ADR 0015
- * decision 5, item 3.
+ * Matter OTA Requestor wiring — the application half of Matter OTA.
  *
  * Four upstream objects and one MCUHome one, connected once at bring-up:
  *
@@ -27,7 +26,7 @@
  * policy is therefore expressed as configuration of the upstream driver
  * (the query interval below) plus one deliberate override of its
  * behaviour, in the image processor: confirmation is NOT immediate,
- * it waits for healthy uptime (ADR 0015's health amendment). That is the
+ * it waits for healthy uptime, per MCUHome's health design. That is the
  * one place where MCUHome disagrees with upstream, and it is one function
  * rather than a fork of the driver.
  *

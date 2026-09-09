@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Health foundation of ADR 0015's health amendment: reboot on fatal error,
-# a hardware watchdog fed from evidence, and image self-confirmation.
+# Health foundation: reboot on fatal error, a hardware watchdog fed from
+# evidence, and image self-confirmation.
 # Public API: <mcuhome/health.h>.
 
 menuconfig MCUHOME_HEALTH
@@ -14,9 +14,9 @@ menuconfig MCUHOME_HEALTH
 	  whose loops stopped, and a freshly swapped-in image confirms itself
 	  to MCUboot only after it has been healthy for a while.
 
-	  ADR 0015's health amendment makes the first two mandatory for every
+	  MCUHome's health design makes the first two mandatory for every
 	  application image, which is why this defaults to y. The fault
-	  counters the same amendment specifies (fault-reset and long-run
+	  counters that same design specifies (fault-reset and long-run
 	  counters filtered by hwinfo reset cause) are a later work item; what
 	  is here is MCUboot's own test/confirm revert plus the watchdog that
 	  makes a hung device reach it.
@@ -37,7 +37,7 @@ config MCUHOME_RESET_ON_FATAL_ERROR
 	  This is MCUHome code rather than a Kconfig assignment because
 	  vanilla Zephyr has no CONFIG_RESET_ON_FATAL_ERROR; that symbol is
 	  Nordic's, in the nRF Connect SDK. The behaviour it names is what
-	  ADR 0015's health amendment requires, so MCUHome implements it.
+	  MCUHome's health design requires, so MCUHome implements it.
 
 	  Turn it off for a bench session where a debugger should catch the
 	  fault in place. Never in a shipped image.
@@ -62,7 +62,7 @@ config MCUHOME_WATCHDOG
 	  The alias is board wiring and is not optional: a board whose
 	  devicetree has no watchdog0 fails the build with a message naming
 	  the alias, rather than quietly shipping an image with no watchdog.
-	  ADR 0015's health amendment makes this mandatory for every
+	  MCUHome's health design makes this mandatory for every
 	  application image.
 
 config MCUHOME_WATCHDOG_PAUSE_ON_DEBUG
@@ -82,9 +82,9 @@ config MCUHOME_WATCHDOG_PAUSE_ON_DEBUG
 	  bring the node back is the one that is paused. That is exactly the
 	  state a bench node was found in on 2026-08-08 after an OTA
 	  download faulted: stuck in the fault handler for over an hour with
-	  an armed 60 s watchdog that never fired. ADR 0015's health
-	  amendment asks for a node that always comes back; it does not ask
-	  for one that comes back unless a debugger is in the room.
+	  an armed 60 s watchdog that never fired. MCUHome's health design
+	  asks for a node that always comes back; it does not ask for one
+	  that comes back unless a debugger is in the room.
 
 	  Turn it on for a bench session that needs breakpoints. Note that on
 	  nRF hardware the watchdog configuration is write-locked once
@@ -178,6 +178,6 @@ config MCUHOME_IMAGE_CONFIRM_DELAY_S
 	  How long the new image has to stay up before it is trusted. Long
 	  enough to cover bring-up crashes and an immediate watchdog reset;
 	  short enough that a user watching an update finish does not have to
-	  wait for it. ADR 0015's health amendment names ~30 s.
+	  wait for it. MCUHome's health design names ~30 s.
 
 endif # MCUHOME_HEALTH

@@ -138,8 +138,8 @@ ITERATIONS_MAX = 100_000
 DEFAULT_ITERATIONS = 10_000
 
 #: Discovery capability bitmask advertised in the QR payload: bit 2, "on
-#: IP network". MCUHome nodes commission on-network (ADR 0011: no BLE on
-#: the netcore-sharing boards), so this is a constant, not a choice.
+#: IP network". MCUHome nodes commission on-network (no BLE on the
+#: netcore-sharing boards), so this is a constant, not a choice.
 DISCOVERY_ON_NETWORK = 1 << 2
 
 #: Commissioning flow 0, "standard": the device is commissionable as it

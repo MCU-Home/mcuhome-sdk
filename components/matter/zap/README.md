@@ -22,7 +22,7 @@ by deleting its endpoints 1 (Aggregator) and 2 (Dimmable Light).
 
 ## Hard rule: endpoints other than 0 are forbidden here
 
-MCUHome devices are **native composed nodes, not bridges** (ADR 0014).
+MCUHome devices are **native composed nodes, not bridges**.
 Every application endpoint is registered at runtime through
 `emberAfSetDynamicEndpoint()` from tables the builder generates out of the
 user's YAML — device endpoints start at EP1, directly under the root

@@ -12,5 +12,5 @@ and the seeded/unseeded state machine and knows nothing about IPC, so it
 builds and runs on the host ([`tests/twister/entropy_ipc/`](../tests/entropy_ipc/));
 `entropy_mcuhome_ipc.c` is the transport plus the Zephyr driver plumbing.
 The seam between them (`struct mcuhome_entropy_seed_source`) is also where
-a different seed provider would be substituted — see ADR 0013 on blob
+a different seed provider would be substituted — see the binary-blob
 policy for the `nrf_cc3xx` case.

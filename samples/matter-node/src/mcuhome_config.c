@@ -6,10 +6,10 @@
  *
  * Device "bmp180-node" (BMP180 Two-Endpoint Node) for nrf7002dk/nrf5340/cpuapp.
  *
- * The Matter data model of this device as plain-C tables (ADR 0014, <mcuhome/matter_tables.h>),
- * plus the sensor bindings that feed them (<mcuhome/channel.h>). Dumb, reviewable, diffable data:
- * one node symbol, zero CHIP includes, zero logic. All behavior lives in the framework, which
- * interprets what is below.
+ * The Matter data model of this device as plain-C tables (<mcuhome/matter_tables.h>), plus the
+ * sensor bindings that feed them (<mcuhome/channel.h>). Dumb, reviewable, diffable data: one node
+ * symbol, zero CHIP includes, zero logic. All behavior lives in the framework, which interprets
+ * what is below.
  *
  * The Descriptor cluster and the global attributes FeatureMap (0xFFFC) and ClusterRevision (0xFFFD)
  * are deliberately absent: the framework appends the first and serves the other two from the

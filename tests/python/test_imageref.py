@@ -59,7 +59,7 @@ def test_naming_the_registry_is_how_another_source_is_used() -> None:
     ("text", "registry", "path"),
     [
         # A dot makes the first component a host …
-        ("ghcr.io/mcu-home/build-container", "ghcr.io", "mcu-home/build-container"),
+        ("ghcr.io/mcu-home/build-environment", "ghcr.io", "mcu-home/build-environment"),
         # … so does a port, …
         ("registry:5000/thing", "registry:5000", "thing"),
         # … and so does the one name that has neither.
@@ -76,11 +76,11 @@ def test_a_registry_is_told_from_a_path_by_punctuation(text: str, registry: str,
 
 def test_a_registry_port_is_not_a_tag() -> None:
     """The colon that splits a tag is the last one, and only without a slash."""
-    found = image("registry.example:5000/mcu-home/build-container")
+    found = image("registry.example:5000/mcu-home/build-environment")
     assert found.tag is None
-    assert found.repository == "registry.example:5000/mcu-home/build-container"
+    assert found.repository == "registry.example:5000/mcu-home/build-environment"
 
-    tagged = image("registry.example:5000/mcu-home/build-container:v1")
+    tagged = image("registry.example:5000/mcu-home/build-environment:v1")
     assert tagged.tag == "v1"
     assert tagged.registry == "registry.example:5000"
 
@@ -97,29 +97,29 @@ def test_a_pinned_reference_keeps_its_tag_and_binds_to_the_digest() -> None:
     somebody reads back a year later, and keeping it costs nothing
     because nothing resolves it again.
     """
-    found = image(f"ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10@{DIGEST}")
-    assert found.tag == "zephyr-4.4.0-r10"
+    found = image(f"ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1@{DIGEST}")
+    assert found.tag == "0.1.10.dev2-r1"
     assert found.digest == DIGEST
     assert found.pinned
-    assert str(found) == f"ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10@{DIGEST}"
+    assert str(found) == f"ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1@{DIGEST}"
     # Run by digest: a reference carrying only a tag is a moving name, and
     # running one after resolving it would throw the resolution away.
-    assert found.runnable() == f"ghcr.io/mcu-home/build-container@{DIGEST}"
+    assert found.runnable() == f"ghcr.io/mcu-home/build-environment@{DIGEST}"
 
 
 def test_an_unpinned_reference_is_run_as_it_stands() -> None:
-    found = image("ghcr.io/mcu-home/build-container:dev")
+    found = image("ghcr.io/mcu-home/build-environment:dev")
     assert not found.pinned
-    assert found.runnable() == "ghcr.io/mcu-home/build-container:dev"
+    assert found.runnable() == "ghcr.io/mcu-home/build-environment:dev"
 
 
 def test_pinning_records_which_moving_name_the_digest_came_from() -> None:
-    found = image("ghcr.io/mcu-home/build-container").with_digest(DIGEST, tag="zephyr-4.4-latest")
-    assert str(found) == f"ghcr.io/mcu-home/build-container:zephyr-4.4-latest@{DIGEST}"
+    found = image("ghcr.io/mcu-home/build-environment").with_digest(DIGEST, tag="0.1.10.dev2-r2")
+    assert str(found) == f"ghcr.io/mcu-home/build-environment:0.1.10.dev2-r2@{DIGEST}"
 
 
 def test_pinning_keeps_an_existing_tag_when_none_is_given() -> None:
-    found = image("ghcr.io/mcu-home/build-container:dev").with_digest(DIGEST)
+    found = image("ghcr.io/mcu-home/build-environment:dev").with_digest(DIGEST)
     assert found.tag == "dev"
 
 
@@ -140,7 +140,7 @@ def test_a_digest_that_is_not_one_is_refused_rather_than_recorded() -> None:
         ("ghcr.io/x@md5:" + "ab" * 16, "digest"),
         ("ghcr.io/x:-leading-hyphen", "tag"),
         ("ghcr.io/x:" + "t" * 129, "tag"),
-        ("ghcr.io/MCU-Home/build-container", "repository path"),
+        ("ghcr.io/MCU-Home/build-environment", "repository path"),
         ("ghcr.io/", "repository path"),
         ("", "empty"),
         ("   ", "empty"),
@@ -160,4 +160,4 @@ def test_a_refusal_names_the_part_that_is_wrong(text: str, wrong: str) -> None:
 def test_an_uppercase_path_is_refused_here_rather_than_by_a_stranger() -> None:
     """A registry rejects it with a 400 that says nothing about the cause."""
     with pytest.raises(BuildError):
-        image("ghcr.io/MCU-Home/build-container")
+        image("ghcr.io/MCU-Home/build-environment")

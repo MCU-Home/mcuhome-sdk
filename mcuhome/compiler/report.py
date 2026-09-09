@@ -3,14 +3,14 @@
 """The imgtool parameters a finished build has to be signed with.
 
 Three of the four ``imgtool sign`` arguments come from the registry —
-ADR 0015 decision 2 makes the partition table per-board data, and the
-generator is what wrote it into the overlay — and the fourth from the
-application image's own Kconfig, because imgtool's ``--version`` is the
-one parameter the generator does not itself decide.
+the partition table is per-board data there, and the generator is what
+wrote it into the overlay — and the fourth from the application image's
+own Kconfig, because imgtool's ``--version`` is the one parameter the
+generator does not itself decide.
 
 That is a *contract* rather than a report: the host signs afterwards
-(ADR 0015 decision 8) and it must sign against the offsets the image was
-actually linked with, so the header offset is cross-checked here and a
+and it must sign against the offsets the image was actually linked
+with, so the header offset is cross-checked here and a
 mismatch is a refusal instead of firmware that builds and does not boot.
 
 :mod:`mcuhome.compiler.abi` puts what comes out of here into the §7.2.1
@@ -96,8 +96,8 @@ def signing_parameters(
 
     Three of the four are the registry's: the header offset and the write
     alignment are properties of the part, and the slot size is the
-    partition table ADR 0015 decision 2 makes per-board data — the same
-    table the builder rendered into the overlay this image was linked
+    partition table, itself per-board data — the same table the builder
+    rendered into the overlay this image was linked
     against, which is why it can state them without asking the build.
 
     *kconfig* is the built application's ``.config`` when there is one.

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The registry, as data (dashboard ADR 0011).
+"""The registry, as data.
 
 Everything MCUHome knows about hardware and about Matter lives in
 :mod:`mcuhome.model.registry` as Python, which nothing that is not Python can
@@ -10,8 +10,8 @@ picker can populate itself from.
 **The payoff is the version-range rule.** Adding a board or a driver in
 this repository changes what a dashboard offers, with no dashboard
 release — but only if the dashboard reads it as data. That is what makes
-the coupling of dashboard ADR 0011 decision 2 a declared range rather
-than a pin.
+the coupling between this repository and the dashboard a declared range
+rather than a pin.
 
 **Deterministic by construction.** Ordering is explicit everywhere (keys
 sorted, lists in registry order), no timestamps, no paths, no host facts.
@@ -23,7 +23,7 @@ failing test rather than a surprised consumer.
 than a topic. That export reads :mod:`mcuhome.workbench.schema` — the hand-written
 parser — for the two rules it must not restate, and the parser is the
 front of the build pipeline. The registry export reads the registry and
-nothing else, so it can live where the registry lives (ADR 0020); the
+nothing else, so it can live where the registry lives; the
 schema export cannot follow it there without making the model package
 depend on the pipeline that depends on the model.
 """
@@ -78,7 +78,7 @@ def _update_scheme(scheme: registry.UpdateSchemeDef) -> dict[str, Any]:
         "mcuboot_mode": scheme.mcuboot_mode,
         "staging": scheme.staging,
         # Whether a commissioned device on this board can be updated over
-        # the air (ADR 0015 decision 5). The dashboard needs it to know
+        # the air. The dashboard needs it to know
         # whether an update it has built is deliverable without a cable, or
         # whether the user has to be told to plug the device in.
         "matter_ota": scheme.matter_ota,

@@ -64,7 +64,7 @@ devicetree fragment guarantees.
 ## Status
 
 Applied by `mcuhome build` to both images of every board whose update
-scheme asks for it (`BoardDef.update_scheme`, ADR 0015 decision 2) — the
+scheme asks for it (`BoardDef.update_scheme`) — the
 nRF7002-DK does, in class A. The **bootloader** side is complete: its
 `CONFIG_BOOT_SERIAL_BOOT_MODE=y` reads the area on every boot. The
 **application** side is not: nothing in the framework calls

@@ -3,7 +3,7 @@
 #
 # MCUHome Matter framework component (docs/design/component-model.md §2,
 # "core" kind): the Matter runtime the builder drives from generated
-# device tables (ADR 0014) — bring-up sequence, tables-to-ember
+# device tables — bring-up sequence, tables-to-ember
 # translation, external attribute callbacks, DNS-SD retry service.
 
 # Loud failure for the classic mistake: an app that enables CHIP but ends
@@ -36,7 +36,7 @@ endif()
 if(CONFIG_CHIP_OTA_REQUESTOR AND NOT CONFIG_MCUHOME_MATTER_OTA)
   message(FATAL_ERROR
     "CONFIG_CHIP_OTA_REQUESTOR is enabled but CONFIG_MCUHOME_MATTER_OTA is not.\n"
-    "The two are one group (ADR 0015 decision 5): CHIP's requestor needs "
+    "The two are one group: CHIP's requestor needs "
     "MCUHome's image processor, because CHIP's own one writes to internal "
     "flash and this board's staging slot is not there.\n"
     "Matter OTA is turned on by the board's update scheme in "
@@ -78,7 +78,7 @@ if(CONFIG_MCUHOME_MATTER)
     src/table_validate.c
     src/dnssd_retry.cpp
   )
-  # ADR 0015 decision 5: only board classes with a staging slot, and only
+  # Matter OTA is only board classes with a staging slot, and only
   # when their update scheme says so (mcuhome/registry.py). Two of these
   # are CHIP-free and exercised on the host: the header parser by
   # tests/twister/ota_image_header, the staging writer — which is what decides

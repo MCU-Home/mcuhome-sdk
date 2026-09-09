@@ -7,7 +7,7 @@
  *
  * A peripheral produces typed values; a *channel* binds one such value to
  * one Matter attribute: it publishes into the attribute's
- * `struct mcuhome_attr_store` cell (ADR 0014, <mcuhome/matter_tables.h>)
+ * `struct mcuhome_attr_store` cell (<mcuhome/matter_tables.h>)
  * and triggers reporting via mcuhome_matter_attr_changed().
  *
  * Scope of contract v1 — deliberately narrow:
@@ -28,7 +28,7 @@
  * description — no function pointers, no callbacks, no state. Today the
  * arrays are hand-written (samples/matter-node/src/main.c); tomorrow the
  * builder emits them from YAML exactly like it emits the Matter tables
- * (ADR 0014, builder-pipeline.md §1 "thin codegen + static tables"). Every
+ * (builder-pipeline.md §1 "thin codegen + static tables"). Every
  * field must therefore be something a YAML-driven generator can compute
  * without embedding logic: constants, IDs, and integer scale factors —
  * never expressions, never code. Keep it that way.
@@ -95,8 +95,8 @@ struct mcuhome_channel {
 	 * Together with `cluster_id`/`attr_id` below, this path and `store`
 	 * must match the same attribute in the generated Matter tables
 	 * (<mcuhome/matter_tables.h>) — today two independent statements of
-	 * the same fact, until the builder emits both from one YAML source
-	 * (ADR 0014). mcuhome_sensor_start() enforces the match at startup
+	 * the same fact, until the builder emits both from one YAML source.
+	 * mcuhome_sensor_start() enforces the match at startup
 	 * via mcuhome_matter_attr_store_lookup() (<mcuhome/matter.h>) and
 	 * refuses to start on a mismatch rather than publish into the wrong
 	 * attribute, or into one nobody reads.

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# MCUHome Matter sample node (ADR 0006 / ADR 0014): upstream CHIP
+# MCUHome Matter sample node: upstream CHIP
 # v1.5.1.0 as Zephyr module on vanilla Zephyr v4.4.0, nRF7002-DK, two
 # runtime-registered endpoints (temperature + pressure, BMP180).
 #
@@ -9,8 +9,8 @@
 # the app-common include and the chip_configure_data_model() call — is
 # byte-identical to what `mcuhome build` emits, and tests/python/
 # test_generate.py asserts that it stays so. This sample IS a generated
-# device (ADR 0014 makes its src/mcuhome_config.{c,h} the codegen
-# fixture), so a build mechanism found on the bench must never end up in
+# device (src/mcuhome_config.{c,h} is the codegen fixture), so a build
+# mechanism found on the bench must never end up in
 # only one of the two files. What legitimately differs is the application
 # glue: the sample keeps its own src/main.c, which drives this board's
 # LEDs, where a generated application uses the framework's generic main.
@@ -123,7 +123,7 @@ target_include_directories(app PRIVATE
     ${CHIP_ROOT}/zzz_generated/app-common)
 
 # Application glue (plain C — no CHIP headers) plus the generated device
-# configuration (ADR 0014), which `mcuhome build` produces from
+# configuration, which `mcuhome build` produces from
 # docs/design/examples/00-bmp180-two-endpoints.yaml and the builder test
 # suite compares byte for byte. The Matter runtime itself lives in the
 # framework component, not here.
@@ -132,7 +132,7 @@ target_sources(app PRIVATE
     src/mcuhome_config.c)
 
 # Framework-owned data model: endpoint 0 (root node) only — every device
-# endpoint is registered at runtime (ADR 0014, native composed node).
+# endpoint is registered at runtime (native composed node).
 # ZCL_PATH must be passed explicitly: the zcl.json path stored inside the
 # .zap is relative to CHIP's own example directories, so it cannot resolve
 # for a .zap that lives outside the CHIP tree (documented escape hatch in

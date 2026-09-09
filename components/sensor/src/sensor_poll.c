@@ -329,7 +329,7 @@ static int validate_bindings(const struct mcuhome_sensor_binding *b, size_t n)
  * The path and the store cell are stated twice today — once in the
  * generated Matter tables (<mcuhome/matter_tables.h>), once in this
  * component's own binding table (<mcuhome/channel.h>) — until the builder
- * emits both from one YAML source (ADR 0014). Nothing but convention keeps
+ * emits both from one YAML source. Nothing but convention keeps
  * them in sync in the meantime, so a typo'd ID here would silently publish
  * into the wrong attribute, or into an attribute nobody reads. Refuse to
  * start rather than let that drift run silently.

@@ -22,9 +22,9 @@ pytest                           # the suite in ../tests/python/
 
 This directory is a **PEP 420 namespace package**: it has no
 `__init__.py` and no module of its own. The namespace spans three
-subpackages — three published distributions (ADR 0020) — of which this
+subpackages — three published distributions — of which this
 repository carries the two that belong to the SDK; `mcuhome.workbench`
-lives in its own repository since the ADR 0024 split. The line between
+lives in its own repository since the repository split. The line between
 them is *where the code has to run*, not what it is about:
 
 | Import package | Distribution | What it is | Where it runs |
@@ -43,7 +43,7 @@ tree has to sit at the repository root because that root is also the SDK
 package a build container mounts and puts on `PYTHONPATH`, so each
 distribution reaches up into it rather than holding sources of its own.
 Both read one version, from `model/__init__.py`; the workbench versions
-independently in its own repository (ADR 0024).
+independently in its own repository.
 
 ## Modules
 
@@ -61,7 +61,7 @@ workbench's modules — see
 | `model/model.py` | — | the canonical device model and its JSON form |
 | `model/registry.py` | — | static tables: clusters, device types, drivers, boards, per-board update scheme and flash layout |
 | `model/hashes.py` | — | the one file hash every party to a build computes |
-| `model/toolchain.py` | — | Zephyr line and blob resolution — the ADR 0013 seam, and the constraint this SDK release states over a build environment |
+| `model/toolchain.py` | — | Zephyr line and blob resolution — the seam for it, and the constraint this SDK release states over a build environment |
 | `model/imageref.py` | — | how an external input is named: `[registry/]path[:tag][@sha256:…]`, for the SDK package and the build environment alike |
 | `model/errors.py` | — | the error type and its plain-language rendering |
 
@@ -84,26 +84,28 @@ be deleted at any time. The application is standalone: `west build -b
 what `mcuhome build` does, which is the property that keeps stage 5 thin.
 The one argument that cannot travel in the tree is the signing key, which
 is a per-user secret and is passed on the command line
-(`-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=…`, ADR 0015 decision 8).
+(`-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=…`).
 
-Stage 5 runs in the **build-container image** (ADR 0007,
-[../containers/build-container/](../containers/build-container/README.md)): the host
-needs git and docker, and the build runs as the calling user so nothing
-is left behind owned by root. There is no host-compile mode: a change to
-the build environment reaches a build as a **patch in the build
-context**, so what it is compiled against is the environment the context
-declares.
+Stage 5 runs in the **build environment**
+([../containers/build-environment/](../containers/build-environment/README.md),
+and `../docs/design/build-environment.md` for the whole of it): a package
+set — a pinned west workspace and the host tools — delivered either as a
+container image or unpacked into a per-user store. A change to that
+environment reaches a build as a **patch in the build context**, so what
+a build is compiled against is the environment the context declares, in
+either delivery.
 
-The party that drives that container is **not in this repository**. It
-is the workbench's orchestrator, which starts one container per build,
-mounts what a session needs at the paths every build has —
-`/mcuhome/ctx`, `/mcuhome/work`, `/mcuhome/inv/<n>`, the compiler cache —
-and speaks the invocation ABI to the program inside. This package *is*
-that program, which is exactly why the two are apart: one distribution
+The party that drives it is **not in this repository**. It is the
+workbench's orchestrator, which prepares one step at a time — the
+request document, the build context, the delivered SDK, `out` and the
+cache tiers, at the paths
+`../docs/spec/build-environment-specification.md` fixes — and starts the
+environment's entry point. This package *is* what that entry point hands
+over to, which is exactly why the two are apart: one distribution
 playing both roles could be replaced by neither half.
-**The signing key never enters a container**: the build delivers an
-unsigned image plus a report, and the signature is a host-side step
-afterwards (ADR 0015 decision 8).
+**The signing key never enters a build environment**: the build delivers
+an unsigned image plus a report, and the signature is a host-side step
+afterwards.
 
 ## Three rules worth knowing before changing anything here
 
@@ -119,7 +121,7 @@ implementation data model, never from the specification scrape shipped
 next to it — the sourcing rule is spelled out at the top of that file
 and, generated from it, at the top of every emitted table set.
 
-**A board is a table row, not a branch.** ADR 0015 decision 2 puts the
+**A board is a table row, not a branch.** The registry design puts the
 update scheme, the recovery entrance and the whole partition table into
 `BoardDef`, and `test_registry.py` reads the source of every other module
 of the namespace to prove none of them names a board. The moment one
@@ -139,7 +141,7 @@ to that identity means adding it to that function.
 **The sample is generator output.** `samples/matter-node/src/
 mcuhome_config.{c,h}` is what `compiler/generate.py` emits for
 `docs/design/examples/00-bmp180-two-endpoints.yaml`, and `pytest`
-compares the two byte for byte (ADR 0014). Changing what the generator
+compares the two byte for byte. Changing what the generator
 emits therefore means regenerating the sample in the same commit — the
 recipe is in `../tests/python/README.md`. That coupling is deliberate: it is
 what stops the runtime contract, the hardware-verified sample and the

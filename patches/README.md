@@ -22,8 +22,10 @@ Where they are applied depends on which workspace is being built in:
 
 - **The builder image applies them itself.** Since image revision r3 the
   image bakes a west workspace with both patches already applied as
-  working-tree changes (`containers/builder/Dockerfile`, ADR 0020
-  decision E5). Nobody applies anything by hand there — and a patch that
+  working-tree changes (`containers/builder/Dockerfile`) — replacing an
+  earlier design where the workspace came from the host, which made the
+  git state of every pinned repository an untracked build input.
+  Nobody applies anything by hand there — and a patch that
   has drifted from the revision `west.yml` pins fails the *image* build.
 - **A hand-made workspace still needs the manual step**: `git apply
   <patch>` inside the respective west project. That is what MCUHome's own
@@ -89,15 +91,15 @@ our pin `CONFIG_CHIP_OTA_REQUESTOR=y` does not warn, it fails to build
 prefix, which is the spelling Zephyr 4.4 wants. It is needed even though
 MCUHome does not *use* that file — `components/matter/src/ota_image_processor.cpp`
 replaces its behaviour, because upstream's hardcodes the internal flash
-controller and MCUHome's staging slot is on an external part (ADR 0015
-decision 3) — because CHIP's `BUILD.gn` compiles it whenever the requestor
+controller and MCUHome's staging slot is on an external part —
+because CHIP's `BUILD.gn` compiles it whenever the requestor
 is enabled, regardless of what the application instantiates.
 
 `config/common/cmake/chip_gn.cmake`'s `chip-gn` `ExternalProject_Add`
 calls a bare `ninja` for CHIP's own GN sub-build, so upstream it always
 runs at ninja's default parallelism (nproc+2) no matter what job count
 the outer west/ninja build was given — an OOM risk on RAM-constrained
-targets (the Home-Assistant-add-on class hardware ADR 0007 targets). The
+targets (the Home-Assistant-add-on class hardware this project targets). The
 patch adds a job cap read from the `MCUHOME_CHIP_JOBS` environment
 variable at CMake configure time; unset or empty keeps the upstream
 default. The builder sets it to the same value as its own `-o=-jN` job

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Zephyr line and binary-blob resolution — the ADR 0013 seam.
+"""Zephyr line and binary-blob resolution — the seam for it.
 
-ADR 0013 (with its per-blob amendment) describes real machinery: a
+The eventual binary-blob policy describes real machinery: a
 per-board blob availability matrix extracted from the builder container
 images, a resolver that trades a Zephyr release line against blob
 compatibility, and a drift check that flags overrides which have become
@@ -17,12 +17,12 @@ What it provides is the seam:
 * :func:`available_blobs` is the single hook the future availability
   matrix plugs into. Today it returns nothing for every board, because
   MCUHome integrates no blob yet (the MPSL/SDC and nrf_cc3xx feasibility
-  work of ADR 0013 §3 is still open);
+  work is still open);
 * :data:`SUPPORTED_ZEPHYR_LINES` is the single place the "at most two
   concurrent lines" rule will grow into. Today there is exactly one.
 
 A user who forces something this cannot deliver gets the plain-language
-refusal ADR 0013 asks for, not a silent downgrade.
+refusal the blob policy asks for, not a silent downgrade.
 """
 
 from __future__ import annotations
@@ -43,9 +43,9 @@ __all__ = [
     "satisfies_line",
 ]
 
-#: Zephyr release lines this MCUHome release can build (ADR 0008/0013:
-#: a line, never a frozen point release — patch releases with security
-#: backports are always taken). CHIP v1.5.1.0 is pinned against 4.4.
+#: Zephyr release lines this MCUHome release can build (a line, never a
+#: frozen point release — patch releases with security backports are
+#: always taken). CHIP v1.5.1.0 is pinned against 4.4.
 SUPPORTED_ZEPHYR_LINES: tuple[str, ...] = ("4.4",)
 
 #: The newest supported line; what ``zephyr_version: latest`` resolves to.
@@ -61,12 +61,13 @@ LATEST_ZEPHYR_LINE = SUPPORTED_ZEPHYR_LINES[-1]
 #: A constraint rather than a version because the two failure modes are
 #: not symmetric. A pinned version means a security patch release cannot
 #: be taken without a new SDK; a range means it is taken automatically,
-#: which is what ADR 0008/0013 already decided for the *line*. And an SDK
+#: which is what the release-line policy already decided for the
+#: *line*. And an SDK
 #: that genuinely needs one exact release says ``==4.4.2`` here, in the
 #: same grammar, with no special case anywhere downstream.
 #:
 #: It is evaluated where ``packaging`` is available — this package has no
-#: dependencies by construction (ADR 0020) — so what lives here is the
+#: dependencies by construction — so what lives here is the
 #: string and what reads it is
 #: :mod:`mcuhome.workbench.resolve_env`.
 ZEPHYR_CONSTRAINT = "~=4.4.0"
@@ -109,9 +110,10 @@ _RELEASE = re.compile(r"(?P<numbers>[0-9]+(\.[0-9]+)*)(?P<suffix>-[A-Za-z0-9._+-
 def satisfies_line(version: str, *, line: str) -> bool:
     """Does a build container carrying Zephyr *version* serve *line*?
 
-    The one implementation of the match E61 makes a backend perform, in
-    ``mcuhome-model`` because **both** backends perform it — the local
-    build method against the image on this host, the build server against
+    The one implementation of the release-line match every backend must
+    perform, in ``mcuhome-model`` because **both** backends perform it —
+    the local build method against the image on this host, the build
+    server against
     the images in its inventory — and two spellings of "this container
     serves 4.4" is how one of them starts accepting a container the other
     refuses.
@@ -120,7 +122,7 @@ def satisfies_line(version: str, *, line: str) -> bool:
     is satisfied by ``4.4``, ``4.4.0`` and ``4.4.12``, and by nothing
     else — not by ``4.5.0``, and not by ``4.40.0``, whose leading
     component is a different number that merely starts with the same
-    digits. That is the ADR 0013 rule the line exists for: "a line, never
+    digits. That is the rule a line exists for: "a line, never
     a frozen point release — patch releases with security backports are
     always taken".
 
@@ -152,16 +154,15 @@ def line_of(version: str) -> str | None:
 
     The inverse of :func:`satisfies_line`, for the one job that needs it:
     **telling a client what this host can answer.** A backend that cannot
-    serve a context reports what it *could* serve, and both ADR 0019's
-    ``version.builder-unsatisfiable`` amendment and the build server's
-    own error table call those values "the lines available". They are
-    read off ``org.mcuhome.build-environment.zephyr.version`` labels, and a label states a
+    serve a context reports what it *could* serve, and both the session
+    protocol's ``version.builder-unsatisfiable`` amendment and the build
+    server's own error table call those values "the lines available".
+    They are read off ``org.mcuhome.build-environment.zephyr.version`` labels, and a label states a
     *release* (``docs/spec/build-environment-specification.md`` §5, §5.2)
     — so reporting the labels verbatim reports releases under the name of
-    lines, and a client that echoed one back
-    as its ``zephyr`` would pin a frozen point release (which ADR 0013
-    forbids) or, for a pre-release, send a value no image can ever
-    satisfy.
+    lines, and a client that echoed one back as its ``zephyr`` would pin
+    a frozen point release (which the release-line policy forbids) or,
+    for a pre-release, send a value no image can ever satisfy.
 
     So: ``4.4.12`` and ``4.4`` are both the ``4.4`` line, and
     ``4.5.0-rc1``, ``v4.5``, ``latest`` and ``""`` are ``None`` —
@@ -180,14 +181,14 @@ def normalize_release(version: str) -> str:
     """Strip west's leading ``v``, and no more of it than that.
 
     West states every pinned revision with a ``v`` no Zephyr release
-    grammar carries: ``west list`` and a program's own ``describe``
-    answer ``v4.4.0`` for what everywhere else — :func:`line_of`,
-    :func:`satisfies_line`, the ``org.mcuhome.build-environment.zephyr.version`` coupling label —
-    is spelled ``4.4.0`` (``containers/build-container/README.md``'s r7 repair
-    fixed the label to match for the same reason this exists: "a
-    container that does not carry a named label does not qualify", and a
-    label still spelled ``v4.4.0`` satisfied no release's constraint at
-    all).
+    grammar carries: ``west list`` answers ``v4.4.0`` for what everywhere
+    else — :func:`line_of`, :func:`satisfies_line`, the
+    ``org.mcuhome.build-environment.zephyr.version`` label a build
+    environment declares itself with — is spelled ``4.4.0``. An
+    environment that does not carry a readable label does not qualify,
+    and a label spelled ``v4.4.0`` satisfies no release's constraint at
+    all, so the two spellings have to be reconciled in exactly one
+    place.
 
     Exactly one leading ``v`` is dropped and nothing else about the value
     is touched: a second ``v`` is not west's doing and stays, and a value
@@ -203,7 +204,7 @@ def normalize_release(version: str) -> str:
 def available_blobs(board: str) -> dict[str, str]:
     """Blobs applicable to *board*, by name, with their source.
 
-    The ADR 0013 availability matrix hooks in here. It is empty today:
+    The future blob-availability matrix hooks in here. It is empty today:
     MCUHome integrates no vendor blob yet, on any board.
     """
     del board

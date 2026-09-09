@@ -6,7 +6,7 @@ Stage 3 produces it, every generator consumes it, nothing downstream ever
 reads raw YAML (builder-pipeline.md §1.2). It is also the wire format for
 remote builds (§6) and the contract the dashboard consumes.
 
-**Version 1, and no longer provisional** (dashboard ADR 0007 decision 4).
+**Version 1, and no longer provisional.**
 Compatibility is negotiated rather than assumed: the dashboard sends
 exactly one :data:`MODEL_VERSION`, a build server advertises the range it
 supports, and a mismatch is a refusal that names both numbers — never a
@@ -17,7 +17,7 @@ an internal regression guard. The principle behind the shape is unchanged:
 every field exists because a downstream artifact needs it, and the two
 runtime contracts decide what those fields mean —
 
-* ``endpoints[]`` mirrors ``<mcuhome/matter_tables.h>`` (ADR 0014): the
+* ``endpoints[]`` mirrors ``<mcuhome/matter_tables.h>``: the
   attribute types, sizes, flags and the ``store``/constant distinction
   are that header's, one to one;
 * ``channels[]`` mirrors ``<mcuhome/channel.h>``: publish side
@@ -25,7 +25,7 @@ runtime contracts decide what those fields mean —
   sensor channel, integer scale/offset).
 
 Deliberately absent: endpoint 0. The root node is statically compiled
-into the framework's own ZAP data model (ADR 0014, decision B) — a
+into the framework's own ZAP data model — a
 generator that emitted it would collide with it. Also absent: the
 Descriptor cluster and the global attributes 0xFFF8..0xFFFD, which the
 framework appends and serves itself.
@@ -86,7 +86,7 @@ class DeviceMeta:
     friendly_name: str
     board: str
     power_source: str
-    #: SemVer string (ADR 0005). It becomes MCUboot's image version, the
+    #: SemVer string. It becomes MCUboot's image version, the
     #: Matter SoftwareVersion a controller compares, and the version in the
     #: .ota file's header — all through mcuhome.model.ota, which is the only
     #: module that maps it.

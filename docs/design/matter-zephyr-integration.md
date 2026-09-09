@@ -1,6 +1,7 @@
 # Matter-on-Zephyr Integration — Prototype Findings
 
-> **Status:** Prototype findings backing ADR 0006 and builder-pipeline
+> **Status:** Prototype findings backing the choice of upstream CHIP
+> (no Nordic fork) and builder-pipeline
 > design §4. Compile/link-level result achieved; hardware verification
 > succeeded end-to-end on 2026-08-04 — see Addenda 2 and 3 below.
 
@@ -164,7 +165,7 @@ worth reporting.
 
 ## Implications for MCUHome
 
-- **ADR 0006 answer:** upstream CHIP works without a Nordic fork or NCS
+- **Answer:** upstream CHIP works without a Nordic fork or NCS
   dependency. Total patch surface: 1 `CMakeLists.txt` patch
   (`chip-module`), 2 guarded source patches, 1 stub file, 9 shim
   headers, 1 Python shim — all small, all automatable by the MCUHome
@@ -204,17 +205,17 @@ results above stand. Findings from the hardware phase:
    BT + OpenThread + mbedTLS survives. Prime suspect: **BLE/802.15.4
    radio coexistence on vanilla Zephyr** (Nordic's dynamic multiprotocol
    arbitration, MPSL, is NCS-proprietary). If confirmed, this materially
-   affects ADR 0006: upstream CHIP compiles, but concurrent BLE+Thread
-   runtime on nRF52 may require either the Nordic fork/NCS, sequential
-   radio use (BLE only during commissioning), or another coexistence
-   strategy.
+   affects the upstream-CHIP choice: upstream CHIP compiles, but
+   concurrent BLE+Thread runtime on nRF52 may require either the
+   Nordic fork/NCS, sequential radio use (BLE only during
+   commissioning), or another coexistence strategy.
 6. **Next step:** move runtime debugging to the nRF5340-DK (on-board
    J-Link: `west flash`, real console, fault backtraces) instead of
    blind LED bisection. The dongle remains a later Thread test node.
 
 ## Addendum 2: nRF7002-DK runtime verification — SUCCESS (2026-08-04)
 
-Full Matter-over-Thread node (Thread-only per ADR 0011) **runs on the
+Full Matter-over-Thread node (Thread-only, no BLE) **runs on the
 nRF7002-DK**: all init stages pass, the dynamically registered
 temperature endpoint is live, the event loop runs, simulated values
 update with Matter reporting callbacks. Debug pipeline: `west flash`
@@ -260,9 +261,9 @@ source line):
    factory-locked (recover via nrfutil); vanilla Zephyr needs `segger`,
    `open-amp`, `libmetal` manifest modules for RTT + nRF53 IPC.
 
-Commissioning/coexistence strategy from these findings: ADR 0011
-(v0.1 on-network via MCUHome-provisioned datasets, BLE off; nrfxlib
-multiprotocol later after feasibility analysis).
+Commissioning/coexistence strategy from these findings: v0.1 on-network
+via MCUHome-provisioned datasets, BLE off; nrfxlib multiprotocol later
+after feasibility analysis.
 
 Remaining for full E2E: Thread dataset provisioning, border router,
 HA commissioning test. Dongle (nRF52840) backport expected to benefit
@@ -273,7 +274,7 @@ from fixes 3-5 directly.
 The prototype node was commissioned into a production Home Assistant
 instance (HA OS 2026.7.4, Matter Server add-on 9.1.1, OpenThread Border
 Router add-on 3.0.2 on an RPi 4) over Thread, with **no BLE** — the
-on-network path of ADR 0011. The simulated temperature value of the
+on-network commissioning path. The simulated temperature value of the
 dynamically registered endpoint arrives as a normal HA sensor entity.
 
 Reaching that state required seven further fixes. All of them are
@@ -320,8 +321,8 @@ at a time by instrumenting the vendored sources.
    `DnssdServer::StartServer()` periodically for the first few minutes.
    Upstream candidate.
 7. **Device attestation.** The prototype uses the CHIP test DAC, so the
-   controller must allow test-net DCL certificates — see ADR 0012 for
-   the strategy (path A now, MCUHome's own attestation root for v1.0).
+   controller must allow test-net DCL certificates (the development
+   path for now; MCUHome's own attestation root is a v1.0 deliverable).
 
 ### Secondary findings
 
@@ -364,7 +365,7 @@ at a time by instrumenting the vendored sources.
 
 ## Addendum 4: RTT once the bootloader logs too (2026-08-08)
 
-ADR 0015's RTT amendment turned MCUboot's log on so that swap decisions
+MCUboot's log was turned on so that swap decisions
 are visible during an update. That makes **two RTT control blocks live
 in one device**, and reading the wrong one looks exactly like a device
 that has stopped logging.

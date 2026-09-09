@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# `mcuhome-model` — the shared vocabulary (ADR 0020 decision 1).
+# `mcuhome-model` — the shared vocabulary.
 #
 # The three distributions of this repository are built from ONE source
 # tree, `mcuhome/` at the repository root, because that tree is also the
@@ -41,8 +41,8 @@ classifiers = [
   "Topic :: Home Automation",
 ]
 # None, and that is the property rather than an accident: this is the
-# package a build server consumes and nothing else (ADR 0020 decision 4),
-# so it carries no parser, no toolchain and no transitive surface at all.
+# package a build server consumes and nothing else, so it carries no
+# parser, no toolchain and no transitive surface at all.
 dependencies = []
 
 [project.urls]
@@ -56,8 +56,8 @@ packages = ["mcuhome.model"]
 [tool.setuptools.package-dir]
 "" = "../.."
 
-# The one version of the release (ADR 0017 §3, ADR 0020 decision 8),
-# read from the module that holds it. All three `pyproject.toml` files
+# The one version of the release, read from the module that holds it.
+# All three `pyproject.toml` files
 # here name this same attribute, so there is no second copy to bump.
 [tool.setuptools.dynamic]
 version = { attr = "mcuhome.model.__version__" }

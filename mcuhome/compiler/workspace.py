@@ -8,7 +8,7 @@ application. This module is everything it takes to compile one with
 running it, and reading what came out of it — the artifact set and the
 memory report.
 
-**One caller, and it is inside a build container** (ADR 0007).
+**One caller, and it is inside a build container.**
 :mod:`mcuhome.compiler.abi` composes a :class:`BuildPlan` from the
 invocation request and runs it in the frozen west workspace the image
 carries. Nothing here goes looking for a workspace or decides where one
@@ -17,7 +17,7 @@ a development change reaches a build as a *patch* in the build context,
 so the environment it is compiled against is the declared one rather
 than whatever a developer's checkout happens to be.
 
-**Two images, since ADR 0015.** Every MCUHome device boots through
+**Two images: bootloader and application.** Every MCUHome device boots through
 MCUboot, and vanilla Zephyr builds a bootloader only under sysbuild, so
 what this module drives is ``west build --sysbuild``: one build directory
 with one sub-directory per image, an application, and a bootloader that
@@ -139,7 +139,7 @@ CMAKE_JOBS_VAR = "CMAKE_BUILD_PARALLEL_LEVEL"
 
 #: Sysbuild Kconfig symbol naming the MCUboot signing key. Passed on the
 #: command line and never written into the generated tree: it is the path
-#: of a per-user secret (ADR 0015 decision 8, :mod:`mcuhome.workbench.signing`).
+#: of a per-user secret (:mod:`mcuhome.workbench.signing`).
 SIGNING_KEY_OPTION = "SB_CONFIG_BOOT_SIGNATURE_KEY_FILE"
 
 #: Written by sysbuild and by nothing else. Its presence is how a build
@@ -330,8 +330,9 @@ def pristine_mode(build_dir: Path) -> str:
     ten-minute and a ten-second edit cycle on the Matter tree.
 
     It cannot cover one case, and that case is a migration every existing
-    build directory hits exactly once: a directory built before ADR 0015
-    holds a single-image CMake tree whose source directory is the
+    build directory hits exactly once: a directory built before MCUHome
+    switched to the sysbuild bootloader+application layout holds a
+    single-image CMake tree whose source directory is the
     application, and sysbuild's is Zephyr's own ``share/sysbuild``. CMake
     refuses that with a message about the source directory not matching,
     which is true and unhelpful. Sysbuild writes :data:`_DOMAINS_FILE` and
@@ -373,7 +374,7 @@ def west_build_command(
     **Detached signing passes the same argument with a different file.**
     With *detached_signing* the key handed to sysbuild is the *public*
     half — enough for the bootloader, which compiles the public key in,
-    and useless for signing, which is the point (ADR 0015 decision 8).
+    and useless for signing, which is the point.
     The generated tree's ``sysbuild.cmake`` reads the variable set here
     and clears the application's copy of the setting, so no signing step
     runs at all (:func:`~mcuhome.compiler.generate.render_detached_signing_cmake`).

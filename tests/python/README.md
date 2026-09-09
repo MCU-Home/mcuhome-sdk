@@ -1,7 +1,7 @@
 # tests/python/
 
-Python tests for the three packages under `mcuhome/` (ADR 0020:
-`mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler`), run with
+Python tests for the three packages under `mcuhome/`
+(`mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler`), run with
 pytest:
 
 ```sh
@@ -35,8 +35,8 @@ second — they are the fast half of the strategy in
 | `test_schema.py` | shape errors: unknown keys, wrong types, malformed durations |
 | `test_validate.py` | every v0.1 scope gate and cross-reference check, message **and** location |
 | `test_pairing.py` | commissioning: the CHIP vectors, the atomic Kconfig group, `matter-pairing` |
-| `test_registry.py` | the per-board update scheme and flash layout, and that no module branches on a board name (ADR 0015) |
-| `test_signing.py` | the per-user signing key: where it is, what it is, and how the refusals read (ADR 0015 §8) |
+| `test_registry.py` | the per-board update scheme and flash layout, and that no module branches on a board name |
+| `test_signing.py` | the per-user signing key: where it is, what it is, and how the refusals read |
 | `test_examples.py` | the design examples in `docs/design/examples/` |
 | `test_model_golden.py` | the canonical model of `00-bmp180-two-endpoints.yaml`, byte-exact |
 | `test_generate.py` | stage 4: every generated artifact, byte-exact, plus its error paths |
@@ -46,12 +46,12 @@ second — they are the fast half of the strategy in
 | `test_imgtool.py` | detached signing: the command is Zephyr's own, and two signings of one image differ only in the signature |
 | `test_export.py` | the registry and the `main.yaml` JSON Schema, golden and against the parser |
 | `test_scaffold.py` | `mcuhome new`: what it writes, what it refuses, and that matter-pairing then validate works on it |
-| `test_packaging.py` | the ADR 0020 layout: one distribution per subpackage, one version for all three, the two files outside Python that name an import path, and the `remote` extra's declaration |
+| `test_packaging.py` | the package layout: one distribution per subpackage, one version for all three, the two files outside Python that name an import path, and the `remote` extra's declaration |
 | `test_sessionclient.py` | the `remote` build method: the session-protocol client, driven against the **real** build server (see below) |
 
 ## The one suite with extra requirements
 
-`test_sessionclient.py` tests the client of ADR 0019's session protocol
+`test_sessionclient.py` tests the client of the session protocol
 against the real `mcuhome-buildserver` over a real socket — one client
 and one server tested against each other rather than each against a mock
 of the other. That needs two things the installs above do not bring:
@@ -103,8 +103,8 @@ overlay, Kconfig fragment, application `CMakeLists.txt`,
 (`sysbuild.conf` plus the bootloader image's `.conf` and `.overlay`),
 plus the two documents the builder exports as its contract with the
 dashboard — `registry.json` and `main.schema.json`. The two generated C files are not
-duplicated here: **the committed sample is the golden file** for those
-(ADR 0014), so `test_generate.py` compares fresh generator output against
+duplicated here: **the committed sample is the golden file** for those,
+so `test_generate.py` compares fresh generator output against
 `samples/matter-node/src/mcuhome_config.{c,h}` directly.
 
 Regenerate deliberately, never automatically — from the repository root:

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Translation layer between the MCUHome generated-tables contract
- * (<mcuhome/matter_tables.h>) and CHIP's ember data model (ADR 0014,
- * decision A). This file is the ONLY place in the tree that knows both
+ * (<mcuhome/matter_tables.h>) and CHIP's ember data model. This file
+ * is the ONLY place in the tree that knows both
  * sides: everything above it sees plain C structs, everything below it
  * sees EmberAf* metadata.
  *
@@ -75,7 +75,7 @@ constexpr size_t kMaxAttrs = CONFIG_MCUHOME_MATTER_MAX_ATTRS_PER_ENDPOINT;
 constexpr size_t kMaxDeviceTypes = CONFIG_MCUHOME_MATTER_MAX_DEVICE_TYPES_PER_ENDPOINT;
 
 /* Spec-fixed global attribute IDs. The framework serves both for every
- * table cluster (ADR 0014); tables must not declare them. Their reserved
+ * table cluster; tables must not declare them. Their reserved
  * range (0xFFF8-0xFFFD) is rejected in table_validate.c. */
 constexpr AttributeId kFeatureMapId = 0xFFFCu;
 constexpr AttributeId kClusterRevisionId = 0xFFFDu;
@@ -360,7 +360,7 @@ void TranslateEndpoint(size_t index, const struct mcuhome_matter_endpoint *endpo
 		/* FeatureMap is NOT auto-appended by ember's DECLARE_* macros —
 		 * the prototype therefore answered UNSUPPORTED_ATTRIBUTE for it
 		 * on its dynamic cluster. Declare it explicitly; the read
-		 * callback serves it from cluster->feature_map (ADR 0014). */
+		 * callback serves it from cluster->feature_map. */
 		gAttrPool[index][attrCursor++] =
 			MakeAttrMeta(kFeatureMapId, ZAP_TYPE(INT32U), 4, 0);
 		attrCount++;

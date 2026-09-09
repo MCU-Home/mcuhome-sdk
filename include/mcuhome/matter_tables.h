@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2026 The MCUHome Contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * MCUHome generated-tables contract for Matter (ADR 0014).
+ * MCUHome generated-tables contract for Matter.
  *
  * This header is the ONLY interface between generated device configuration
  * and the Matter runtime. It is deliberately plain C and contains zero
@@ -40,7 +40,7 @@
  * Two things a table author (and the builder) must NOT declare:
  *
  * - The Descriptor cluster. The framework appends it to every endpoint and
- *   derives its content from the tables (ADR 0014, decision B).
+ *   derives its content from the tables.
  * - Any global attribute (0xFFF8..0xFFFD). FeatureMap (0xFFFC) and
  *   ClusterRevision (0xFFFD) are served by the framework from the cluster's
  *   `feature_map` / `cluster_revision` fields; the attribute/command lists
@@ -225,7 +225,7 @@ struct mcuhome_matter_cluster {
  * @brief One application endpoint.
  *
  * `endpoint_id` is >= 1 and unique across the node: endpoint 0 is the root
- * node and the only statically compiled endpoint (ADR 0014, decision B).
+ * node and the only statically compiled endpoint.
  * `parent_id == 0` places the endpoint directly under the root, which is
  * the normal case for a composed device.
  */

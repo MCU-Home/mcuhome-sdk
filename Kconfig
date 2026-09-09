@@ -41,10 +41,10 @@ config MCUHOME_BOOT_WATCHDOG
 	  is a device with the application half-erased, spinning in a fault
 	  handler with nothing left to reset it — observed live on the
 	  bench, 2026-08-08, for over 1.5 hours until a manual reset. The
-	  watchdog MCUHome's health design mandates for the application
-	  (ADR 0015 health amendment) has to cover the minutes the
-	  bootloader owns the SoC too, or every over-the-air update carries
-	  an unguarded window exactly where a hang costs the most.
+	  watchdog MCUHome's health design mandates for the application has
+	  to cover the minutes the bootloader owns the SoC too, or every
+	  over-the-air update carries an unguarded window exactly where a
+	  hang costs the most.
 
 	  Set by the generated sysbuild/mcuboot.conf of every MCUHome build.
 	  MCUboot's own swap loops and its serial-recovery loop feed the

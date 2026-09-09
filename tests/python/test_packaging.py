@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""One distribution per subpackage, out of one source tree (ADR 0020 decisions 1, 8).
+"""One distribution per subpackage, out of one source tree.
 
 The tree under ``mcuhome/`` is a PEP 420 namespace with one subpackage
 per distribution, and the project files that ship them live under
@@ -9,12 +9,12 @@ neither is visible from the code:
 
 * **every subpackage is shipped by exactly one distribution.** Project
   files claiming file subsets of one directory is a relationship
-  pip cannot express (ADR 0020's consequence on the migration), so the
-  claims have to partition — and a subpackage that no project file
-  names would simply never be installed by anyone.
-* **they carry the same version, from the same place.** ADR 0017 §3
-  and ADR 0020 decision 8: one version, one tag, one release, and
-  therefore no "which package works with which SDK" to answer. A second
+  pip cannot express, so the claims have to partition — and a
+  subpackage that no project file names would simply never be
+  installed by anyone.
+* **they carry the same version, from the same place.** One version,
+  one tag, one release, and therefore no "which package works with
+  which SDK" to answer. A second
   literal of the version number anywhere is the beginning of that
   question.
 
@@ -26,7 +26,7 @@ actually contains is proved once, at migration time, against the wheels.
 
 What is *not* here is anything that is a claim about
 ``mcuhome-workbench`` alone — its ``remote`` extra lives in
-``test_packaging_workbench.py``, on the other side of the ADR 0024 cut.
+``test_packaging_workbench.py``, on the other side of the repository split.
 """
 
 from __future__ import annotations
@@ -43,9 +43,10 @@ PACKAGING_DIR = REPO_ROOT / "packaging"
 
 #: ``<import package> -> <distribution>``. Both halves are asserted
 #: against reality below; the mapping itself is what a reader needs.
-#: ``mcuhome-workbench`` is the third of ADR 0020's distributions and is
-#: not here — ADR 0024 ships it out of the tools repository, whose own
-#: ``test_packaging`` makes the claims about it.
+#: ``mcuhome-workbench`` is the third of the three published
+#: distributions and is not here — the repository split ships it out of
+#: the tools repository, whose own ``test_packaging`` makes the claims
+#: about it.
 DISTRIBUTIONS = {
     "mcuhome.compiler": "mcuhome-compiler",
     "mcuhome.model": "mcuhome-model",
@@ -117,8 +118,8 @@ def test_the_distribution_name_is_the_one_the_adr_names(package: str, distributi
 def test_all_three_read_the_one_version_from_the_one_place() -> None:
     for name, project in _project_files().items():
         assert "version" in project["project"]["dynamic"], (
-            f"packaging/{name} pins a version literal; ADR 0020 decision 8 "
-            "gives the three distributions one shared version"
+            f"packaging/{name} pins a version literal; the three "
+            "distributions must share one version"
         )
         source = project["tool"]["setuptools"]["dynamic"]["version"]
         assert source == {"attr": VERSION_ATTR}, f"packaging/{name} reads {source}"
@@ -127,8 +128,9 @@ def test_all_three_read_the_one_version_from_the_one_place() -> None:
 def test_the_installed_distributions_all_carry_that_version() -> None:
     """And it is the version the code answers with, not a stale install.
 
-    The property ADR 0017 §3 buys is that "which package works with which
-    SDK" cannot be asked. It stops being true the moment two of the three
+    The property a single shared version buys is that "which package
+    works with which SDK" cannot be asked. It stops being true the
+    moment two of the three
     are installed from different releases, which no amount of metadata
     prevents — so it is checked where it can be seen, in the environment
     the suite runs in.
@@ -191,9 +193,9 @@ def test_the_pyproject_at_the_root_ships_nothing() -> None:
 def test_only_the_model_distribution_is_dependency_free() -> None:
     """The build server consumes ``mcuhome-model`` and nothing else.
 
-    ADR 0020 decision 4. The package it consumes carrying no third-party
-    dependency at all is not decoration: it is what makes "orchestrates,
-    never builds" survive contact with a dependency resolver.
+    The package it consumes carrying no third-party dependency at all
+    is not decoration: it is what makes "orchestrates, never builds"
+    survive contact with a dependency resolver.
     """
     requires = {
         name: metadata.requires(distribution) or [] for name, distribution in DISTRIBUTIONS.items()
@@ -201,8 +203,8 @@ def test_only_the_model_distribution_is_dependency_free() -> None:
     assert requires["mcuhome.model"] == []
     assert f"mcuhome-model=={mcuhome.model.__version__}" in requires["mcuhome.compiler"]
     # And nothing here depends on the workbench, which is the packaging
-    # half of ADR 0024: the compiler ships inside the SDK package and
-    # runs in a build container the workbench never enters.
+    # half of the repository split: the compiler ships inside the SDK
+    # package and runs in a build container the workbench never enters.
     assert not [
         requirement
         for requirements in requires.values()
@@ -217,9 +219,10 @@ def test_the_import_edges_follow_the_dependency_arrows() -> None:
     The fresh-venv proof of the migration demonstrated this once, at
     install level; this is the same fact as a permanent invariant, read
     from the syntax tree so it holds on every run rather than on the day
-    somebody installs a distribution alone. The dependency arrows are
-    ADR 0020's, as ADR 0024 leaves them for this repository: model
-    depends on nothing, the compiler on the model — and an import
+    somebody installs a distribution alone. The dependency arrows come
+    from the package split, and the repository split leaves them for
+    this repository: model depends on nothing, the compiler on the
+    model — and an import
     against the arrow is a wheel that breaks only in the environment of
     whoever installed the smaller set, which is the quietest possible
     way to break. Here it is smaller than an environment: an import of

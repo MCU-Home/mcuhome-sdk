@@ -9,8 +9,9 @@ Two kinds of golden file live here, for one reason each:
   output shows up as a reviewable diff instead of as a silent behavior
   change on someone's device.
 * ``samples/matter-node/src/mcuhome_config.{c,h}`` **are** the expected
-  output. ADR 0014 makes the phase-1 sample the codegen fixture, so the
-  committed sample files and fresh generator output must be byte-equal —
+  output. The generated-tables contract makes the phase-1 sample the
+  codegen fixture, so the committed sample files and fresh generator
+  output must be byte-equal —
   that is the mechanism that keeps the runtime contract, the sample and
   the generator from drifting apart.
 
@@ -74,7 +75,7 @@ MCUBOOT_CONF_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.conf"
 #: Spelled out here rather than imported from the generator, because a
 #: test that read the list from the code it checks would agree with any
 #: future version of that list — including one that quietly dropped the
-#: watchdog. ADR 0015's health amendment is what this encodes.
+#: watchdog. MCUHome's health design is what this encodes.
 HEALTH_KCONFIG = [
     "CONFIG_MCUHOME_HEALTH=y",
     "CONFIG_MCUHOME_RESET_ON_FATAL_ERROR=y",
@@ -181,7 +182,7 @@ def test_artifact_matches_its_golden_file(artifact: str, golden: str) -> None:
 
 @pytest.mark.parametrize("name", ["mcuhome_config.c", "mcuhome_config.h"])
 def test_the_sample_is_this_generators_output(name: str) -> None:
-    """ADR 0014: samples/matter-node is the codegen regression fixture."""
+    """samples/matter-node is the codegen regression fixture."""
     artifact = f"{APP_DIR}/src/{name}"
     committed = (SAMPLE_SRC / name).read_text(encoding="utf-8")
     assert _example_files()[artifact] == committed, (
@@ -195,7 +196,7 @@ def test_the_sample_is_this_generators_output(name: str) -> None:
 
 
 def test_generated_c_includes_nothing_from_chip() -> None:
-    """The plain-C tables contract of ADR 0014, asserted on the output."""
+    """The plain-C tables contract, asserted on the output."""
     for artifact in (SOURCE_PATH, HEADER_PATH):
         text = _example_files()[artifact]
         includes = [line for line in text.splitlines() if line.startswith("#include")]
@@ -527,8 +528,8 @@ def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> N
 
     Five blocks are appended rather than interleaved, and none of them
     is carried in the model: the health foundation, which is a property
-    of every MCUHome application image rather than of this device
-    (ADR 0015 health amendment); the two stack log levels, which belong
+    of every MCUHome application image rather than of this device; the
+    two stack log levels, which belong
     to whichever stack the transport and the Matter switch put in the
     build (see :data:`STACK_LOG_KCONFIG`); the commissioning identity,
     which :mod:`mcuhome.model.pairing` computes from the model's pairing
@@ -676,7 +677,8 @@ endif()""",
 
 @pytest.mark.parametrize("block", _SHARED_CHIP_GLUE)
 def test_the_sample_and_the_generated_app_share_one_matter_build_glue(block: str) -> None:
-    """ADR 0014 makes the sample a generated device; its build must match one."""
+    """The generated-tables contract makes the sample a generated device;
+    its build must match one."""
     sample = (SAMPLE_DIR / "CMakeLists.txt").read_text(encoding="utf-8")
     assert block in sample, "samples/matter-node/CMakeLists.txt drifted from the generator"
     assert block in _example_files()[CMAKE_PATH]
@@ -727,7 +729,7 @@ def test_a_device_without_matter_gets_no_chip_glue_at_all() -> None:
 
 
 # --------------------------------------------------------------------------
-# The sysbuild half (ADR 0015)
+# The sysbuild half
 # --------------------------------------------------------------------------
 
 
@@ -790,7 +792,7 @@ def test_the_bootloader_fragment_states_the_sector_count_itself() -> None:
 
 
 def test_every_generated_application_states_the_health_guarantee() -> None:
-    """ADR 0015's health amendment, spelled out rather than defaulted.
+    """The mandatory health guarantee, spelled out rather than defaulted.
 
     Reboot-on-fatal, the hardware watchdog and the crash breadcrumb are
     mandatory for every application image, and every one of them is
@@ -834,7 +836,7 @@ def test_the_watchdog_timeout_is_one_number_for_the_whole_boot_chain() -> None:
 
 
 def test_the_bootloader_fragment_carries_its_own_lto() -> None:
-    """ADR 0015 amendment (2026-08-07): LTO is strictly per-image.
+    """The 2026-08-07 amendment: LTO is strictly per-image.
 
     The symbols land in the bootloader's Kconfig fragment and nowhere
     else — the application's fragment comes from a wholly separate model
@@ -851,7 +853,7 @@ def test_the_bootloader_fragment_carries_its_own_lto() -> None:
 
 
 def test_the_bootloader_overlay_drops_the_dead_uart_and_the_app_keeps_it() -> None:
-    """ADR 0015 amendment (2026-08-07): MCUboot's dead UART, not the app's.
+    """The 2026-08-07 amendment: MCUboot's dead UART, not the app's.
 
     ``&uart0`` only ever appears where MCUBOOT_SERIAL's upstream
     imprecision (UPSTREAM-BUGS.md M2) puts dead weight — the bootloader

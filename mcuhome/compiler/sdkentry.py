@@ -1,42 +1,45 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The SDK package's entry point: the ``generate`` action of §6.1.
+"""The SDK package's entry point: its ``generate`` action.
 
-The build-container contract reaches code generation through "a defined
-entry point in the SDK package" — an executable the *program* invokes as
-a child process, over the very ABI it already speaks:
+Code generation belongs to the SDK a build context pinned, not to the
+build environment that compiles it — each context chooses its own SDK
+version, and an environment builds whatever it is handed. So a build
+environment reaches code generation through a **defined entry point in
+the SDK package**: an executable it starts as a child process, with two
+positional operands,
 
-    <trees.sdk.path>/<generate.program> generate <request-document path>
+    <the delivered SDK>/<generate.program> generate <request-document path>
 
-"That is §5.1 unchanged — two positional operands, the request document
-of §5.2, the result document of §5.4, the exit codes of §5.3." This
-module is that executable's body; ``bin/generate`` at the SDK root is
-the launcher, and ``mcuhome-sdk.json`` next to it is where §6.1 says the
-program finds both (three fixed names, no fixed values). The whole
-arrangement exists so that the *caller* is language-agnostic: "A build
-container written in Rust, Go or shell starts a process and reads its
-exit status like any other tool it drives" (E30), and the fact that code
-generation is written in Python stays a property of this package.
+This module is that executable's body; ``bin/generate`` at the SDK root
+is the launcher, and ``mcuhome-sdk.json`` next to it declares both — the
+metadata version, the program's path inside the package and the runtime
+it needs, three fixed names with no fixed values. The whole arrangement
+exists so that the *caller* is language-agnostic: a build environment
+written in Rust, Go or shell starts a process and reads its exit status
+like any other tool it drives, and the fact that code generation is
+written in Python stays a property of this package.
 
-``generate`` is an action of this entry point and **not** of the
-program: §6.1 says it "is never invoked on ``/mcuhome/run`` and never
-appears in ``program.actions``". The two fixed facts of the invocation
-are implemented literally: "the entry point reads the build context from
-``context`` and writes the per-device Zephyr application tree into
-``out``". Everything else in the document "is between the SDK package
-and itself" — and this package needs nothing else, which is why the
-§5.2 fields a working action must be *sent* are accepted and unused
-rather than demanded (§4.1: "The program MUST NOT require an entry it
-does not need for the requested action").
+``generate`` is an action of **this entry point** and of nothing else.
+It never appears among the actions a build environment implements: an
+environment runs a build, and the generator is one of the children that
+build starts. The two fixed facts of the invocation are implemented
+literally — the entry point reads the build context from ``context`` and
+writes the per-device Zephyr application tree into ``out``. Everything
+else in the request document is between the SDK package and itself,
+which is why the fields a caller must nonetheless send are accepted and
+unused rather than demanded.
 
 The outer sequence — argv, parsing, the atomic result document, the
 catch-all that turns a crash into a legible failure — is
-:func:`mcuhome.compiler.abi.run_invocation`, shared rather than transcribed,
-because reusing the invocation ABI is §6.1's whole argument for it.
+:func:`mcuhome.compiler.abi.run_invocation`, shared rather than
+transcribed: the two sides of this call are written in one repository
+and one implementation of the document shape is what keeps them
+agreeing.
 
 The tree is written with :func:`mcuhome.compiler.generate.write_tree` under the
 same ``config_name`` convention the command line uses
-(``model.device.source``): the generator is deterministic (§1.4), so the
+(``model.device.source``): the generator is deterministic, so the
 entry point and ``mcuhome device build --generate-only`` produce byte-identical
 trees for the same model, and nothing about a remote build is a second
 code path.
@@ -64,14 +67,15 @@ __all__ = [
     "main",
 ]
 
-#: The one action this entry point implements (§6.1).
+#: The one action this entry point implements.
 GENERATE_ACTION = "generate"
 
-#: Request format versions this entry point can parse. The same format
-#: the program speaks, because §6.1 reuses it unchanged.
+#: Request format versions this entry point can parse. The same shape a
+#: build environment is handed, reused unchanged rather than invented a
+#: second time.
 REQUEST_VERSIONS = (1,)
 
-#: Where §3.1 puts the canonical device model inside a context — the
+#: Where the build context format puts the canonical device model — the
 #: model package's constant, re-exported because this module is the SDK
 #: entry point's body and callers read the location off it.
 MODEL_FILE = CONTEXT_MODEL_FILE
@@ -88,7 +92,7 @@ def _document(
     reason: str | None = None,
     message: str | None = None,
 ) -> dict[str, Any]:
-    """A §5.4 result document, in its field order.
+    """The result document, in its field order.
 
     The echo rule is the caller's (:func:`_generate` fills *echo* from
     what the request carried); ``error.retryable`` is false for
@@ -107,13 +111,12 @@ def _document(
 def _generate(action: str, document: dict[str, Any]) -> dict[str, Any]:
     """One invocation of the entry point, past the shared outer sequence.
 
-    Failures are ``failure`` with ``reason: "error.build.failed"`` — the
-    caller maps any non-``success`` onto that reason anyway (§6.1: "A
-    non-zero exit, a missing result document or a ``status`` other than
-    ``success`` fails the invocation with ``reason:
-    "error.build.failed"``"), so answering in the same vocabulary means
-    the message a user finally reads is this one, with the actual cause
-    in it, rather than a generic wrapper around a lost detail.
+    Failures are ``failure`` with ``reason: "error.build.failed"`` — a
+    non-zero exit, a missing result document or any status other than
+    ``success`` fails the surrounding build with that reason anyway, so
+    answering in the same vocabulary means the message a user finally
+    reads is this one, with the actual cause in it, rather than a
+    generic wrapper around a lost detail.
     """
     echo: dict[str, Any] = {"action": action}
     if "session" in document:
@@ -147,9 +150,9 @@ def _generate(action: str, document: dict[str, Any]) -> dict[str, Any]:
             echo,
             _STATUS_UNSUPPORTED,
             reason="unsupported.request",
-            message=f"the request document names no {' and no '.join(missing)}, and §6.1 fixes "
-            f"both: the entry point reads the build context from `context` and writes "
-            f"the application tree into `out`",
+            message=f"the request document names no {' and no '.join(missing)}, and both "
+            f"are fixed: the entry point reads the build context from `context` and "
+            f"writes the application tree into `out`",
         )
 
     try:

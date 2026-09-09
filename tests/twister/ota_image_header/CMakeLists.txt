@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # native_sim twister suite for the Matter OTA image header parser
-# (components/matter/src/ota_image_header.c, ADR 0015 decision 5). Same
+# (components/matter/src/ota_image_header.c). Same
 # trick as tests/twister/matter_tables and tests/twister/channel: pull the source in
 # directly instead of enabling the mcuhome Zephyr module, because
 # CONFIG_MCUHOME_MATTER depends on CHIP and CHIP cannot build on

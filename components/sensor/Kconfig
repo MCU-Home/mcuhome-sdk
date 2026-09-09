@@ -19,7 +19,7 @@ menuconfig MCUHOME_SENSOR
 	  position: channels publish into the Matter attribute store and call
 	  mcuhome_matter_attr_changed(), which only exists when the Matter
 	  runtime is built. When a second northbound protocol lands (CoAP,
-	  ADR 0010) this becomes a choice of publication targets.
+	  deferred for now) this becomes a choice of publication targets.
 
 if MCUHOME_SENSOR
 

@@ -5,9 +5,9 @@
 
 Enforces the product-owner directive ("Debug
 output is load-bearing"): no config fragment in this repository may
-disable or reduce debug output silently. The precedent is ADR 0015's RTT
-amendment — an OTA swap failure whose one explanatory MCUboot log line
-was compiled out cost a day of source reading.
+disable or reduce debug output silently. The precedent: an OTA swap
+failure whose one explanatory MCUboot log line was compiled out cost a
+day of source reading.
 
 What it scans:
 

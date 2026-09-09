@@ -7,7 +7,7 @@
  * THE REGRESSION THIS MODULE EXISTS TO PREVENT
  *
  * MCUboot's swap-using-offset mode — the mode every MCUHome board class A
- * runs (ADR 0015 decision 3, mcuhome/registry.py) — does NOT expect the
+ * runs (mcuhome/registry.py) — does NOT expect the
  * update image at the start of the secondary slot. It expects it one
  * erase sector in. That sector is the working room the algorithm uses
  * instead of a scratch partition, and the bootloader hard-codes the
@@ -59,7 +59,7 @@
  * tests/twister/ota_staging can drive it on native_sim and assert that the
  * payload lands one sector into the slot in swap-using-offset mode and at
  * offset 0 in a mode without one. The same reason ota_image_header.c is
- * its own translation unit (ADR 0014).
+ * its own translation unit.
  */
 
 #ifndef MCUHOME_COMPONENTS_MATTER_OTA_STAGING_H_

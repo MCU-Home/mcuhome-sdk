@@ -4,8 +4,8 @@
 
 Two things are pinned here. The first is what :mod:`mcuhome.model.userpaths`
 answers. The second is bigger than that module: **no other module in the
-package may read process state at all** — ADR 0020 turns this library
-into one process serving several sessions, and a call-time read of
+package may read process state at all** — this library serves several
+sessions from one process, and a call-time read of
 ``os.environ``, ``Path.home()`` or ``Path.cwd()`` is what makes two
 sessions in one process answer each other's questions.
 
@@ -19,7 +19,7 @@ would fail it for saying so.
 
 **This file has no workbench half to move out.** Its subject is
 ``mcuhome.model.userpaths`` and the invariant runs over whatever
-``conftest.PACKAGES`` names, so at the ADR 0024 cut it travels whole and
+``conftest.PACKAGES`` names, so at the repository split it travels whole and
 covers model+compiler. The workbench is where session-serving code makes
 these reads most tempting, so the tools repository has to keep covering
 it: duplicate :data:`FORBIDDEN_ATTRIBUTES`, :data:`PROCESS_MODULES`,
@@ -78,9 +78,9 @@ def test_a_bare_tilde_is_the_home_directory_itself(tmp_path) -> None:
 def test_the_configuration_directory_follows_xdg_then_home(monkeypatch, tmp_path) -> None:
     """One rule for one directory, asked from two repositories.
 
-    The signing key (ADR 0015 decision 8) and the build-server file the
-    command line reads (E63) live in the same place, so the place is one
-    function rather than the same three lines twice.
+    The signing key and the build-server file the command line reads
+    live in the same place, so the place is one function rather than
+    the same three lines twice.
     """
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "the-process"))
     monkeypatch.setenv("HOME", str(tmp_path / "the-process"))
@@ -175,7 +175,7 @@ def _process_reads(source: str) -> list[str]:
 
 
 def test_no_module_reads_process_state() -> None:
-    """One process, several sessions, one environment each (ADR 0020).
+    """One process, several sessions, one environment each.
 
     A named module is asserted to be among the ones examined so that a
     search which stopped reaching the package would fail rather than pass

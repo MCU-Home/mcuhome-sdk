@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The per-board update scheme and flash layout (ADR 0015).
+"""The per-board update scheme and flash layout.
 
 Two things are checked here that nothing else can check:
 
-* the layout tables in the ADR and the devicetree the builder emits say
-  the same numbers — they are written twice by construction (a table of
-  offsets and a block of devicetree) and the second copy is the one that
-  reaches the linker;
-* **no module of the builder branches on a board name**, which is
-  decision 2 of that ADR in one sentence. Supporting a board has to be a
-  registry row, or the promise that horizontal scaling is a table edit is
-  not true.
+* the layout tables written down in this file and the devicetree the
+  builder emits say the same numbers — they are written twice by
+  construction (a table of offsets and a block of devicetree) and the
+  second copy is the one that reaches the linker;
+* **no module of the builder branches on a board name**, which is the
+  one rule the whole registry design rests on, in one sentence.
+  Supporting a board has to be a registry row, or the promise that
+  horizontal scaling is a table edit is not true.
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from mcuhome.model import registry
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 SCHEME = registry.BOARDS[BOARD].update_scheme
 
-#: The layout of ADR 0015 decision 3 as amended 2026-08-07, transcribed
-#: from the ADR's own table rather than from the code it is checking.
+#: The class-A board layout as amended 2026-08-07, transcribed by hand
+#: from the reference table rather than from the code it is checking.
 ADR_CLASS_A_LAYOUT = [
     ("mcuboot", None, 0x00000, 80 * 1024),
     ("image-0", None, 0x14000, 912 * 1024),
@@ -55,7 +55,7 @@ def test_the_dk_carries_the_adr_class_a_layout() -> None:
 
 
 def test_a_scheme_with_a_staging_slot_can_take_a_matter_ota() -> None:
-    """ADR 0015 decision 5: class A only, and as registry data.
+    """Matter OTA eligibility is class A only, and stated as registry data.
 
     The flag is derived from the Kconfig group rather than stated next to
     it, so the two cannot drift into a board that claims OTA and enables
@@ -92,7 +92,7 @@ def test_a_scheme_without_the_group_cannot_take_a_matter_ota() -> None:
 
 
 def test_storage_stays_where_the_board_already_puts_it() -> None:
-    """The one partition an update must not move (ADR 0015, Consequences).
+    """The one partition an update must not move.
 
     Matter fabric credentials and the Thread dataset live in it, so a
     layout that relocated it would turn every firmware update into a
@@ -159,13 +159,13 @@ def test_the_mode_names_a_symbol_sysbuild_knows() -> None:
 
 
 def test_class_a_keeps_the_usb_rescue_path() -> None:
-    """ADR 0015 decision 6: USB/SMP everywhere, whatever else a board gets.
+    """USB/SMP everywhere, whatever else a board gets.
 
     Rollback is what class A adds; it does not replace serial recovery,
     which is the only transport that reaches an uncommissioned node and
     the only one left when an update went wrong in a way rollback cannot
-    see. The 80 KiB boot partition of decision 3 (amended 2026-08-07) is
-    sized for exactly this configuration.
+    see. The 80 KiB boot partition (amended 2026-08-07) is sized for
+    exactly this configuration.
     """
     assert SCHEME is not None
     assert "serial-recovery" in SCHEME.recovery
@@ -192,7 +192,7 @@ def test_an_external_slot_brings_its_driver_and_its_erase_unit() -> None:
 
 
 def test_the_bootloader_gets_size_levers_the_application_never_sees() -> None:
-    """ADR 0015 amendment (2026-08-07): LTO and a dropped UART driver.
+    """The 2026-08-07 amendment: LTO and a dropped UART driver.
 
     Both are per-image by construction — :attr:`bootloader_kconfig` and
     :attr:`bootloader_overlay` only ever reach ``sysbuild/mcuboot.*``, and
@@ -209,7 +209,7 @@ def test_the_bootloader_gets_size_levers_the_application_never_sees() -> None:
 
 
 # --------------------------------------------------------------------------
-# ADR 0015 decision 2, as an invariant
+# No branching on a board name, as an invariant
 # --------------------------------------------------------------------------
 
 #: Every board name the registry knows, in both spellings a Python file
@@ -234,7 +234,7 @@ def _code_of(module: Path) -> str:
 
 @pytest.mark.parametrize("name", _BOARD_NAMES)
 def test_no_module_outside_the_registry_names_a_board(name: str) -> None:
-    """Nothing in the builder may branch on a board name (ADR 0015 §2).
+    """Nothing in the builder may branch on a board name.
 
     Supporting a new board is a table row plus a bring-up, exactly like
     adding a driver or a cluster. The moment a board name appears in

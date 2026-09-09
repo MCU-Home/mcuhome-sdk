@@ -4,7 +4,7 @@
  *
  * Matter bring-up: the stage sequence that was proven end to end on real
  * hardware in the phase-1 prototype, lifted out of the sample application
- * and into the framework (ADR 0014). The stage ORDER is load-bearing —
+ * and into the framework. The stage ORDER is load-bearing —
  * every step here failed in some instructive way while it was being
  * established; see docs/design/matter-zephyr-integration.md.
  */
@@ -48,7 +48,7 @@ BUILD_ASSERT(CONFIG_MBEDTLS_HEAP_SIZE >= 15360,
 	     "Build with the framework snippet: -S matter");
 #endif
 
-/* MCUHome devices are native composed nodes, not bridges (ADR 0014): the
+/* MCUHome devices are native composed nodes, not bridges: the
  * framework ZAP (components/matter/zap/mcuhome-root.zap) defines endpoint 0
  * — the root node — and nothing else. Every application endpoint is created
  * at runtime from the generated tables, starting at EP1 directly under the
@@ -67,7 +67,7 @@ static_assert(FIXED_ENDPOINT_COUNT == 1,
 #if !defined(CONFIG_MCUHOME_MATTER_TEST_DAC)
 #error "No device attestation credentials provider is configured. " \
 	"CONFIG_MCUHOME_MATTER_TEST_DAC=n is only valid once MCUHome's own attestation " \
-	"root is wired up (ADR 0012); until then a node without a DAC provider fails " \
+	"root is wired up; until then a node without a DAC provider fails " \
 	"commissioning at the attestation step with no useful diagnostic."
 #endif
 
@@ -219,8 +219,9 @@ int mcuhome_matter_start(const struct mcuhome_matter_node *node)
 	mcuhome_matter_stage("DataModelProvider", 0);
 
 #ifdef CONFIG_MCUHOME_MATTER_TEST_DAC
-	/* ADR 0012 path A: CHIP's example (test-certificate) attestation
-	 * credentials. MCUHome's own attestation root is a v1.0 deliverable.
+	/* CHIP's example (test-certificate) attestation credentials, the
+	 * development/pre-alpha path. MCUHome's own attestation root is a
+	 * v1.0 deliverable.
 	 * The #error above guards the "no provider at all" case, so this
 	 * #ifdef is the seam an alternative provider slots into rather than a
 	 * branch that can silently leave the node without credentials. */
@@ -237,7 +238,7 @@ int mcuhome_matter_start(const struct mcuhome_matter_node *node)
 #ifdef CONFIG_MCUHOME_MATTER_OTA
 	/* After ServerInit — the requestor persists its provider list in the
 	 * server's storage — and before the event loop, which is what will
-	 * run the queries it schedules here (ADR 0015 decision 5). */
+	 * run the queries it schedules here. */
 	MCUHOME_STAGE_ERRNO("OtaRequestor", mcuhome_matter_ota_init());
 #endif
 
@@ -248,7 +249,7 @@ int mcuhome_matter_start(const struct mcuhome_matter_node *node)
 	/* Last, and in this order. The event loop has to be running before
 	 * its liveness ping can be armed, and "operational" has to mean
 	 * everything above succeeded — it is the statement the image
-	 * confirmation timer hangs off (ADR 0015 health amendment). A node
+	 * confirmation timer hangs off. A node
 	 * that never gets here never confirms, and MCUboot reverts it. */
 	event_loop_liveness_arm();
 	mcuhome_health_operational();

@@ -5,7 +5,7 @@
 # "core" kind): wires upstream CHIP (connectedhomeip) into the MCUHome
 # runtime — PSA crypto, Thread/OpenThread defaults, dynamic-endpoint
 # support, and the runtime that turns the builder's generated tables
-# (ADR 0014, <mcuhome/matter_tables.h>) into registered Matter endpoints.
+# (<mcuhome/matter_tables.h>) into registered Matter endpoints.
 
 menuconfig MCUHOME_MATTER
 	bool "MCUHome Matter framework"
@@ -92,9 +92,9 @@ config MCUHOME_MATTER_TEST_DAC
 	help
 	  Registers connectedhomeip's example Device Attestation Credentials
 	  provider (test PAA/PAI/DAC from the Matter test certificate space).
-	  This is ADR 0012 path A: development and pre-alpha use test
-	  certificates; MCUHome's own attestation root — with per-device DACs
-	  provisioned into a protected partition — is a v1.0 deliverable.
+	  Development and pre-alpha use test certificates; MCUHome's own
+	  attestation root — with per-device DACs provisioned into a
+	  protected partition — is a v1.0 deliverable.
 
 	  Nodes built with this option commission only against controllers
 	  that accept test certificates (Home Assistant, chip-tool and
@@ -130,7 +130,7 @@ config MCUHOME_MATTER_MAX_DYNAMIC_ENDPOINTS
 	  include/mcuhome/matter/chip_project_config.h) — deliberately the
 	  same symbol for both: if CHIP's registry is the smaller one,
 	  registration still reports success but the endpoint's Descriptor
-	  cluster instance is dropped upstream without an error (ADR 0014).
+	  cluster instance is dropped upstream without an error.
 
 	  Endpoint 0 (the root node) is static and not counted here.
 
@@ -242,8 +242,8 @@ menuconfig MCUHOME_MATTER_OTA
 	# src/ota_image_processor.cpp name every symbol that has to be there.
 	help
 	  Lets a commissioned node download a new firmware image from a Matter
-	  OTA Provider and hand it to MCUboot. ADR 0015 decision 5 puts this on
-	  board class A only — a board with a staging slot — so it is turned on
+	  OTA Provider and hand it to MCUboot. This is board class A only — a
+	  board with a staging slot — so it is turned on
 	  by the board's update scheme in mcuhome/registry.py and never
 	  globally: a board without a second slot has nowhere to put the image
 	  and would fail the build on a missing slot1_partition.
@@ -261,8 +261,7 @@ menuconfig MCUHOME_MATTER_OTA
 	  Matter OTA is never the first-flash or unbrick path: it needs a CASE
 	  session, fabric membership and administrator privilege, so an
 	  uncommissioned node is structurally out of its reach. USB/SMP through
-	  the bootloader's serial recovery stays the baseline (ADR 0015
-	  decision 6).
+	  the bootloader's serial recovery stays the baseline.
 
 if MCUHOME_MATTER_OTA
 

@@ -234,9 +234,9 @@ def test_no_other_module_spells_an_identity_symbol() -> None:
 
     ``generate.py`` is the only module that emits Kconfig at all, so it
     is the only plausible place a second spelling could appear — and
-    ADR 0020 moves it into another distribution. Asserting it was
-    examined is what keeps this test from passing while looking at less
-    than it did yesterday.
+    the package split moved every other candidate into another
+    distribution. Asserting it was examined is what keeps this test
+    from passing while looking at less than it did yesterday.
     """
     modules = package_modules()
     assert any(path.name == "generate.py" for path in modules), (
@@ -281,7 +281,8 @@ def bench_node_model() -> DeviceModel:
     """The fixture tree's device as a resolved model, credentials and all.
 
     Assembled rather than resolved: turning ``data/tree`` into a model is
-    stages 1-3 and lives in the tools repository since ADR 0024. What
+    stages 1-3 and lives in the tools repository since the repository
+    split. What
     makes that device worth testing here is the one thing this file can
     still hold — commissioning credentials of its own instead of the
     published test tuple — so the reference model is taken as the base

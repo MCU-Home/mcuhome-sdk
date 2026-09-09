@@ -14,12 +14,12 @@
  * layout and whatever every MCUHome node on this board needs, whatever its YAML says.
  */
 
-/* Flash layout (ADR 0015). MCUHome fixes the partition table itself rather than inheriting the
- * board's, because no upstream default holds an MCUHome image: the two-slot table this board ships
- * with gives the application 464 KiB, and a commissioned Matter node is over 550 KiB.
+/* Flash layout. MCUHome fixes the partition table itself rather than inheriting the board's,
+ * because no upstream default holds an MCUHome image: the two-slot table this board ships with
+ * gives the application 464 KiB, and a commissioned Matter node is over 550 KiB.
  * The storage partition keeps the address and size the board's own devicetree gives it. That is
  * what makes an update not a re-commissioning: the Matter fabric credentials and the Thread dataset
- * live there, and every layout in ADR 0015 preserves them.
+ * live there, and every layout here preserves them.
  * The bootloader image is given the same table, in sysbuild/mcuboot.overlay: the two have to agree
  * on the flash map byte for byte.
  *

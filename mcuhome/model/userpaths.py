@@ -3,17 +3,17 @@
 """Per-user directories, resolved from a stated environment.
 
 Three things in this package live under the invoking user's home
-directory: the firmware signing key (``$XDG_CONFIG_HOME/mcuhome/``,
-ADR 0015 decision 8), the build cache the container mounts
-(``$XDG_CACHE_HOME/mcuhome/``) and any path a user wrote with a leading
-``~``. All three used to be resolved with :meth:`pathlib.Path.home` and
-:meth:`pathlib.Path.expanduser`, which read ``HOME`` out of the *process*
-environment at the moment they are called.
+directory: the firmware signing key (``$XDG_CONFIG_HOME/mcuhome/``), the
+build cache the container mounts (``$XDG_CACHE_HOME/mcuhome/``) and any
+path a user wrote with a leading ``~``. All three used to be resolved
+with :meth:`pathlib.Path.home` and :meth:`pathlib.Path.expanduser`,
+which read ``HOME`` out of the *process* environment at the moment they
+are called.
 
-That is the pattern ADR 0020 rules out. The library is becoming one
-process that serves several sessions, each with its own environment, and
-a function that takes an ``env`` argument and then quietly consults the
-process anyway is worse than one that never took the argument: it
+That pattern breaks once the library serves several sessions from one
+process, each with its own environment, and a function that takes an
+``env`` argument and then quietly consults the process anyway is worse
+than one that never took the argument: it
 documents a promise it does not keep. The concrete failure is not
 hypothetical — a build server started by systemd runs with no ``HOME``
 at all, and :meth:`~pathlib.Path.home` answers that with the account
@@ -56,7 +56,7 @@ CONFIG_HOME_VAR = "XDG_CONFIG_HOME"
 
 #: MCUHome's own directory under the configuration home. One name, because
 #: everything a user configures for MCUHome by hand lives together: the
-#: signing key (ADR 0015 decision 8) and the build servers (E63).
+#: signing key and the build servers' configuration.
 APP_DIR = "mcuhome"
 
 
@@ -105,9 +105,8 @@ def config_dir(env: dict[str, str]) -> Path:
     The per-user configuration directory of MCUHome, resolved from *env*
     for the reason the module docstring gives. It is one function because
     two packages in two repositories now answer to the same directory —
-    the signing key lives in it (ADR 0015 decision 8) and so does the
-    build-server file the command line reads (E63) — and a rule spelled
-    twice is a rule that drifts.
+    the signing key lives in it and so does the build-server file the
+    command line reads — and a rule spelled twice is a rule that drifts.
 
     A configuration directory rather than a cache or a state directory:
     nothing in it is derivable, reproducible or disposable.

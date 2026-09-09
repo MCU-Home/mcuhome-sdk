@@ -14,8 +14,8 @@ package down, in :mod:`mcuhome.model.context` — both implementations
 are thin I/O shells over the same frozen vocabulary, and the golden
 vectors in ``tests/python`` pin them against each other.
 
-Existing because of ADR 0024: the compiler ships inside the SDK package
-and runs in the build container, where the workbench neither exists nor
+Existing because the compiler ships inside the SDK package and runs in
+the build container, where the workbench neither exists nor
 belongs. Everything here depends on ``mcuhome.model`` and a YAML parser,
 nothing else.
 """

@@ -1,9 +1,9 @@
 # MCUHome YAML Schema — Design
 
-> **Status: approved by the product owner (2026-08-03).** Based on
-> ADR 0009 (Matter-explicit, devicetree-aligned) and ADR 0010
-> (Matter-only integration, CoAP deferred). Product anchors: Nordic
-> nRF52/nRF54 first, environmental sensors first, full declarative
+> **Status: approved by the product owner (2026-08-03).** Based on a
+> Matter-explicit, devicetree-aligned schema, with Matter-only
+> integration and the CoAP maintenance channel deferred. Product
+> anchors: Nordic nRF52/nRF54 first, environmental sensors first, full declarative
 > automation engine. Complete example configurations: [examples/](examples/).
 
 ## 1. Principles
@@ -85,7 +85,7 @@ device:
   version: "0.1.0"                 # SemVer, quoted (default: 0.1.0)
   power:
     source: battery                # battery | mains  (default: mains)
-  # Advanced (ADR 0013 incl. amendment) — defaults serve the typical user:
+  # Advanced (blob/toolchain policy) — defaults serve the typical user:
   blob_usage: auto                  # auto | none  (default: auto)
   zephyr_version: auto             # auto | <release line, e.g. "4.4"> | latest
   blobs:                           # per-blob overrides (rarely needed)
@@ -94,9 +94,9 @@ device:
 
 - `board` is the exact Zephyr board target string — no own board naming
   layer. Validation: against the boards known to the pinned Zephyr.
-- `version` is this firmware's own SemVer (ADR 0005), and it has to be
+- `version` is this firmware's own SemVer, and it has to be
   quoted — YAML reads an unquoted `1.4` as a float. It becomes three
-  things at once (ADR 0015 decision 9): MCUboot's image version, the
+  things at once: MCUboot's image version, the
   Matter `SoftwareVersion` a controller compares when deciding whether an
   update is newer (`major << 24 | minor << 16 | patch << 8`, low byte
   reserved for a tweak counter), and the version in the `.ota` file's
@@ -110,7 +110,7 @@ device:
 - Matter vendor/product IDs default to the Matter test VID/PID (fine for
   DIY/commissioning; real IDs are a product-owner topic far later).
 - `blob_usage`/`zephyr_version`/`blobs` implement the blob policy and
-  per-device Zephyr pinning of ADR 0013 (incl. per-blob amendment).
+  per-device Zephyr pinning that policy covers.
   Default resolution: blobs are hard constraints and drive the automatic
   Zephyr pin. A per-blob `auto` inverts that priority (version wins,
   blob used iff compatible — self-healing when the vendor catches up).
@@ -143,7 +143,7 @@ network:
 
 - Exactly one transport must be configured; a board without radio for it
   is a validation error.
-- **Matter is the integration path** (ADR 0010), and it is on exactly
+- **Matter is the integration path**, and it is on exactly
   when the configuration says so (PO 2026-08-15): the `matter:` block
   is the opt-in — a block stating credentials counts, `enabled:` line
   or not — and `enabled: false` is the explicit off switch. A transport
@@ -328,7 +328,7 @@ node:
 
 ## 7. Device-to-device and the future CoAP maintenance channel
 
-**Device-to-device communication is served by Matter itself** (ADR 0010):
+**Device-to-device communication is served by Matter itself**:
 
 - **Bindings:** an endpoint with a client cluster (e.g. a switch) is
   bound to a server cluster on another node (e.g. a relay) and then sends
@@ -344,7 +344,7 @@ node:
   remote targets/sources that compile down to bindings/subscriptions
   (reserved: `bindings:` under `node:`).
 
-**CoAP maintenance channel (deferred, ADR 0010):** OpenThread already
+**CoAP maintenance channel (deferred):** OpenThread already
 ships a CoAP API (Thread's own network management uses CoAP), so a later
 maintenance surface is cheap on our targets. When it comes, it is
 **generated from the node model** — no second model, no own config beyond
@@ -425,7 +425,7 @@ Model:
 |---|---|
 | Custom components (user C code) | Own design doc, after builder pipeline |
 | OTA update flow details | Own design doc (Matter OTA) |
-| CoAP maintenance channel | Deferred (ADR 0010); derived surface, see §7 |
+| CoAP maintenance channel | Deferred; derived surface, see §7 |
 | Cross-device automations (bindings) | Reserved schema extension, see §7/§8 |
 | Packages/substitutions/includes | Schema revision 2 |
 | Expression language in automations | Reserved extension point |

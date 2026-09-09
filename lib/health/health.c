@@ -2,8 +2,7 @@
  * SPDX-FileCopyrightText: 2026 The MCUHome Contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Fault reboot and the evidence-fed hardware watchdog (<mcuhome/health.h>,
- * ADR 0015 health amendment).
+ * Fault reboot and the evidence-fed hardware watchdog (<mcuhome/health.h>).
  *
  * WHAT THE WATCHDOG IS FED FROM, AND WHY IT MATTERS
  *
@@ -140,7 +139,7 @@ FUNC_NORETURN void k_sys_fatal_error_handler(unsigned int reason, const struct a
 	"The alias is board wiring: add it to the board's overlay (mcuhome/registry.py's BoardDef " \
 	"for a generated application, samples/*/boards/ for a sample):\n" \
 	"    / { aliases { watchdog0 = &wdt0; }; };\n" \
-	"ADR 0015's health amendment makes the watchdog mandatory for every application image, so " \
+	"MCUHome's health design makes the watchdog mandatory for every application image, so " \
 	"this is a build error rather than a silently disabled feature."
 #endif
 

@@ -50,7 +50,7 @@ void mcuhome_matter_dnssd_retry_arm(void);
 #ifdef CONFIG_MCUHOME_MATTER_OTA
 /**
  * @brief Instantiate the Matter OTA Requestor and wire it to MCUHome's own
- *        image processor (ADR 0015 decision 5).
+ *        image processor.
  *
  * Must be called after Server::Init() — the requestor's storage lives in
  * the server's persistent storage — and before the CHIP event loop starts.

@@ -2,20 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """The SDK entry point's import closure is stdlib plus ``mcuhome``.
 
-The build-container contract promises the entry point exactly the
-runtime the SDK package declares (§6.1) — today ``python3``, a bare
-interpreter. The image provides its *own* program a full environment,
-but ``bin/generate`` runs as a child with the mounted SDK on
-``sys.path`` and nothing else, so every module it imports, transitively,
-must come from the standard library or from the SDK tree itself.
+A build environment gives the SDK's entry point exactly the runtime the
+SDK package declares — today ``python3``, a bare interpreter. The
+environment has a full Python of its own, but ``bin/generate`` runs as a
+child with the delivered SDK on ``sys.path`` and nothing else, so every
+module it imports, transitively, must come from the standard library or
+from the SDK tree itself.
 
 This broke for real before it was pinned: ``mcuhome.compiler.abi``
 imported ``read_model`` off ``mcuhome.workbench.api``, whose module
 level pulls the YAML loader — and the first in-container ``build`` died
 on ``ModuleNotFoundError: ruamel`` before the request document was even
-parsed. The reader moved to ``mcuhome.model.modelfile`` (the package
-that is dependency-free by construction, because it serves both sides
-of the contract), and this test holds the door shut behind it.
+parsed. The reader moved to ``mcuhome.model.modelfile`` (the package that is
+dependency-free by construction, because it serves both sides of that
+call), and this test holds the door shut behind it.
 
 A subprocess, not an in-process import: the suite's own imports have
 long since dragged third-party modules into ``sys.modules``, so only a
@@ -63,5 +63,5 @@ def test_sdk_entry_point_closure_is_stdlib_plus_mcuhome():
     assert loaded == ["mcuhome"], (
         "the SDK entry point's import closure reaches beyond the standard "
         f"library and the SDK tree: {[m for m in loaded if m != 'mcuhome']} — "
-        "the build container provides none of these (contract §6.1)"
+        "the build environment provides none of these to the SDK entry point"
     )

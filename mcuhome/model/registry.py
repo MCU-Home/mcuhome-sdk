@@ -199,7 +199,7 @@ class DeviceTypeDef:
     id: int
     revision: int
     #: Server clusters the device type requires, beyond the Descriptor
-    #: cluster the framework appends itself (ADR 0014, decision B).
+    #: cluster the framework appends itself.
     mandatory_clusters: tuple[str, ...]
 
 
@@ -315,24 +315,25 @@ PLANNED_DRIVERS: dict[str, str] = {
 
 
 # --------------------------------------------------------------------------
-# Update scheme and flash layout (ADR 0015)
+# Update scheme and flash layout
 # --------------------------------------------------------------------------
 
 #: Sysbuild symbol per MCUboot mode name. The names on the left are what
 #: :class:`UpdateSchemeDef` speaks; the symbols on the right are what
 #: ``sysbuild.conf`` carries. A board names a mode, never a symbol —
-#: nothing in the builder may branch on a board (ADR 0015 decision 2).
+#: nothing in the builder may branch on a board.
 MCUBOOT_MODE_SYMBOLS: dict[str, str] = {
     "single-app": "SB_CONFIG_MCUBOOT_MODE_SINGLE_APP",
     "swap-using-offset": "SB_CONFIG_MCUBOOT_MODE_SWAP_USING_OFFSET",
 }
 
-#: The one signature scheme MCUHome images use (ADR 0015 decision 8), as
-#: the name a manifest and a schema export speak. The sysbuild symbol it
-#: renders to is ``SB_CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256``. It is a
-#: constant rather than per-board data because a device that needed a
-#: different one would need a different key custody story with it — that
-#: re-opens ADR 0015, which is exactly what a registry row must not do.
+#: The one signature scheme MCUHome images use, as the name a manifest
+#: and a schema export speak. The sysbuild symbol it renders to is
+#: ``SB_CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256``. It is a constant rather
+#: than per-board data because a device that needed a different one
+#: would need a different key custody story with it — that reopens a
+#: decision this registry exists to close, which is exactly what a
+#: registry row must not do.
 SIGNATURE_TYPE = "ecdsa-p256"
 
 #: MCUboot modes whose upgrade slot is the *secondary* one, and which
@@ -347,9 +348,9 @@ _SECONDARY_SLOT_MODES = frozenset({"swap-using-offset"})
 class PartitionDef:
     """One region of the board's flash, as the builder fixes it.
 
-    Sizes and offsets are the ADR 0015 layout tables, not the board's
-    upstream defaults — those cannot hold an MCUHome image (ADR 0015,
-    Consequences). :attr:`device` says which part it lives on.
+    Sizes and offsets are the fixed layout tables, not the board's
+    upstream defaults — those cannot hold an MCUHome image.
+    :attr:`device` says which part it lives on.
     """
 
     #: Devicetree node label, e.g. ``slot0_partition``.
@@ -379,12 +380,12 @@ class PartitionDef:
 class UpdateSchemeDef:
     """How one board takes a firmware update, and what that costs in flash.
 
-    ADR 0015 decision 2: this is registry *data*. A new board is a row
-    plus a bring-up; a board needing a scheme that does not exist yet is
-    what re-opens the ADR.
+    This is registry *data*. A new board is a row plus a bring-up; a
+    board needing a scheme that does not exist yet is what calls for a
+    new one.
     """
 
-    #: Board class of ADR 0015, ``"A"`` (external staging flash) or
+    #: Board class, ``"A"`` (external staging flash) or
     #: ``"B"`` (1 MiB internal only). Descriptive — nothing branches on it.
     board_class: str
     #: Key of :data:`MCUBOOT_MODE_SYMBOLS`.
@@ -432,9 +433,9 @@ class UpdateSchemeDef:
     #: its own configuration asks for.
     application_snippets: tuple[str, ...] = ()
     #: Kconfig the *application* image needs to receive a Matter OTA on
-    #: this scheme, or empty for a scheme that cannot (ADR 0015 decision 5
-    #: puts Matter OTA on board class A only — a board with nowhere to
-    #: stage a second image has nothing to enable).
+    #: this scheme, or empty for a scheme that cannot — Matter OTA is
+    #: board class A only, and a board with nowhere to stage a second
+    #: image has nothing to enable.
     #:
     #: One indivisible group, emitted together or not at all, and emitted
     #: from here rather than expressed as Kconfig ``select``s in
@@ -452,7 +453,7 @@ class UpdateSchemeDef:
     #: Devicetree written *only* to the bootloader image's overlay, after
     #: :attr:`partition_overlay` — never to the application's, which does
     #: not carry the bootloader's dead-weight problems (e.g. a serial
-    #: driver MCUboot links unconditionally, ADR 0015 amendment 2026-08-07).
+    #: driver MCUboot links unconditionally, per the 2026-08-07 amendment).
     bootloader_overlay: str = ""
     #: Why :attr:`bootloader_overlay` is there, rendered as its generated
     #: comment (mirrors :attr:`BoardDef.overlay_note`).
@@ -463,7 +464,7 @@ class UpdateSchemeDef:
         """Whether a device on this scheme can take a Matter OTA update.
 
         Derived rather than stated, so that the flag and the Kconfig group
-        that implements it cannot disagree (ADR 0015 decision 5).
+        that implements it cannot disagree.
         """
         return bool(self.matter_ota_kconfig)
 
@@ -498,7 +499,7 @@ class UpdateSchemeDef:
         ``CONFIG_BOOT_MAX_IMG_SECTORS_AUTO`` derives this itself — but it
         reads slot0's flash node and applies its block size to slot1,
         which is wrong the moment the two slots live on different parts
-        (ADR 0015 decision 3; upstream bug candidate). Every scheme here
+        (upstream bug candidate). Every scheme here
         therefore states the number, and this is where it comes from.
         """
         slots = [entry for entry in self.partitions if entry.fixed_label.startswith("image-")]
@@ -512,17 +513,17 @@ class UpdateSchemeDef:
 
 @dataclass(frozen=True)
 class BootstrapDef:
-    """How a board reaches the MCUHome standard state (ADR 0016 decision 2).
+    """How a board reaches the MCUHome standard state.
 
     A device is bootstrapped **once, ever**: the vendor bootloader is
     replaced by MCUHome's MCUboot, after which every board behaves
     identically — same recovery entrance, same transport, same signing,
-    same partition rules. ADR 0016 makes this a per-board ``BoardDef``
-    property on purpose ("a new board declares how it is bootstrapped; it
-    does not add a code path"), and this is that property.
+    same partition rules. This is a per-board ``BoardDef`` property on
+    purpose ("a new board declares how it is bootstrapped; it does not
+    add a code path"), and this is that property.
 
     :attr:`steps` is the user-facing instruction list the dashboard shows
-    on its first rung (dashboard ADR 0010) and the CLI can print. It is
+    on its first rung and the CLI can print. It is
     prose *data*: the builder never parses it, and a board whose
     procedure changes changes a table row.
     """
@@ -534,7 +535,7 @@ class BootstrapDef:
     #: kept and MCUboot is installed as its application).
     mechanism: str
     #: The state the board ends up in: ``"standard"`` or
-    #: ``"coexistence"``. ADR 0016 supports both; only the first is the
+    #: ``"coexistence"``. Both are supported; only the first is the
     #: target.
     state: str
     #: Which build artifact the bootstrap writes, by manifest role.
@@ -601,13 +602,13 @@ class BoardDef:
     #: generated file. Generic knowledge about the board, per the
     #: generated-comments rule in :mod:`mcuhome.compiler.generate`.
     overlay_note: str = ""
-    #: How this board boots and takes updates (ADR 0015 decision 2).
-    #: Every board MCUHome builds for has one; the field is optional only
-    #: so that a test fixture can describe a board without repeating a
-    #: flash layout it does not exercise.
+    #: How this board boots and takes updates. Every board MCUHome builds
+    #: for has one; the field is optional only so that a test fixture can
+    #: describe a board without repeating a flash layout it does not
+    #: exercise.
     update_scheme: UpdateSchemeDef | None = None
-    #: How this board reaches the MCUHome standard state (ADR 0016
-    #: decision 2). Optional for the same reason as :attr:`update_scheme`.
+    #: How this board reaches the MCUHome standard state. Optional for
+    #: the same reason as :attr:`update_scheme`.
     bootstrap: BootstrapDef | None = None
 
 
@@ -650,8 +651,8 @@ _NRF5340_BOARD_OVERLAY = """\
 };"""
 
 
-#: nRF7002-DK flash layout, ADR 0015 decision 3 (board class A), boot
-#: partition size amended 2026-08-07 (see the ADR's amendment section).
+#: nRF7002-DK flash layout (board class A), boot partition size amended
+#: 2026-08-07 (see below).
 #:
 #: ``storage_partition`` keeps the address and the size the board's own
 #: devicetree gives it (``0xF8000``, 32 KiB), which is what makes an
@@ -700,10 +701,10 @@ _NRF7002DK_PARTITION_OVERLAY = """\
 \t};
 };"""
 
-#: The class-A scheme of ADR 0015 decision 3, as the nRF7002-DK runs it.
+#: The class-A scheme, as the nRF7002-DK runs it.
 #:
 #: **The original 64 KiB boot partition was nearly full, and that was
-#: measured, not feared.** ADR 0015 decision 3 sized it from a
+#: measured, not feared.** The original layout sized it from a
 #: single-slot bootloader with serial recovery and the boot mode
 #: (52.2 KiB) and left the swap state machine on top of that as the
 #: number this bring-up owed. It was ~12 KiB: the first build of this
@@ -718,9 +719,9 @@ _NRF7002DK_PARTITION_OVERLAY = """\
 #: exactly why and had nowhere to say it. RTT needs no port and no pin,
 #: only the probe that is attached anyway. Measured: **+3.94 KiB**
 #: (55,460 -> 59,492 B), 58.1 KiB of the 80 KiB partition, 72.6 % full.
-#: See ``CONFIG_LOG`` below and ADR 0015's RTT amendment.
+#: See ``CONFIG_LOG`` below.
 #:
-#: **Amended 2026-08-07 (ADR 0015 amendment, product owner).** At 64 KiB
+#: **Amended 2026-08-07 (product owner).** At 64 KiB
 #: the bootloader measured 63.1 KiB — 98.6 % full. Two independent size
 #: levers were measured against it: link-time optimization, strictly
 #: per-image (``CONFIG_LTO`` below; -7.55 KiB), and dropping the UART
@@ -742,17 +743,16 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
     erase_block_size=4096,
     partition_overlay=_NRF7002DK_PARTITION_OVERLAY,
     bootloader_kconfig=(
-        # Serial recovery over CDC-ACM: ADR 0016 decision 2 makes it the
-        # permanent debugger-free rescue path of every supported board,
-        # and ADR 0015 decision 6 makes USB/SMP the one transport that
-        # reaches an uncommissioned or half-updated node. The three
-        # symbols are MCUboot's own usb_cdc_acm_recovery.conf.
+        # Serial recovery over CDC-ACM is the permanent debugger-free
+        # rescue path of every supported board, and USB/SMP is the one
+        # transport that reaches an uncommissioned or half-updated node.
+        # The three symbols are MCUboot's own usb_cdc_acm_recovery.conf.
         "CONFIG_MCUBOOT_SERIAL=y",
         "CONFIG_BOOT_SERIAL_CDC_ACM=y",
-        "CONFIG_UART_CONSOLE=n",  # debug-output: approved ADR 0015 RTT amendment
+        "CONFIG_UART_CONSOLE=n",  # debug-output: approved — RTT kept, see note above
         # The console stays gone — serial recovery owns the port, and a
         # console backend would only compile output nothing receives.
-        "CONFIG_CONSOLE=n",  # debug-output: approved ADR 0015 RTT amendment
+        "CONFIG_CONSOLE=n",  # debug-output: approved — RTT kept, see note above
         # But the LOG does not. A bootloader that decides silently is a
         # bootloader whose decisions cannot be debugged, and that cost was
         # paid in full: a Matter OTA that downloaded, verified and
@@ -804,7 +804,7 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         # geometry the bootloader wrote. With different buffer sizes it
         # would inherit the bootloader's smaller one instead of its own.
         "CONFIG_SEGGER_RTT_BUFFER_SIZE_UP=4096",
-        # Buttonless entrance (ADR 0016 decision 3): MCUboot reads the
+        # Buttonless entrance: MCUboot reads the
         # retention area the boot-mode snippet puts in GPREGRET1. The
         # physical button entrance stays on — it is what is left when the
         # application no longer boots far enough to write a register.
@@ -826,7 +826,7 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         # erase, which would give the two slots different sector layouts
         # — and swap needs one layout across both.
         "CONFIG_SPI_NOR_FLASH_LAYOUT_PAGE_SIZE=4096",
-        # No downgrade prevention in v0.x (ADR 0015 decision 8). Rolling
+        # No downgrade prevention in v0.x. Rolling
         # a device back to a known-good image is a normal act during
         # development, and these layouts set no readback protection, so
         # an attacker with the board in hand can erase and re-provision
@@ -835,7 +835,7 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         # than left to the default, because the default is what would
         # change under us. Revisit at 1.0, with readback protection.
         "CONFIG_MCUBOOT_DOWNGRADE_PREVENTION=n",
-        # LTO size lever (ADR 0015 amendment, 2026-08-07 — the date stays
+        # LTO size lever (2026-08-07 amendment — the date stays
         # out of the comment below, which is emitted into the generated
         # mcuboot.conf verbatim like every string in this tuple, and
         # generated output carries no timestamps by construction).
@@ -849,8 +849,8 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
     ),
     bootloader_snippets=("boot-mode",),
     application_snippets=("boot-mode",),
-    # Matter OTA (ADR 0015 decision 5). This scheme is the reason the
-    # decision exists: the secondary slot is on the MX25R64, so there is
+    # Matter OTA. This scheme is the reason board class A exists: the
+    # secondary slot is on the MX25R64, so there is
     # somewhere to stage a downloaded image and somewhere to swap back
     # from. Measured cost on this board: +27.0 KiB flash, +2.0 KiB RAM.
     matter_ota_kconfig=(
@@ -894,7 +894,7 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         "CONFIG_SPI_NOR=y",
         "CONFIG_SPI_NOR_FLASH_LAYOUT_PAGE_SIZE=4096",
     ),
-    # Dead UART (measured -1.30 KiB; ADR 0015 amendment, 2026-08-07).
+    # Dead UART (measured -1.30 KiB; 2026-08-07 amendment).
     # MCUBOOT_SERIAL selects SERIAL and UART_INTERRUPT_DRIVEN
     # unconditionally, regardless of which serial-recovery transport is
     # chosen (upstream imprecision, workspace UPSTREAM-BUGS.md entry M2)
@@ -920,11 +920,11 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
 
 
 #: The nRF7002-DK is a development kit with an on-board J-Link, so its
-#: bootstrap is the easy case ADR 0016 decision 2 explicitly does not have
-#: to design around: one full-chip flash of the combined hex over SWD
-#: writes MCUboot and the application together, and the board is in the
-#: standard state afterwards. The front-door replacement mechanism the ADR
-#: makes the mechanism of record is for the boards that have no probe.
+#: bootstrap is the easy case: one full-chip flash of the combined hex
+#: over SWD writes MCUboot and the application together, and the board
+#: is in the standard state afterwards. The front-door replacement
+#: mechanism is the mechanism of record for the boards that have no
+#: probe.
 _NRF7002DK_BOOTSTRAP = BootstrapDef(
     mechanism="debug-probe",
     state="standard",
@@ -944,8 +944,8 @@ _NRF7002DK_BOOTSTRAP = BootstrapDef(
 
 BOARDS: dict[str, BoardDef] = {
     # nRF7002-DK, application core. Thread-only: BLE is deliberately off
-    # (ADR 0011 — vanilla Zephyr has no combined BLE + 802.15.4 netcore
-    # image), and the app core has no RNG peripheral, so entropy comes
+    # (vanilla Zephyr has no combined BLE + 802.15.4 netcore image), and
+    # the app core has no RNG peripheral, so entropy comes
     # from the network core over IPC.
     "nrf7002dk/nrf5340/cpuapp": BoardDef(
         name="nrf7002dk/nrf5340/cpuapp",

@@ -7,8 +7,8 @@
  * CHIP's own chip::OTAImageProcessorImpl (src/platform/Zephyr) cannot
  * drive an MCUHome class-A board: it opens DT_CHOSEN(zephyr_flash_
  * controller) — the SoC's internal flash — and applies the slot1_partition
- * offsets to it. On the nRF7002-DK slot1 is on the MX25R64 over SPI4
- * (ADR 0015 decision 3), so writing "slot1's offset" into internal flash
+ * offsets to it. On the nRF7002-DK slot1 is on the MX25R64 over SPI4,
+ * so writing "slot1's offset" into internal flash
  * would land in the middle of slot0 and the storage partition. Hence a
  * processor of MCUHome's own; upstream's stays compiled (CHIP's BUILD.gn
  * builds it whenever the requestor is on) and simply unused.

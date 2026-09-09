@@ -208,10 +208,10 @@ MODEL_FILE = "model/device-model.json"
 #: Where patches live: ``patches/<layer>/NNNN-name.patch``.
 PATCHES_DIR = "patches"
 
-#: The backend-written runtime directory that could once appear inside a
-#: mounted context (``.mcuhome/command.json``), from an earlier design of
-#: this project's own build-container contract. Plumbing, not content:
-#: never an integrity entry, never identity.
+#: The orchestrator-written runtime directory that could once appear
+#: inside a mounted context (``.mcuhome/command.json``), from an earlier
+#: design of this project's own. Plumbing, not content: never an
+#: integrity entry, never identity.
 #:
 #: **That design has moved on and this constant has not yet.** Under the
 #: v3 specification set (``docs/spec/build-environment-specification.md``

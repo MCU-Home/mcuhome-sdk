@@ -1,7 +1,7 @@
 # matter-node
 
 Minimal Matter node on vanilla Zephyr with upstream CHIP v1.5.1.0: a
-**native composed node** (ADR 0014) whose sensor endpoints are registered
+**native composed node** whose sensor endpoints are registered
 at runtime **directly under the root node** — no aggregator, no bridge.
 The static data model is the framework ZAP
 ([`components/matter/zap/`](../../components/matter/zap/)), which contains
@@ -132,7 +132,7 @@ working — it is the shortest path to a running node, it is what
 `sample.yaml` gives twister, and it is what everyone's fingers already
 type.
 
-It is **not** how MCUHome builds a device. ADR 0015 puts MCUboot under
+It is **not** how MCUHome builds a device. MCUHome puts MCUboot under
 every image and fixes the flash layout per board, and vanilla Zephyr
 builds a bootloader only under sysbuild:
 
@@ -153,15 +153,15 @@ Three things about that command are worth reading rather than copying:
   image, and `-S matter` in MCUboot's Kconfig is an assignment to symbols
   it has never heard of, which stops the build. `<image>_SNIPPET` is the
   per-image form, and the main image is named after its directory.
-- **The signing key is yours** (ADR 0015 decision 8). Without that last
+- **The signing key is yours.** Without that last
   argument the build succeeds and signs with MCUboot's demo key, whose
   private half is published in the MCUboot repository. `mcuhome device build`
   generates a real one on first use; `imgtool keygen -t ecdsa-p256`
   does the same by hand.
 - **The partition table is missing from this sample.** The command above
   builds against the board's upstream two-slot layout, which gives the
-  application 464 KiB and therefore does not fit — the layout of ADR 0015
-  is registry data that `mcuhome device build` emits, not something this
+  application 464 KiB and therefore does not fit — the per-board flash
+  layout is registry data that `mcuhome device build` emits, not something this
   hand-written sample carries. To build this sample *with* a bootloader,
   generate the equivalent device instead:
 
@@ -171,17 +171,17 @@ Three things about that command are worth reading rather than copying:
   ```
 
   which is the same device — `src/mcuhome_config.{c,h}` here are that
-  command's output, byte for byte (ADR 0014).
+  command's output, byte for byte.
 
 ## What this sample still contains
 
-Almost nothing — which is the point of ADR 0014. The Matter runtime moved
+Almost nothing — that is by design. The Matter runtime moved
 into the framework component (`components/matter/`) and the device
 configuration is produced by the builder, so what is left is glue:
 
 | File | Role |
 |---|---|
-| `src/mcuhome_config.c`, `src/mcuhome_config.h` | **Generator output, committed.** Written by `mcuhome build` from [`00-bmp180-two-endpoints.yaml`](../../docs/design/examples/00-bmp180-two-endpoints.yaml): the device's Matter model as plain-C tables (`mcuhome_node_config`) plus the channel/sensor bindings that feed them. **Do not edit by hand** — `tests/python/test_generate.py` compares both files byte for byte against fresh generator output, which is what keeps the sample and the codegen contract in lockstep (ADR 0014). |
+| `src/mcuhome_config.c`, `src/mcuhome_config.h` | **Generator output, committed.** Written by `mcuhome build` from [`00-bmp180-two-endpoints.yaml`](../../docs/design/examples/00-bmp180-two-endpoints.yaml): the device's Matter model as plain-C tables (`mcuhome_node_config`) plus the channel/sensor bindings that feed them. **Do not edit by hand** — `tests/python/test_generate.py` compares both files byte for byte against fresh generator output, which is what keeps the sample and the codegen contract in lockstep. |
 | `src/main.c` | Application glue: LEDs, `mcuhome_matter_start()`, `mcuhome_sensor_start()`, and an override of the `mcuhome_matter_stage()` hook for LED status. Plain C — generated app glue never needs a C++ toolchain. Nothing here polls, converts, publishes or describes the device: that is the channel layer's and the generated tables' job. |
 | `boards/nrf7002dk_nrf5340_cpuapp.overlay` | The BMP180 devicetree node on `arduino_i2c` plus the `zephyr,entropy` redirect to the framework's netcore-seeded entropy driver ([`drivers/entropy/`](../../drivers/entropy/)) — both of them blocks the builder's overlay generator emits, the sensor node from the device configuration and the entropy node from the board registry. |
 | `include/CHIPProjectConfig.h` | One-line wrapper around the framework's `<mcuhome/matter/chip_project_config.h>`; exists only because CHIP resolves `CONFIG_CHIP_PROJECT_CONFIG` relative to the application directory. The builder generates the same wrapper into every device it builds. |

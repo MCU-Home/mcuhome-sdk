@@ -9,8 +9,8 @@ in (:mod:`mcuhome.workbench.otafile`) is tested in
 Two things are worth pinning here and each one is a different kind of
 claim:
 
-* the **SemVer to SoftwareVersion mapping** is fixed by ADR 0015
-  decision 9 and published to the world in every image's Basic
+* the **SemVer to SoftwareVersion mapping** is fixed, once, and
+  published to the world in every image's Basic
   Information cluster — changing it silently would make every device in
   the field disagree with every image built after the change;
 * a **version out of range is refused with an explanation**, because
@@ -46,7 +46,7 @@ EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
     ],
 )
 def test_the_semver_mapping_is_the_one_the_adr_fixed(version: str, expected: int) -> None:
-    """``major << 24 | minor << 16 | patch << 8`` (ADR 0015 decision 9)."""
+    """``major << 24 | minor << 16 | patch << 8``."""
     assert ota.software_version(version) == expected
 
 

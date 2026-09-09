@@ -3,11 +3,11 @@
 #
 # TOOL CONFIGURATION ONLY — this file is not a distribution.
 #
-# It used to build one, named `mcuhome`. ADR 0020 ended that twice over:
-# decision 2 reserves the plain name for the command line, because `pip
-# install mcuhome` should yield the command a user expects; and decision
-# 1 split what one repository published into three distributions. Since
-# the ADR 0024 repo split this repository publishes two of them —
+# It used to build one, named `mcuhome`. That ended twice over: the
+# plain name was reserved for the command line, because `pip install
+# mcuhome` should yield the command a user expects; and what one
+# repository published was split into three distributions. Since the
+# repository split, this repository publishes two of them —
 # `packaging/{model,compiler}/pyproject.toml`; `mcuhome-workbench` is
 # published from its own repository, github.com/mcu-home/mcuhome-workbench.
 #

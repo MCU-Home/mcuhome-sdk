@@ -18,7 +18,7 @@
  *                    swap" before a reboot is spent finding out.
  *   Apply            boot_request_upgrade(BOOT_UPGRADE_TEST) and reboot.
  *
- * TEST, never PERMANENT. The whole rollback story of ADR 0015 hangs on the
+ * TEST, never PERMANENT. The whole rollback story hangs on the
  * image arriving as a test image that has to confirm itself
  * (lib/health/image_confirm.c); a permanent upgrade would install an
  * unverified image with no way back, over the air, on a device with no
@@ -27,7 +27,7 @@
  * What this does NOT do is verify the payload. CHIP never checks the
  * Matter image digest on any platform, and MCUHome does not pretend to
  * either: MCUboot's signature over the image inside is the one and only
- * trust anchor (ADR 0015 decision 6). A payload that is not signed with
+ * trust anchor. A payload that is not signed with
  * the user's key is written to slot1, refused by the bootloader on the
  * next boot, and the device comes back on the old image. That is the
  * intended failure mode, and it is why the checks below are about "is
@@ -56,15 +56,15 @@
 
 LOG_MODULE_DECLARE(MCUHOME_MATTER_LOG_MODULE, CONFIG_LOG_DEFAULT_LEVEL);
 
-/* The staging slot is devicetree, not a constant: ADR 0015 decision 2
- * makes the partition table per-board registry data, and the builder
- * renders it into the board overlay. A board configured without one
+/* The staging slot is devicetree, not a constant: the partition table
+ * is per-board registry data, and the builder renders it into the
+ * board overlay. A board configured without one
  * cannot take an over-the-air update at all, and saying so here beats a
  * link error about a missing partition symbol. */
 #if !DT_NODE_EXISTS(DT_NODELABEL(slot1_partition))
 #error "CONFIG_MCUHOME_MATTER_OTA needs a slot1_partition in the board's devicetree. " \
-	"Only board classes with a staging slot can take a Matter OTA update (ADR 0015 " \
-	"decision 5); the update scheme in mcuhome/registry.py is what turns this on."
+	"Only board classes with a staging slot can take a Matter OTA update; " \
+	"the update scheme in mcuhome/registry.py is what turns this on."
 #endif
 
 /* The Zephyr side of Matter OTA is one indivisible Kconfig group, emitted
@@ -100,12 +100,12 @@ LOG_MODULE_DECLARE(MCUHOME_MATTER_LOG_MODULE, CONFIG_LOG_DEFAULT_LEVEL);
 	"the swapped image."
 #endif
 
-/* ADR 0015 is a test/confirm architecture. CHIP offers a Kconfig choice
+/* MCUHome uses a test/confirm architecture. CHIP offers a Kconfig choice
  * that turns the upgrade permanent, which would silently remove the
  * rollback this whole block exists to provide. */
 #ifdef CONFIG_CHIP_OTA_REQUEST_UPGRADE_PERMANENT
 #error "CONFIG_CHIP_OTA_REQUEST_UPGRADE_PERMANENT gives up MCUboot's revert path, which " \
-	"ADR 0015 makes the point of staging on this board class. Use " \
+	"which is the whole point of staging on this board class. Use " \
 	"CONFIG_CHIP_OTA_REQUEST_UPGRADE_TEST (the default) and let the image confirm itself."
 #endif
 
@@ -312,7 +312,7 @@ CHIP_ERROR OtaImageProcessor::VerifyStagedImage()
 	/* One state makes this check lie, and only one: while the running
 	 * image is still unconfirmed, MCUboot's swap type is REVERT and the
 	 * reader then looks at offset 0, where the previous image sits and
-	 * ours does not. ADR 0015's health amendment makes that window real
+	 * ours does not. MCUHome's health design makes that window real
 	 * (lib/health/image_confirm.c holds confirmation back for a while
 	 * after boot), so a download finishing inside it must not be failed
 	 * for this reason. It has a bigger problem anyway — a pending revert
@@ -406,7 +406,7 @@ CHIP_ERROR OtaImageProcessor::ConfirmCurrentImage()
 	 *
 	 * CHIP's DefaultOTARequestorDriver::Init() calls this the moment it
 	 * recognizes a first run of a new image — that is, during bring-up,
-	 * before the node has proven anything. ADR 0015's health amendment
+	 * before the node has proven anything. MCUHome's health design
 	 * asks for the opposite: confirm only after the device has been
 	 * healthy for a while, so that an image which reaches the Matter
 	 * stack and then faults still reverts. lib/health/image_confirm.c

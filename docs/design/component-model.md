@@ -149,7 +149,7 @@ attr)` binding. The richer model of §2 remains the design target for the
 YAML-level abstraction; the builder will map it onto this v1 contract,
 with scale/offset conversion happening in the sensor binding, not the
 channel itself. Any richer channel fields land as a contract-version
-bump per ADR 0014.
+bump of the generated-tables contract.
 
 ## 10. Future direction: filters, scripting, and the DEV/LIVE split
 
@@ -242,7 +242,7 @@ rebuild + OTA) or script-only (filters, automations → push), and the
 device's mode is part of the canonical model so a filter is never
 applied twice (baked *and* scripted).
 
-**Fixed constraints for that phase:** the tables contract (ADR 0014)
+**Fixed constraints for that phase:** the generated-tables contract
 stays the single interface — a boot script would be a second *producer*
 of the same tables, never a bypass; unit conversion into Matter raw
 units stays in the C binding (scripts work in user units); script

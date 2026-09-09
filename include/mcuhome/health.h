@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2026 The MCUHome Contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * MCUHome health foundation (ADR 0015, health amendment).
+ * MCUHome health foundation.
  *
  * Three mechanisms that only make sense together, and that an updatable
  * device cannot go without:

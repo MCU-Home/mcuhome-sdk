@@ -14,9 +14,10 @@ device build compiles from, and it defines the build environment that compiles i
 - `mcuhome-model` and `mcuhome-compiler` (`mcuhome/`): the device-model
   vocabulary every MCUHome tool speaks, and the code generation and west
   orchestration that turn a build context into firmware.
-- The build environment (`containers/build-container/`): the Zephyr SDK, the
-  toolchains and a baked west workspace, published for amd64 and arm64 as
-  `ghcr.io/mcu-home/build-container`.
+- The build environment (`packaging/build-environment/`,
+  `containers/build-environment/`): the Zephyr SDK, the toolchains and a
+  pinned west workspace, distributed as two hash-pinned packages and
+  assembled into `ghcr.io/mcu-home/build-environment` for amd64 and arm64.
 - Zephyr snippets and devicetree bindings (`snippets/`, `dts/`) for Matter,
   debug output over RTT and boot mode.
 - Sample applications (`samples/`): a composed Matter node and a network-core
@@ -26,8 +27,8 @@ device build compiles from, and it defines the build environment that compiles i
 
 A device build does not clone this repository. The workbench resolves the SDK
 constraint of a device to one released `mcuhome-sdk-<version>.tar.zst` archive,
-mounts it into the build environment and invokes `bin/generate` through the
-invocation ABI declared in `mcuhome-sdk.json`, so from a project directory the
+delivers it to the build environment, which reaches code generation through
+the entry point `mcuhome-sdk.json` declares — so from a project directory the
 whole of it is one command:
 
 ```sh
@@ -40,8 +41,8 @@ own west workspace, which is how an application consumes the C runtime directly.
 ## How it fits into MCUHome
 
 - [mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench) — resolves
-  the SDK pin, builds the context, drives the build environment through this
-  SDK's invocation ABI, and signs the resulting image afterwards.
+  the SDK pin, builds the context, drives the build environment one step at a
+  time, and signs the resulting image afterwards.
 - [mcuhome-cli](https://github.com/mcu-home/mcuhome-cli) and
   [mcuhome-ui](https://github.com/mcu-home/mcuhome-ui) — reach this repository
   only through the workbench.

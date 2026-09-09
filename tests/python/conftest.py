@@ -3,7 +3,7 @@
 """Shared fixtures and helpers for the builder tests.
 
 Everything here needs nothing but :mod:`mcuhome.model` and
-:mod:`mcuhome.compiler` — the two packages ADR 0024 moves into this
+:mod:`mcuhome.compiler` — the two packages that live in this
 repository. Nothing imports :mod:`mcuhome.workbench`, which lives in the
 tools repository and is not installed next to these tests; where a test
 used to reach for it, this file carries the small piece of it the test
@@ -38,7 +38,7 @@ EXAMPLES_DIR = REPO_ROOT / "docs" / "design" / "examples"
 DATA_DIR = TESTS_DIR / "data"
 GOLDEN_DIR = DATA_DIR / "golden"
 
-#: The import package the distributions of ADR 0020 share, and the
+#: The import package the published distributions share, and the
 #: directory it is assembled from in this checkout. It is a PEP 420
 #: namespace package, which is why the directory is named here at all:
 #: the import system cannot enumerate one. ``find_spec("mcuhome")``
@@ -49,9 +49,10 @@ NAMESPACE = "mcuhome"
 NAMESPACE_DIR = REPO_ROOT / NAMESPACE
 
 #: The packages the whole-package invariant searches must cover — the
-#: distributions of ADR 0020 decision 1 this repository ships, by import
-#: name. ``mcuhome.workbench`` is the third and lives in the tools
-#: repository since ADR 0024, where the same list names it alone.
+#: distributions this repository ships, by import name.
+#: ``mcuhome.workbench`` is the third and lives in the tools
+#: repository since the repository split, where the same list names it
+#: alone.
 #: :func:`package_modules` checks this list against what is actually in
 #: :data:`NAMESPACE_DIR`, so a third subpackage cannot arrive unsearched.
 PACKAGES = ("mcuhome.compiler", "mcuhome.model")
@@ -62,7 +63,7 @@ def package_modules() -> list[Path]:
 
     Derived from the importable packages rather than from one module's
     directory. A directory glob reads "every module there is" only while
-    there is one package; after the ADR 0020 split it would keep passing
+    there is one package; after the package split it would keep passing
     while quietly examining fewer files, which is worse than not
     searching at all. Callers assert that a module they know must be
     examined came back, so the day this list falls behind is the day a
@@ -123,8 +124,8 @@ def _no_real_signing_key(monkeypatch, tmp_path):
     """No test may touch the developer's own firmware signing key.
 
     ``mcuhome build`` generates one on first need under
-    ``$XDG_CONFIG_HOME/mcuhome/`` (ADR 0015 decision 8), which on the
-    machine running this suite is a real, long-lived private key. A test
+    ``$XDG_CONFIG_HOME/mcuhome/``, which on the machine running this
+    suite is a real, long-lived private key. A test
     that reaches it would either read a secret it has no business
     reading or — worse — create one silently outside a temporary
     directory. Point the variables at the test's own tmp_path instead;
@@ -156,9 +157,10 @@ def _no_real_signing_key(monkeypatch, tmp_path):
 # --- the example model, without the workbench -------------------------
 #
 # Resolving a configuration is stages 1-3, which is mcuhome.workbench —
-# and since ADR 0024 the workbench lives in the tools repository. This
-# repository reads the same model from the pregenerated wire document
-# instead (the device-model.json golden, exactly what `mcuhome build
+# and since the repository split the workbench lives in the tools
+# repository. This repository reads the same model from the
+# pregenerated wire document instead (the device-model.json golden,
+# exactly what `mcuhome build
 # --model` consumes): the tools repo's test_model_golden pins that
 # golden against the real resolver, so both repositories test the same
 # model without sharing code.
@@ -179,10 +181,11 @@ def resolve_file(path: Path) -> DeviceModel:
 # --- workbench-free context writer ------------------------------------
 #
 # The tests' own third implementation of the §3.3 rule, like the build
-# server's. Creating a context directory is workbench machinery and since
-# ADR 0024 that machinery is in the tools repository; the context
-# *format* is vocabulary and lives in `mcuhome.model.context`, where
-# `mcuhome.compiler.contextread` — the code under test — reads it from.
+# server's. Creating a context directory is workbench machinery and
+# since the repository split that machinery is in the tools repository;
+# the context *format* is vocabulary and lives in
+# `mcuhome.model.context`, where `mcuhome.compiler.contextread` — the
+# code under test — reads it from.
 # So the tests write one the way every other party computes one: hash the
 # content files, state them in a ContextManifest, and take the ID from
 # `context_id` rather than restating the rule. A test that carried its

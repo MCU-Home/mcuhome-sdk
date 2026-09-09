@@ -3,18 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build the ``mcuhome-sdk-<version>.tar.zst`` package — the same bytes every time.
 
-ADR 0017 §2 makes this a third artifact of the one release: "The SDK is
-additionally published as its own CI-built, hash-pinned source package
-(the ``mcuhome-sdk-<version>`` archive a build fetches, ADR 0018) — same
-repository, same version, different artifact. Repo, Python packages and
-SDK package are names for one release." This script is the "CI-built"
-half; ADR 0019 names the other half, and it is deliberately
-small — "a directory holding that archive is the whole first
-implementation".
+This is a third artifact of the one release: the SDK is additionally
+published as its own CI-built, hash-pinned source package (the
+``mcuhome-sdk-<version>`` archive a build fetches) — same repository,
+same version, different artifact. Repo, Python packages and SDK package
+are names for one release. This script is the "CI-built" half; the
+session-protocol side names the other half, and it is deliberately
+small — a directory holding that archive is the whole first
+implementation.
 
 **Why the bytes have to be reproducible, and not merely correct.** The
-pin travels in the build context as ``mcuhome.package.sha256``, and ADR
-0018 §6 hashes that pin into the context ID. So two parties building the
+pin travels in the build context as ``mcuhome.package.sha256``, and that
+pin is hashed into the context ID. So two parties building the
 same tag must reach the same digest, or the second one's package can
 never satisfy a pin the first one resolved — and an archive that differs
 by a timestamp yields a different context ID for a build in which
@@ -47,13 +47,13 @@ below has a consumer that fails without it:
 ``bin/generate``                 the entry point itself — spawned as a child by
                                  absolute path, so its **exec bit** is archive
                                  content and not repository cosmetics
-``mcuhome/model``,               the program body: ``containers/build-container/run``
-``mcuhome/compiler``             refuses (exit 70) without
-                                 ``mcuhome/compiler/abi.py``, whose import
-                                 closure since ADR 0024 is the model and the
-                                 compiler itself — the workbench neither
-                                 travels in the SDK package nor exists in a
-                                 build container
+``mcuhome/model``,               the program body:
+``mcuhome/compiler``             ``containers/build-container/run`` refuses
+                                 (exit 70) without ``mcuhome/compiler/abi.py``,
+                                 whose import closure since the repository
+                                 split is the model and the compiler itself —
+                                 the workbench neither travels in the SDK
+                                 package nor exists in a build container
 ``west.yml``                     west re-reads it on every CMake configure, out
                                  of the manifest repository's directory, which
                                  is exactly where the SDK is mounted
@@ -102,8 +102,8 @@ build. Member names are plain relative paths for the same reason — no
 Alongside the archive go two files with no reader in the container path
 and one reader each outside it: a ``.sha256`` sidecar in ``sha256sum``'s
 own format, so an operator can check a mirrored file with the tool
-already on the machine, and ``index.json``, the static index ADR 0019's
-amendment asks for. Neither carries a URL or a host name: the source
+already on the machine, and ``index.json``, the static index the
+session protocol asks for. Neither carries a URL or a host name: the source
 list is the operator's configuration, "``package.url`` is a hint" that
 is never fetched, and the workspace rule against naming a domain before
 the service behind it exists applies here too.
@@ -145,8 +145,8 @@ except ModuleNotFoundError:  # a system python, not the repo's venv
 #: constant, so a test can build a package from a checkout somewhere else.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: The one place the release version is written down (ADR 0020 decision
-#: 8), read out of the revision being archived rather than imported.
+#: The one place the release version is written down, read out of the
+#: revision being archived rather than imported.
 VERSION_FILE = "mcuhome/model/__init__.py"
 
 #: The static index, next to the archives it indexes.
@@ -490,7 +490,8 @@ def write_index(path: Path, *, version: str, file: str, sha256: str, size: int) 
     source list", so the index supplies the mapping and the operator
     supplies the location. A URL here would be a second, weaker answer to
     a question the source list already answers, and a client that followed
-    one would be the server-side request forgery ADR 0019 §8 rules out.
+    one would be the server-side request forgery the session protocol
+    rules out.
 
     An existing index is read and extended rather than replaced: a source
     directory holding two releases is the whole first implementation of

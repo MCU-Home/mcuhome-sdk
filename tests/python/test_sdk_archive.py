@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """The SDK package: the same bytes twice, the allowlist, and a real unpack.
 
-``scripts/build_sdk_archive.py`` produces the third artifact of a release
-(ADR 0017 §2: "Repo, Python packages and SDK package are names for one
+``scripts/build_sdk_archive.py`` produces the third artifact of a
+release ("Repo, Python packages and SDK package are names for one
 release"), and two of its properties are the kind that nothing notices
 until a build somewhere else fails:
 
-* **Determinism.** ADR 0018 §6 hashes ``mcuhome.package.sha256`` into the
-  context ID, so a byte-different but content-identical archive gives a
+* **Determinism.** The context ID hashes ``mcuhome.package.sha256`` into
+  it, so a byte-different but content-identical archive gives a
   different identity to a build in which nothing changed — and a package
   a user built from the same tag can never satisfy a pin somebody else
   resolved. The proof is a second build compared byte for byte.
@@ -318,7 +318,7 @@ def test_the_sidecar_is_what_sha256sum_writes(package) -> None:
 def test_the_index_answers_name_and_version_with_file_and_hash(package) -> None:
     """The whole question the index exists for, and no URL anywhere.
 
-    ADR 0019 §8: the backend "resolves (name, version, sha256) against
+    The backend "resolves (name, version, sha256) against
     its configured source list" and ``package.url`` "is a hint only". A
     URL in the index would be a second answer to a question the operator's
     source list already answers.
@@ -436,7 +436,7 @@ def unpacked_by_the_consumer(package, tmp_path_factory):
 
     The orchestrator is the one implemented consumer — a local build and
     a build server reach it through the same call — and it implements the
-    first tier of ADR 0019's search order: "one or more local
+    first tier of the search order: "one or more local
     directories, searched in the order the operator listed them". So the
     whole arrangement is a directory, which is also "the whole first
     implementation" of the index.

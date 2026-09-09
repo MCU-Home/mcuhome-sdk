@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * native_sim coverage of the CHIP-free tables-contract validator
- * (components/matter/src/table_validate.c, ADR 0014). CHIP cannot build
+ * (components/matter/src/table_validate.c). CHIP cannot build
  * on native_sim, so this is the only host-run coverage of the validation
  * logic the framework actually links — see the CMakeLists.txt comment for
  * how the source is pulled in without the CHIP-coupled Zephyr module.

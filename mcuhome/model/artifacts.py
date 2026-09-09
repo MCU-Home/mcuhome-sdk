@@ -2,21 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 """One declared artifact: ``root``, ``path``, ``role``, ``sha256``.
 
-The build-container contract states the entry once (§5.4) and every
-execution site needs it: the ``local`` method reads it out of a build
-container's result document
-(the workbench's orchestrator), the ``remote`` method reads it
-off the session protocol's verdict
+One entry, and every execution site needs it: a local build reads it out
+of the build environment's result document, a remote build reads it off
+the session protocol's verdict
 (:mod:`mcuhome.workbench.sessionclient`), and whatever signs or flashes
-the image afterwards reads it from whichever of them ran. That is the
-definition of a vocabulary word (ADR 0020 decision 1), and it is why the
-class lives here rather than in either of them: a dispatcher over the
-build methods can only read *one* answer if the answer carries one type,
-and ``mcuhome.workbench`` may not import ``mcuhome.compiler`` to borrow
-it.
+the image afterwards reads it from whichever of them ran. That is what
+makes it a vocabulary word, and why the class lives here rather than in
+either of them: a dispatcher over the build targets can only read *one*
+answer if the answer carries one type, and ``mcuhome.workbench`` may not
+import ``mcuhome.compiler`` to borrow it.
 
-An entry missing any of the four fields "is not resolvable, and a
-consumer MUST skip it exactly as it skips an unknown ``root``" (§5.4).
+An entry missing any of the four fields is not resolvable, and a consumer
+skips it exactly as it skips an unknown ``root``.
 :func:`artifacts_from_wire` does that skipping, so anything that reaches
 this class has all four.
 """

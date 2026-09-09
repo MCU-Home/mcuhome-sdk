@@ -20,7 +20,7 @@ that boots, joins Thread and then refuses every cryptographic operation.
 The nRF5340's RNG peripheral is wired to the network core; the
 application core has none (`dts/arm/nordic/nrf5340_cpuapp.dtsi` points
 `zephyr,entropy` at the Bluetooth HCI entropy driver, which is no help in
-a Thread-only build with Bluetooth off — ADR 0011). Upstream Zephyr has
+a Thread-only build with Bluetooth off). Upstream Zephyr has
 no equivalent of `entropy_bt_hci.c` for the 802.15.4 IPC channel, so
 MCUHome provides one: this service on the radio side,
 `mcuhome,entropy-ipc` (`drivers/entropy/`) on the application side, wire

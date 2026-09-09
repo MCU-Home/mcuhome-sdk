@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The ``imgtool sign`` arguments an image has to be signed with.
 
-MCUboot signing is a post-build step over the linked binary (ADR 0015
-decision 8): the build produces an **unsigned** image and states the four
+MCUboot signing is a post-build step over the linked binary: the build
+produces an **unsigned** image and states the four
 arguments it was linked for, and the signature happens later, on the
 machine where the private key lives. This is the vocabulary of that
 statement, and it sits with the shared model rather than with either end

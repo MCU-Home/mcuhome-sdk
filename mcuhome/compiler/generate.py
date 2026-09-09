@@ -36,13 +36,13 @@ Zephyr hands it, never a path this generator wrote down.
 
 **One thing is deliberately missing from the tree: the signing key.** It
 is a per-user secret living outside every repository and build directory
-(ADR 0015 decision 8, :mod:`mcuhome.workbench.signing`), so its path is passed on
+(:mod:`mcuhome.workbench.signing`), so its path is passed on
 the command line and never written here. A build that forgets it does not
 fail — MCUboot's own default is its published demo key — which is why the
 generated ``sysbuild.conf`` says so where a reader will see it.
 
 **Thin codegen.** The C artifacts are *data*: struct initializers for the
-two runtime contracts, ``<mcuhome/matter_tables.h>`` (ADR 0014) and
+two runtime contracts, ``<mcuhome/matter_tables.h>`` and
 ``<mcuhome/channel.h>``. No control flow, no CHIP include, no logic — all
 behavior lives in the framework, which interprets the tables. A generator
 that emitted logic would be untestable and undiffable, which is exactly
@@ -412,8 +412,8 @@ def render_config_header(model: DeviceModel, *, config_name: str) -> str:
 #: paragraph is true of *every* generated device — nothing here depends on
 #: the configuration being compiled.
 _TABLES_INTRO = [
-    "The Matter data model of this device as plain-C tables (ADR 0014, "
-    "<mcuhome/matter_tables.h>), plus the sensor bindings that feed them "
+    "The Matter data model of this device as plain-C tables "
+    "(<mcuhome/matter_tables.h>), plus the sensor bindings that feed them "
     "(<mcuhome/channel.h>). Dumb, reviewable, diffable data: one node "
     "symbol, zero CHIP includes, zero logic. All behavior lives in the "
     "framework, which interprets what is below.",
@@ -694,14 +694,14 @@ _OVERLAY_INTRO = [
 #: Generic knowledge about MCUHome on any board, so it is generated
 #: comment text like the rest (see the module docstring).
 _PARTITION_NOTE = (
-    "Flash layout (ADR 0015). MCUHome fixes the partition table itself rather "
+    "Flash layout. MCUHome fixes the partition table itself rather "
     "than inheriting the board's, because no upstream default holds an MCUHome "
     "image: the two-slot table this board ships with gives the application "
     "464 KiB, and a commissioned Matter node is over 550 KiB.\n"
     "The storage partition keeps the address and size the board's own devicetree "
     "gives it. That is what makes an update not a re-commissioning: the Matter "
-    "fabric credentials and the Thread dataset live there, and every layout in "
-    "ADR 0015 preserves them."
+    "fabric credentials and the Thread dataset live there, and every layout "
+    "here preserves them."
 )
 
 #: Appended to :data:`_PARTITION_NOTE` in the application's board overlay.
@@ -847,7 +847,7 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
     out += list(model.build.kconfig)
     out += [
         "",
-        "# The health foundation ADR 0015's health amendment makes mandatory for",
+        "# The health foundation MCUHome's health design makes mandatory for",
         "# EVERY application image: a fatal error reboots instead of halting, a",
         "# hardware watchdog resets a node whose loops stopped, and a crash",
         "# leaves a breadcrumb in reset-surviving RAM for the next boot to report",
@@ -931,10 +931,10 @@ def _scheme_of(model: DeviceModel) -> registry.UpdateSchemeDef | None:
 def render_sysbuild_conf(model: DeviceModel, *, config_name: str) -> str:
     """``sysbuild.conf`` — the bootloader, its mode and the signature type.
 
-    Vanilla Zephyr integrates MCUboot through sysbuild only (ADR 0015
-    decision 1), and sysbuild picks this file up by name from the
-    application directory, so the choice travels with the generated tree
-    rather than living in the command line that built it.
+    Vanilla Zephyr integrates MCUboot through sysbuild only, and
+    sysbuild picks this file up by name from the application directory,
+    so the choice travels with the generated tree rather than living in
+    the command line that built it.
     """
     scheme = _scheme_of(model)
     if scheme is None:  # pragma: no cover - guarded by the caller
@@ -955,7 +955,7 @@ def render_sysbuild_conf(model: DeviceModel, *, config_name: str) -> str:
     }.get(scheme.staging, scheme.staging)
     intro = [
         f'Sysbuild configuration for device "{model.device.name}". Every MCUHome '
-        f"image boots through MCUboot (ADR 0015 decision 1), and vanilla Zephyr "
+        f"image boots through MCUboot, and vanilla Zephyr "
         f"builds a bootloader only under sysbuild — which is why this file "
         f"exists and why the application is built with --sysbuild.",
         f"Board class {scheme.board_class}: {staging}. The flash layout that "
@@ -963,7 +963,7 @@ def render_sysbuild_conf(model: DeviceModel, *, config_name: str) -> str:
         f"and in {SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.overlay, and the bootloader's own "
         f"settings are in {SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.conf.",
         "THE SIGNING KEY IS NOT IN THIS FILE, AND NOT IN THIS TREE. It is a "
-        "per-user secret (ADR 0015 decision 8), so mcuhome device build passes it on the "
+        "per-user secret, so mcuhome device build passes it on the "
         "command line:\n"
         '  -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE="<path to your signing.key>"\n'
         "Building this tree by hand without that argument does not fail — it "
@@ -979,7 +979,7 @@ def render_sysbuild_conf(model: DeviceModel, *, config_name: str) -> str:
         "",
         "# One hex file with every image at its own offset. Off upstream,",
         "# on here: bringing a board into the MCUHome standard state writes",
-        "# the bootloader and the application together (ADR 0016 decision 2),",
+        "# the bootloader and the application together,",
         "# and on a development kit that is one debug-probe flash of one file.",
         "SB_CONFIG_MERGED_HEX_FILES=y",
     ]
@@ -1026,10 +1026,10 @@ def render_sysbuild_cmake(model: DeviceModel, *, config_name: str) -> str:
 def render_detached_signing_cmake(model: DeviceModel, *, config_name: str) -> str:
     """The image-configuration script that leaves the application unsigned.
 
-    ADR 0015 decision 8 in one file. Sysbuild derives the application's
+    Detached signing in one file. Sysbuild derives the application's
     ``CONFIG_MCUBOOT_SIGNATURE_KEY_FILE`` from the one key file it is
     given, and that file is a *private* key — which is exactly what must
-    not exist on a build server (ADR 0007). So a detached build is given
+    not exist on a build server. So a detached build is given
     the **public** half instead: the bootloader compiles it in, unchanged
     and byte-identical to what the private key would have produced, and
     the application's copy of the setting is cleared here.
@@ -1044,7 +1044,7 @@ def render_detached_signing_cmake(model: DeviceModel, *, config_name: str) -> st
     """
     del model
     intro = [
-        "Detached signing (ADR 0015 decision 8): leave the application unsigned so "
+        "Detached signing: leave the application unsigned so "
         "that the private key never has to be where the build runs. mcuhome device "
         "sign-firmware applies the signature afterwards, wherever the key is, using the "
         "parameters the build manifest states.",
@@ -1095,14 +1095,14 @@ def render_bootloader_conf(model: DeviceModel, *, config_name: str) -> str:
     slot = scheme.partition("slot0_partition")
     out += [
         "",
-        "# The hardware watchdog, armed in the bootloader (ADR 0015 health",
-        "# amendment). Emitted by the generator for every board, not by the",
-        "# update scheme: a fault in MCUboot ends in Zephyr's default fatal",
-        "# handler, which HALTS — during a swap that is a device with the",
-        "# application half-erased, spinning in a fault handler until someone",
-        "# walks over and resets it (observed on the bench, 1.5 h). The",
-        "# watchdog the health design mandates for the application has to",
-        "# cover the minutes the bootloader owns the SoC too.",
+        "# The hardware watchdog, armed in the bootloader. Emitted by the",
+        "# generator for every board, not by the update scheme: a fault in",
+        "# MCUboot ends in Zephyr's default fatal handler, which HALTS —",
+        "# during a swap that is a device with the application half-erased,",
+        "# spinning in a fault handler until someone walks over and resets it",
+        "# (observed on the bench, 1.5 h). The watchdog the health design",
+        "# mandates for the application has to cover the minutes the",
+        "# bootloader owns the SoC too.",
         "# WATCHDOG=y activates MCUboot's own setup/feed machinery",
         "# (BOOT_WATCHDOG_SETUP_AT_BOOT and BOOT_WATCHDOG_FEED default to y",
         "# with it); MCUHOME_BOOT_WATCHDOG arms earlier, at PRE_KERNEL_2,",
@@ -1121,7 +1121,7 @@ def render_bootloader_conf(model: DeviceModel, *, config_name: str) -> str:
         "# Not left to CONFIG_BOOT_MAX_IMG_SECTORS_AUTO: it reads the block size",
         "# of slot0's flash node and applies it to slot1 as well, which is wrong",
         "# the moment the two slots live on different parts — as they do here",
-        "# (ADR 0015 decision 3; upstream bug candidate). The number below is",
+        "# (upstream bug candidate). The number below is",
         f"# {slot.size // 1024} KiB of slot divided by the {scheme.erase_block_size} B erase unit.",
         "CONFIG_BOOT_MAX_IMG_SECTORS_AUTO=n",
         f"CONFIG_BOOT_MAX_IMG_SECTORS={scheme.max_image_sectors}",
@@ -1305,7 +1305,7 @@ target_include_directories(app PRIVATE
 #: the blocks above.
 _CHIP_DATA_MODEL = """\
 # Framework-owned data model: endpoint 0 (root node) only — every device
-# endpoint is registered at runtime (ADR 0014, native composed node).
+# endpoint is registered at runtime (native composed node).
 # ZCL_PATH must be passed explicitly: the zcl.json path stored inside the
 # .zap is relative to CHIP's own example directories, so it cannot resolve
 # for a .zap that lives outside the CHIP tree (documented escape hatch in
@@ -1335,8 +1335,8 @@ def render_cmakelists(model: DeviceModel, *, config_name: str) -> str:
         intro.append(
             "Build it the way it was generated, from a west workspace that has "
             "the MCUHome module. --sysbuild is what builds the bootloader "
-            "alongside the application (ADR 0015); the signing key is yours and "
-            "lives outside this tree (ADR 0015 decision 8):\n"
+            "alongside the application; the signing key is yours and "
+            "lives outside this tree:\n"
             f"  west build -b {model.device.board} --sysbuild <this directory> -- \\\n"
             f'      -D{APP_DIR}_SNIPPET="{";".join(model.build.snippets)}" \\\n'
             f"      -D{BOOTLOADER_IMAGE}_SNIPPET="

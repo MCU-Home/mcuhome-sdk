@@ -2,8 +2,8 @@
  * SPDX-FileCopyrightText: 2026 The MCUHome Contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * CHIP-free validation of the generated-tables contract (ADR 0014,
- * <mcuhome/matter_tables.h>). Declares the entry point implemented by
+ * CHIP-free validation of the generated-tables contract
+ * (<mcuhome/matter_tables.h>). Declares the entry point implemented by
  * table_validate.c, which touches nothing but plain-C contract structs —
  * no CHIP/ember header, no Zephyr kernel API. That is what makes it
  * buildable and testable on native_sim, where CHIP cannot compile
@@ -54,7 +54,7 @@ struct mcuhome_matter_limits {
 /**
  * @brief Attribute slots the framework-appended Descriptor cluster costs.
  *
- * One: its auto ClusterRevision entry (ADR 0014, decision B — the four
+ * One: its auto ClusterRevision entry (the four
  * list attributes a hand-authored ZAP would carry are vestigial and never
  * declared here). Shared with endpoint_registry.cpp's translation layer,
  * which builds that same cluster's ember metadata, so the two stay in
@@ -72,7 +72,7 @@ struct mcuhome_matter_limits {
  * nonzero count), duplicate IDs at every level, the framework-owned
  * global attribute range (0xFFF8-0xFFFD), the framework-owned Descriptor
  * cluster, pool bounds, and every endpoint's parent chain (self-reference
- * and cross-endpoint cycles) — see ADR 0014.
+ * and cross-endpoint cycles).
  *
  * @param node Candidate device configuration. May be NULL.
  * @param limits Pool bounds the caller's translation layer sizes its
