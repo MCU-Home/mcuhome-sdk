@@ -592,7 +592,7 @@ RUN git config --system --add safe.directory '/mcuhome/workspace/*'
 #
 # BOTH cache roles are configured here, statically, and a build never
 # learns about either from anywhere else. The backend steers by mounting
-# and by nothing else (mcuhome/model/containerpaths.py):
+# and by nothing else:
 #
 #   cache_dir      /ccache/cache-local    read AND written. Nothing
 #                                         mounted on it: the cache lives

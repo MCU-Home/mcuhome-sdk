@@ -45,7 +45,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from mcuhome.model.buildimage import LABEL_PREFIX as _LABEL_NAMESPACE
 from mcuhome.model.errors import BuildError
 
 __all__ = [
@@ -53,8 +52,10 @@ __all__ = [
     "DECLARATION_FILE",
     "DEFAULT_BUILD_TOOLS",
     "DEFAULT_BUILD_WORKSPACE",
+    "ENVIRONMENT_IMAGE_REPOSITORY",
     "GENERATOR_CONSTRAINT_MEMBER",
     "GENERATOR_CONSTRAINT_MODE_MEMBER",
+    "LABEL_NAMESPACE",
     "LABEL_PREFIX",
     "LOCK_FILE",
     "MODE_CHAIN",
@@ -98,11 +99,24 @@ GENERATOR_CONSTRAINT_MODE_MEMBER = "build-context.generator-constraint-mode"
 #: one value, so a package can be named and looked up on its own.
 PACKAGE_MEMBER_PREFIX = "packages."
 
+#: The namespace every label a build environment declares itself with sits
+#: in. It names the *thing* — a build environment — rather than the project,
+#: because a third party publishes one of these too, under this scheme, and
+#: an orchestrator reads it the same way.
+LABEL_NAMESPACE = "org.mcuhome.build-environment"
+
 #: §5.2's label prefix — an image repeats every member under it, with the
-#: identical value. Derived from the namespace
-#: :mod:`mcuhome.model.buildimage` already states rather than spelled a
+#: identical value. Derived from the namespace above rather than spelled a
 #: second time, so the two can never drift apart.
-LABEL_PREFIX = f"{_LABEL_NAMESPACE}."
+LABEL_PREFIX = f"{LABEL_NAMESPACE}."
+
+#: The repository MCUHome publishes its environment images under. An
+#: image's identity is never its tag: it is matched by the ``packages.``
+#: labels it declares, and a repository only says where copies of it are.
+#: This is the default an orchestrator searches when nothing says otherwise
+#: — a fact both sides of the boundary need, which is why it is stated in
+#: the same module as the rest of the environment's vocabulary.
+ENVIRONMENT_IMAGE_REPOSITORY = "ghcr.io/mcu-home/build-environment"
 
 #: How the generator chain is read (§9.1). ``strict`` trusts only the
 #: leftmost entry; ``chain`` walks the chain and accepts at the first

@@ -1,14 +1,11 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""What this repository publishes as its build image (``model/buildimage.py``).
+"""What this repository builds its environment packages in (``model/buildimage.py``).
 
 Three facts, and all three are about *this repository* rather than about
 any host: the image tag follows the Zephyr pin in ``west.yml``, the
 reference is never a moving name, and the Dockerfile is where the
-refusal that mentions it says it is. They are checked here because this
-is the repository that builds and tags the image — its CI reads the same
-constants — while the host-side half that resolves and drives it is the
-workbench's, and is tested there (``test_buildenv.py``).
+refusal that mentions it says it is.
 
 Nothing here runs docker, and nothing here needs to: none of these is a
 question about a machine.
@@ -25,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_the_image_tag_is_the_zephyr_pin_plus_a_revision() -> None:
-    """ADR 0007: images are versioned in lockstep with the Zephyr pin.
+    """The image is versioned in lockstep with the Zephyr pin.
 
     Read out of west.yml rather than restated, because a lockstep rule
     nobody checks is a rule that holds until the first bump. Bumping
@@ -39,7 +36,7 @@ def test_the_image_tag_is_the_zephyr_pin_plus_a_revision() -> None:
 
 
 def test_the_image_is_never_latest() -> None:
-    """A build environment that changes under a stable name is not one."""
+    """An image that changes under a stable name settles nothing."""
     assert f"{buildimage.IMAGE_REPOSITORY}:{buildimage.IMAGE_TAG}" == buildimage.IMAGE
     assert not buildimage.IMAGE.endswith(":latest")
 
