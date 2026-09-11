@@ -133,14 +133,38 @@ safe direction.
 packager image published from main (containers/build-environment-packager/;
   west, zap, the base interpreter — pinned by digest, changes rarely)
 git tag per line — v<version>, workspace-v<version>, tools-v<version>
+  → gate: the tag against environment.json, then the test catalogue of
+    this line against the PUBLISHED versions around it (GitHub releases;
+    never the package registry). A line whose own requirement nothing
+    published satisfies is blocked here, before anything is built.
   → the tagged line's package(s), built in the packager: deterministic,
     with the version environment.json declares for that line, the input
     hash, and meta.json on both sides of the archive
-  → packagetool publication (manually dispatched — one deliberate
-    publish act; downstream steps may then chain automatically)
-  → container image assembled from a published workspace package and the
-    newest published tools its constraint accepts
+  → the reference firmware, once per combination the gate named and per
+    architecture, in the subprocess profile out of those packages. Red
+    and nothing is published.
+  → GitHub release: exactly the tested archives and their two sidecars
+  → for a workspace release, in the same run: the container image
+    `<workspace version>-r1`, assembled from that archive and the newest
+    published tools its meta accepts, per architecture plus the index
+  → verify: the same firmware in the container profile against that
+    image, by digest, with the release's packages as local sources
+  → packagetool publication — the operator's own deliberate act, outside
+    this repository and hours or days later
 ```
+
+**"Published" means a GitHub release of this repository, and nothing
+else.** No step of the chain consults the package registry: the registry
+is fed by hand after a release, so a gate that asked it would be answering
+about yesterday, and an image assembled from bytes the registry has not
+served yet would pin hashes nobody can resolve. Every version CI resolves
+comes off this repository's own releases and is handed to the workbench as
+a local package source; the registry is the *users*' source.
+
+Image revisions `-r<n>` beyond the `-r1` a workspace release builds are a
+dispatch of their own — a refreshed base, a changed Dockerfile, or build
+tools published after the workspace release that accepts them. They are
+assembled from release assets and verified the same way.
 
 The packager is the bootstrap of this chain and deliberately outside it:
 the packages cannot be produced on an arbitrary host — the workspace has

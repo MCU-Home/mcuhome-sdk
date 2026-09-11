@@ -1,241 +1,271 @@
 # Releasing
 
-> **This procedure is being rewritten and is not current.** The SDK, the
-> build workspace package and the build tools package are now three
-> release lines with versions of their own, declared in
-> `packaging/build-environment/environment.json` and tagged
-> `v<version>`, `workspace-v<version>` and `tools-v<version>`; every
-> package carries a `meta.json` stating what it requires of the next
-> stage and the hash of its inputs. The steps below still describe the
-> single-version release they replace — `mcuhome/model/__init__.py` no
-> longer holds a version, `TOOLS_VERSION` no longer exists, and no
-> package carries `build-environment.lock.json` any more. Do not follow
-> them until this file is rewritten with the release workflow.
-> `packaging/build-environment/README.md` describes what is true today.
+This repository cuts **three release lines out of one history**, and they
+are versioned independently:
 
-A release of this repository is **one number for three artifacts**: the
-`mcuhome-model` and `mcuhome-compiler` distributions and the
-`mcuhome-sdk-<version>.tar.zst` package a build compiles from. They share
-one version source, `mcuhome/model/__init__.py`.
+| Line | Tag | What it publishes |
+|---|---|---|
+| SDK | `v<version>` | `mcuhome-sdk-<version>.tar.zst` — the source a build compiles from |
+| build workspace | `workspace-v<version>` | `mcuhome-build-workspace-<version>.tar.zst` — the build environment's pinned source world |
+| build tools | `tools-v<version>` | `mcuhome-build-tools_linux-amd64` and `_linux-arm64` — the build environment's host tools |
 
-A tag also builds `mcuhome-build-workspace-<version>.tar.zst` — the
-build environment's source world, named after the same version. The
-build environment's host tools
-(`mcuhome-build-tools_linux-amd64`/`_linux-arm64`) are on a separate
-counter, `TOOLS_VERSION` in `scripts/build_env_package.py`, and do not
-build on every release — see step 2.
+No artifact takes another one's version. A tag releases exactly one line,
+and nothing else travels with it.
 
-The build environment's container image is assembled from those two
-packages once they are published — step 4.
-
-Both environment packages are produced **inside the build-environment
-packager** (`containers/build-environment-packager/`), the pinned
-toolchain that carries the environment's own `west`, the `zap` the pinned
-CHIP revision names and the interpreter the wheel set is built with. It is
-published by the `Build` workflow on `main` and pinned by digest in
-`scripts/packager_image.py`; the package jobs pull it and refuse when it
-is absent. A release therefore needs that pin to be filled in — see
-"When the packager changes" below.
-
-Four steps.
-
-## 1. Cut it locally
-
-```sh
-. .venv/bin/activate
-python scripts/release.py 0.1.0          # --dry-run first, if you like
-```
-
-That checks you are on `main`, clean, and level with `origin`; that the
-version moves forward; and that the gates pass. Then it bumps every
-version file, commits with sign-off and creates the annotated tag.
-
-**It stops there.** Nothing is pushed, and it prints how to undo:
-
-```sh
-git tag -d v0.1.0 && git reset --hard HEAD~1
-```
-
-The bump only changes `mcuhome/model/__init__.py` on disk; an editable
-install of `mcuhome-model`/`mcuhome-compiler` made before the bump still
-reports its old version, because editable-install metadata is frozen at
-install time. Refresh both after cutting a release, or `scripts/test
-pytest` fails its installed-version checks:
-
-```sh
-pip install --no-deps -e ./packaging/model -e ./packaging/compiler
-```
-
-## 2. Push, and the packages build themselves
-
-```sh
-git push && git push origin v0.1.0
-```
-
-The tag starts the `Release` workflow: it refuses immediately if the tag
-does not name the version the commit declares, then builds the SDK
-archive and the `mcuhome-build-workspace` package from that **commit**
-with a pinned compressor, and attaches each archive and its `.sha256` to
-the GitHub release — the workspace package's declaration sidecar
-(`<archive>.build-environment.json`) and the SDK archive's environment
-lock (`<archive>.build-environment.lock.json`) go up alongside them. The
-workspace package builds by default; a manual dispatch can turn it off with the
-`workspace` input (`workflow_dispatch`, default `true`) when only the SDK
-archive is wanted.
-
-The `mcuhome-build-tools_linux-amd64`/`_linux-arm64` packages do **not**
-build on a tag push. They build only on an explicit `workflow_dispatch`
-with the `tools` input set — one run, both architectures, each on its own
-runner — because a release that did not touch the toolchain generation
-would otherwise republish gigabytes of identical binaries. Each
-architecture is built twice on its runner and the two digests are
-compared before anything uploads, so a tools release is never a single
-unverified build.
-
-GitHub rejects a release asset at or over 2 GiB, and does so illegibly (a
-bare HTTP 500 or an empty asset); every archive this workflow uploads is
-checked against that limit first and fails with a sentence instead. The
-workspace package — a multi-gigabyte source-world snapshot — is the one
-that can actually reach it; the SDK and tools archives sit far below.
-
-### The environment lock
-
-The SDK archive carries a file `build-environment.lock.json` at its top
-level, and the same bytes are written beside it as
-`<archive>.build-environment.lock.json`. It states which build
-environment this release was built and tested with:
+All three numbers live in one file,
+[`packaging/build-environment/environment.json`](packaging/build-environment/environment.json),
+together with what each line requires of the one below it:
 
 ```json
 {
-  "packages.mcuhome-build-tools": "0.1.10.dev1",
-  "packages.mcuhome-build-workspace": "0.1.10.dev1"
+  "sdk":       { "version": "0.1.10.dev3", "requires": { "mcuhome-build-workspace": "~=0.1.0" } },
+  "workspace": { "version": "0.1.0",       "requires": { "mcuhome-build-tools": "~=0.1.0" } },
+  "tools":     { "version": "0.1.0" }
 }
 ```
 
-`scripts/build_sdk_archive.py` generates it; nothing in the repository is
-committed for it. The workspace version is the SDK's **own** version,
-because the workspace package is built from this tag; the tools version
-is read out of `scripts/build_env_package.py`'s `TOOLS_VERSION` at the
-packaged commit, because the tools move on their own cadence. Neither
-member carries a hash — at this point nobody has built those archives —
-so a client resolves the versions to bytes through the package host's
-signed index.
+A **chain, not a matrix**: an SDK accepts a range of workspace packages, a
+workspace package accepts a range of tools packages, and the tools end the
+chain. Whoever builds resolves each stage to the newest published version
+satisfying the constraint above it and pins that one exactly.
 
-**What this means for a release that changes the tools.** Bump
-`TOOLS_VERSION` in `scripts/build_env_package.py` *before* cutting the
-release, or the lock will name the old tools package and every device
-built with this SDK will get it. The two versions are independent on
-purpose, and the lock is the only place they are tied together.
+`mcuhome/model/VERSION` is generated from `sdk.version` by the package
+build and is never committed. There is no other place a version is
+written down.
 
-A workbench reads the lock out of the archive it already verified against
-the pin, which is why the copy inside the package is the authoritative
-one; the sidecar exists so a mirror and a release page can serve the same
-statement without unpacking anything. The image dispatch of step 4 reads
-the same copy, for the same reason — which is why this file decides both
-what a device is built with and what an image is assembled from.
+## Before you tag
 
-## 3. Publish it — the registry operator's step
+**Every push already answers the release questions.** The `Build` workflow
+(`.github/workflows/ci-build.yml`) builds all three packages out of the
+commit and reports per line whether it could be released from here —
+`Assess (SDK release readiness)` and its two siblings. Read those before
+cutting anything: a red one is a release that would fail its gate.
 
-The registry does not watch this repository; publishing is a deliberate
-act on the registry host, done by its operator, not by anything in this
-repository or its CI. This repository's part ends when the tag's release
-carries the archives (step 2); from there:
-
-- The operator triggers the server-side publish pipeline. It discovers
-  the new GitHub release, downloads the asset(s) each source declares,
-  checks them against their `.sha256` sidecars, records them in a signed
-  index and atomically publishes a new registry snapshot.
-  `build-workspace`'s declaration sidecar travels with its archive into
-  the source, next to it. `build-tools` needs both architecture packages
-  of the tag published together — once every member is present, the
-  pipeline additionally records the meta package `mcuhome-build-tools`,
-  which points at both.
-- How that pipeline is invoked, and everything else about the registry
-  host itself, is documented on the operator side in
-  [mcuhome-packagetool](https://github.com/mcu-home/mcuhome-packagetool)'s
-  `deploy/` material — out of scope here.
-
-Once published, the packages are not served from `packages.mcuhome.org`
-directly — that host only carries the signed head documents (the trust
-anchor, `mirrors.json`, `keys.json`) and a page that explains and browses
-the registry. The bytes live on a mirror, discovered per source through
-its `mirrors.json`; the official one is
-`https://mirror-1.packages.mcuhome.org/<source>/`. To check a release
-landed:
+**And you can rehearse the tag itself**, against any ref, without
+publishing anything:
 
 ```sh
-curl -fsSL https://mirror-1.packages.mcuhome.org/sdk/index.json
+gh workflow run release.yml --ref main -f rehearse=workspace-v0.1.0
+```
+
+That runs the whole release act except the publishing: the tag check, the
+gate, the package builds and every firmware build the gate demands. It
+creates no release, pushes no image, and moves nothing.
+
+## 1. Bump the line
+
+Edit the version of the line you are releasing in
+`packaging/build-environment/environment.json`, and — if this release
+changes what it accepts — its `requires`. Commit that on `main`.
+
+The bump is not bookkeeping: it is the statement of what the change *is*.
+A published version is immutable, so the first change to a line's inputs
+after a release **has** to move that line's version, and CI refuses the
+push otherwise:
+
+> `workspace 0.1.0 is already published as workspace-v0.1.0, and this
+> commit's inputs are not the ones it was published with.`
+
+with the two input hashes and the list of what moved between them. The fix
+is always the same sentence: bump the version, patch, minor or major,
+whichever this change is.
+
+**Which of the three is a change to?** `scripts/release_lines.py` answers
+it for a commit without building anything:
+
+```sh
+scripts/release_lines.py inputs-listing workspace --revision HEAD
+scripts/release_lines.py inputs-sha256 tools --architecture linux-amd64
+```
+
+Those input lists are what a line *is*: the manifest, the patches and the
+pre-generation for the workspace; the tool downloads and the requirement
+set for the tools; the archived tree for the SDK — plus, in each case, the
+script that decides the bytes. A cosmetic change to one of those scripts
+moves the hash, which is the safe direction: nothing can tell a comment
+from a behaviour by reading a file.
+
+## 2. Tag it, and push the tag
+
+```sh
+git tag -a workspace-v0.1.0 -m "mcuhome-build-workspace 0.1.0"
+git push && git push origin workspace-v0.1.0
+```
+
+The tag has to name the version the commit declares for that line; the
+release workflow's first step refuses otherwise, before anything is built.
+The archives are named after the version in the **commit**, never after the
+tag.
+
+## 3. What the tag does
+
+The `Release` workflow branches on the tag and walks five stages.
+
+**`gate-release`** — which line, which version, and what has to pass. The
+tag is held against `environment.json`, and then the catalogue is built
+under the rule a tag lives by: **only published versions count**, and
+published means a GitHub release of this repository. The package registry
+is never asked; it is fed by hand afterwards, so a check that asked it
+would be answering about yesterday.
+
+What the catalogue demands, per line:
+
+- **SDK tag** — the firmware at the lowest and the highest published build
+  workspace its `requires` admits (each with the newest published tools
+  that workspace accepts). That range is what an SDK release *promises*, so
+  both ends of it are tried. Nothing published satisfies it → the release
+  is **blocked**: `no published mcuhome-build-workspace satisfies '~=0.1.0'`.
+- **workspace tag** — the firmware with the oldest and the newest published
+  SDK whose `requires` already accepts this version (a patch of the line),
+  or — where none does, which is what a line start looks like — with the
+  SDK of this commit, and the verdict says that no released SDK uses it
+  yet. The build tools it requires have to be published: an image and a
+  build both resolve through them.
+- **tools tag** — the same one stage down, against published build
+  workspaces.
+
+A stage that has nothing published to stand in for it is built from this
+commit under a `+gate.<sha>` local version — the one shape a package host
+refuses to publish, so a stand-in can never be mistaken for a release.
+
+**`build-packages`** — the tagged line's package(s), built from the tagged
+commit inside the pinned packager, at the real version with no suffix.
+Those are the bytes everything below uses and the bytes that get published;
+there is no second build of the same inputs anywhere in the run.
+
+**`build-firmware`** — the reference Matter device, once per combination
+the gate named and on both architectures, built the way a user builds one:
+`mcuhome device build`, subprocess profile, the packages as local sources.
+A red leg publishes nothing.
+
+**`publish-release`** — the GitHub release, carrying exactly three files
+per package: the archive, its `.sha256` and its `.meta.json`. The asset
+list is named rather than globbed, because a stand-in package for another
+line is in the same run's artifacts. `index.json` stays behind: it belongs
+to a *source*, and a source is signed by the package host. The release
+notes carry each package's `requires`, its `inputs_sha256` and the sha256
+of every attached byte.
+
+**`build-environment-image`** and **`verify-release`** — see below.
+
+### The meta file
+
+Every package carries `meta.json` inside the archive and, byte for byte the
+same document, `<archive>.meta.json` beside it:
+
+```json
+{
+  "schema": 1,
+  "package": { "name": "mcuhome-build-workspace", "version": "0.1.0", "architecture": null },
+  "requires": { "mcuhome-build-tools": "~=0.1.0" },
+  "inputs_sha256": "…",
+  "contents": { "…": "the resolved project revisions, patches, tool versions" }
+}
+```
+
+It is the document the whole chain runs on: the package host records it
+beside the archive and lists it in the signed index, a workbench fetches
+exactly one per stage to learn what that stage requires before downloading
+gigabytes, and this repository's own CI reads the same file off the release
+page. A package without it is not a resolution candidate for anybody, which
+is why `publish-release` refuses to upload a package that is missing one.
+
+## 4. Publish it — the registry operator's step
+
+The registry does not watch this repository. Publishing is a deliberate act
+on the registry host, done by its operator, and nothing in this repository
+or its CI can trigger or observe it. This repository's part ends when the
+tag's release carries the archives.
+
+From there the operator's pipeline discovers the new release — each source
+matches its own tag pattern (`v*`, `workspace-v*`, `tools-v*`) — downloads
+the assets, checks each archive against its `.sha256`, records it and its
+meta file in a signed index and publishes a new registry snapshot. A
+package whose checksum or meta sidecar is missing is refused there. The
+`build-tools` source additionally records the meta package
+`mcuhome-build-tools`, which points at both platforms — and it waits until
+both are present, which is why one tools release carries both.
+
+How that pipeline is invoked is documented on the operator side, in
+[mcuhome-packagetool](https://github.com/mcu-home/mcuhome-packagetool)'s
+`deploy/` material.
+
+Once published, the packages are not served from `packages.mcuhome.org`
+directly — that host carries the signed head documents and a page that
+browses the registry. The bytes live on a mirror, discovered per source
+through its `mirrors.json`. To check a release landed:
+
+```sh
+curl -fsSL https://mirror-1.packages.mcuhome.org/build-workspace/index.json
 ```
 
 or verify a source in full against the trust anchor with
 `mcuhome-packagetool`'s `verify.py`, as its README describes.
 
-## 4. The build environment image — after the packages are published
+## 5. The build-environment image
 
 `ghcr.io/mcu-home/build-environment` is the container profile of the build
-environment, and the one artifact that is not built from the commit: it is
-*assembled* from the packages the registry already serves. So it comes
-after step 3, on its own dispatch, and never on a tag push — at tag time
-its packages are not published yet, and nothing in CI can observe the
-operator's publish.
+environment: an **assembly** of one build workspace package and the newest
+published build tools that package's own `meta.json` accepts. Its tag is
+`<workspace package version>-r<n>`, where `-r<n>` counts assemblies of the
+same package set from 1.
+
+A **workspace release builds `-r1` itself**, in the same run, right after
+the release is published — from the archive it just built and the tools
+release its meta accepts, one manifest per architecture and an OCI index
+over the two. It needs no published registry copy and asks none: the
+assembly is a delivery of package bytes, and those bytes are on the release
+page this run just wrote.
+
+Every other image is a **revision dispatch**:
 
 ```sh
-gh workflow run release.yml -f tag=v0.1.0 -f image=true -f revision=1
+gh workflow run release.yml -f workspace_version=0.1.0 -f revision=2
 ```
 
-`image` makes the run an image run and nothing else: no package job builds
-beside it. Per architecture, on a runner of that architecture, the run asks
-`packages.mcuhome.org` for each consumed source's signed mirror list,
-fetches the served documents from every mirror named there, and verifies
-them with `mcuhome-packagetool`'s own `verify.py` against the registry's
-trust anchor — three sources: `sdk`, `build-workspace` and `build-tools`.
-It then downloads `mcuhome-build-workspace` and that architecture's
-`mcuhome-build-tools` from the verified mirror, checks each archive's size
-and sha256 against the index bytes the verifier accepted, assembles the
-image with `scripts/build_env_image.py` — which reads the packages' own
-declaration and labels the image with it — and pushes
-`<version>-r<n>-<arch>`. A last job composes the OCI index over the two and
-pushes it as `<version>-r<n>`, the reference a client resolves.
+That assembles `0.1.0-r2` from the published `workspace-v0.1.0` release and
+whatever tools it accepts *today*. Three reasons to do it: a refreshed
+Debian base, a change to `containers/build-environment/Dockerfile`, or a
+build tools release the workspace package accepts and that should reach
+users without a new workspace release.
 
-**Which versions it assembles comes from the environment lock, not from
-the tag.** The dispatched tag names an SDK release; the tools package is on
-its own counter and is regularly older than the SDK asking for it, so a run
-that assumed the tag's version for both would ask the index for a tools
-package that was never built. Instead the run downloads
-`mcuhome-sdk-<version>.tar.zst` from the verified mirror, checks it against
-the index like any other package, reads the `build-environment.lock.json`
-inside it, and resolves exactly the two versions that document states — the
-sidecar beside the archive and the release asset are deliberately not used,
-because the registry is what was verified here. The workspace version has
-to be the SDK's own, since that package is built from this tag, and the run
-refuses when it is not. So a tools release is not needed for every image:
-**bump `TOOLS_VERSION` before cutting the release, and the lock carries the
-rest** (step 2).
+**An existing tag is a refusal.** The tag is the content identity, and
+`-r<n>` is the counter that exists for a second assembly; a run that found
+its tag taken says so and stops. A half-published set (one architecture up,
+one failed) is repeated under the next revision, never patched in place.
 
-**Prerequisite: the organisation variable `MCUHOME_REGISTRY_ANCHOR`.** It
-carries the content of `mcuhome-packagetool`'s
-`deploy/mcuhome/anchor.json` — public material, the registry's root keys
-and their threshold. It is a *variable* and not a fetched document on
-purpose: an anchor downloaded at verification time verifies nothing. The
-job refuses when it is unset or empty, because a publish that quietly
-skipped verification would be worse than one that failed.
+## 6. `verify-release`
 
-`revision` is the `-r<n>` assembly counter and starts at 1. Raise it when
-the same packages are assembled again — a new base image, a changed
-`Dockerfile`. A per-architecture tag that already exists in the registry is
-skipped with a notice rather than overwritten, so repeating a dispatch
-after one architecture failed publishes only the missing half.
+The gate built the reference device in the *subprocess* profile. This job
+builds it again in the **container** profile, against the image, on both
+architectures, with the release's packages as local sources. The workbench
+holds the image's `org.mcuhome.build-environment.packages.*` labels against
+the package set the context resolved and refuses to build in an image that
+does not declare exactly it — which is what makes this a verification of
+the image rather than another build.
 
-Publish the image from CI, not from a workstation. A locally assembled
-image pins the hashes of locally built archives, and those are not the
-bytes the index names — the same rule the packages follow.
+Which image, per line:
+
+- **workspace tag, revision dispatch** — the image this run just pushed,
+  addressed by its digest.
+- **SDK tag** — the published image of the build workspace this release
+  resolves to, highest revision first. Where no image exists for that
+  workspace yet, the job says so and verifies nothing rather than failing a
+  release for another line's state.
+- **tools tag** — nothing to verify against, and the job says so: an image
+  delivers a workspace package and the tools it accepts, and no published
+  image can declare tools that did not exist when it was assembled. A
+  revision dispatch takes the new tools into an image, and verifies there.
 
 ## When the packager changes
 
-`containers/build-environment-packager/` is not part of a release and has
-no version of its own beyond its tag. It is published from `main` by the
-`Build` workflow (`build-packager`, `publish-packager-index`), and the
-release jobs consume it by digest.
+`containers/build-environment-packager/` is the pinned toolchain both
+environment packages are produced in — west at the environment's own
+version, the `zap` the pinned CHIP revision names, and the interpreter that
+decides the wheel set's ABI. It is not part of a release and has no version
+of its own beyond its tag. It is published from `main` by the `Build`
+workflow (`build-packager`, `publish-packager-index`), and every package
+build pulls it **by digest**.
 
 After a change to that directory:
 
@@ -246,29 +276,31 @@ After a change to that directory:
    prints the index digest as a run notice;
 3. write that digest into `scripts/packager_image.py` and push again.
 
-Between steps 1 and 3 no environment package can be built: the package
-jobs refuse rather than run against an unpinned toolchain. That is the
-intended order — the packages a release publishes have to name the exact
-bytes they were produced in.
+Between steps 1 and 3 no environment package can be built: the package jobs
+refuse rather than run against an unpinned toolchain. That is the intended
+order — the packages a release publishes have to name the exact bytes they
+were produced in. The packager's digest is an input of the workspace and
+tools lines, so bumping it moves their input hashes and therefore demands a
+version bump of both.
 
 ## The two rules that have no undo
 
-- **A tag is never moved and never reused.** The package is named after
-  the version in the commit and its bytes are pinned by hash; a second
-  set of bytes under one number is exactly what the whole scheme exists
-  to prevent. A botched release gets the next number.
+- **A tag is never moved and never reused.** The package is named after the
+  version in the commit and its bytes are pinned by hash; a second set of
+  bytes under one number is exactly what the whole scheme exists to
+  prevent. A botched release gets the next number.
 - **A published version is never removed.** Not the file, not the index
-  entry. Plan the number accordingly — and note that pre-releases are
-  free: `0.2.0.dev1` is invisible to a stable pin like `~=0.2`, so
-  exercising the pipeline costs nothing.
+  entry. Plan the number accordingly — and note that pre-releases are free:
+  `0.2.0.dev1` is invisible to a stable pin like `~=0.2`, so exercising the
+  pipeline costs nothing.
 
 ## What the version means elsewhere
 
-Bumping `mcuhome/model/__init__.py` moves `mcuhome-model` and
-`mcuhome-compiler` together, by design (they version in lockstep). The
-sibling repositories — `mcuhome` (the workbench), `cli`, `build-server` —
-carry their own numbers and their own release, and cross-repository
-edges are `~=X.Y.0` from v1.0 on.
+The `mcuhome-model` and `mcuhome-compiler` distributions take `sdk.version`
+and move together, by design (they version in lockstep). The sibling
+repositories — the workbench, the command line, the build server — carry
+their own numbers and their own release, and cross-repository edges are
+`~=X.Y.0` from v1.0 on.
 
 `imgtool` is pinned to the MCUboot line in `west.yml` and the two are
 bumped as a pair; a release that moves one and not the other is a defect.

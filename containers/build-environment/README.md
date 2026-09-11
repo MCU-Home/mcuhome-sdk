@@ -74,62 +74,61 @@ declaration already stated does not match the bytes it was handed.
 
 ## Publishing one
 
-The published image is built by CI, from the **published** packages — never
-pushed from a workstation. A locally assembled image pins the hashes of
-locally built archives, and those are not the bytes the registry serves; an
-image that labels package hashes no index names is one no orchestrator can
-match. A local build is for testing, and it stays local.
+The published image is built by CI, never pushed from a workstation. A
+locally assembled image pins the hashes of locally built archives, and those
+are not the bytes a release published; an image whose package labels no
+index names is one no orchestrator can match. A local build is for testing,
+and it stays local.
 
-```sh
-gh workflow run release.yml -f tag=v0.1.0 -f image=true -f revision=1
-```
-
-That is the `Release` workflow's image dispatch. It runs on nothing else —
-no tag push publishes an image, because at tag time the packages it is
-assembled from are not published yet, and CI cannot observe the registry
-operator's publish. `image` also makes the run an image run alone: no
-package job builds beside it.
-
-Per architecture, on a runner of that architecture: the three consumed
-sources (`sdk`, `build-workspace`, `build-tools`) are discovered from
-`packages.mcuhome.org`, their served documents are verified with
-`mcuhome-packagetool`'s reference verifier against the registry's trust
-anchor, the packages are downloaded from the verified mirror, each archive
-is checked by size and sha256 against the index bytes the verifier
-accepted, the image is assembled by the script above and pushed as
-`<version>-r<n>-<arch>`. A last job composes the OCI index over the two and
-pushes it as `<version>-r<n>`, which is the reference a client resolves —
+**A build workspace release assembles its own `-r1`.** The `Release`
+workflow does it in the same run as the release, right after the archives
+are attached: one leg per architecture, each taking the workspace package
+this run just built and the build tools release that package's own
+`meta.json` accepts, and a last job composing the OCI index over the two
+and pushing it as `<version>-r<n>` — the reference a client resolves.
 `amd64` and `arm64` both, because a Home Assistant box is an arm64 machine.
 
-**The tag names the workspace package, not the SDK release.** The three
-are release lines of their own — `v<version>` releases the SDK,
+**Every other image is a revision dispatch:**
+
+```sh
+gh workflow run release.yml -f workspace_version=0.1.0 -f revision=2
+```
+
+Three reasons to raise `-r<n>`: a refreshed Debian base, a change to the
+`Dockerfile` here, or a build tools release the workspace package accepts
+and that should reach users without a new workspace release. It is assembled
+from the release assets of `workspace-v<version>` and the tools release
+resolved the same way, and it is verified the same way.
+
+**Nothing here asks the package registry.** The registry is fed by hand by
+its operator after a release, so an image assembled from it would either
+wait days or pin bytes that are not served yet; what the image is assembled
+from is the GitHub release of this repository, which is where the archive
+and its checksum already are.
+
+**The tag names the workspace package, not the SDK release.** The three are
+release lines of their own — `v<version>` releases the SDK,
 `workspace-v<version>` the build workspace, `tools-v<version>` the build
 tools — and an image delivers one workspace package plus the tools that
 package accepts, so its tag is `<workspace package version>-r<n>`. Which
 tools version that is comes from the workspace package's own `meta.json`:
 it states a PEP 440 constraint, and the run takes the newest published
-tools version satisfying it, resolved through the family's `meta.arch`
-map to this architecture's package. It is the same document, and the same
-answer, a workbench provisioning that workspace package gets.
+version satisfying it. It is the same document, and the same answer, a
+workbench provisioning that workspace package gets.
 
-The release procedure around this is being rewritten (see `RELEASING.md`);
-what an image *is* — an assembly of two packages, matched by its
-`packages.` labels — does not change with it.
+**An existing tag is a refusal.** The tag is the content identity and
+`-r<n>` is the counter that exists for a second assembly of one package
+set, so a run that finds its tag taken stops rather than overwriting or
+skipping. A half-published set — one architecture up, one failed — is
+repeated under the next revision, never patched in place.
 
-**The anchor arrives out of band**, as the organisation variable
-`MCUHOME_REGISTRY_ANCHOR` (the content of `mcuhome-packagetool`'s
-`deploy/mcuhome/anchor.json`). Without it the job refuses: an image whose
-packages were only checked against a document from the same host they came
-from has been checked against nothing much, and skipping that quietly would
-be worse than failing.
-
-`revision` is the `-r<n>` counter and starts at 1. Raise it when the same
-packages are assembled again, for a new base image or a changed
-`Dockerfile`: a **per-architecture** tag that already exists in the registry
-is skipped with a notice rather than reassembled, so the counter is the only
-way to publish a second assembly of one package set. (The index over the two
-is composed and pushed either way — it names whichever manifests those two
-tags hold, which is why a re-dispatch must not change one half of a set.)
+**And then it is verified.** `verify-release` builds the reference Matter
+device in this image, addressed by the digest that was just pushed, on both
+architectures, with the release's packages as local sources. The workbench
+holds the image's `packages.` labels against the package set the context
+resolved and refuses to build in an image that does not declare exactly it
+— which is what makes that a verification of the image and not just another
+build.
 
 The release runbook, and where this step sits in it, is
 [`RELEASING.md`](../../RELEASING.md).

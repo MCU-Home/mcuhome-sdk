@@ -61,9 +61,28 @@ own west workspace, which is how an application consumes the C runtime directly.
 | `components/`, `lib/`, `drivers/` | The C runtime: Matter and sensor components, portable libraries, out-of-tree drivers |
 | `include/`, `dts/` | Public headers and devicetree bindings |
 | `app/`, `snippets/` | The generic application main every device shares, and the Zephyr snippets a device class pulls in |
-| `containers/` | The build environment: Dockerfile, contract launcher, workspace record |
+| `containers/` | The build environment as a container image, and the pinned toolchain its packages are produced in |
 | `samples/`, `tests/` | Sample firmware, the Python suite and the twister suites |
 | `patches/` | Patches applied to the pinned upstream trees |
+
+## Releasing
+
+This repository cuts **three release lines out of one history**, versioned
+independently and declared together in
+[`packaging/build-environment/environment.json`](packaging/build-environment/environment.json):
+`v<version>` releases the SDK package, `workspace-v<version>` the build
+workspace package and `tools-v<version>` the build tools packages. Each
+line states a PEP 440 constraint on the one below it, so a build resolves a
+chain — SDK → build workspace → build tools — and pins every stage by name,
+version and hash.
+
+A tag runs the gate before it publishes anything: the tag has to name the
+version the commit declares for that line, and the reference Matter device
+has to build against the published versions around it. Then the release
+carries exactly those archives, a build workspace release assembles the
+container image from them, and the registry publish is the operator's own
+step afterwards. The whole procedure, including what to bump where and what
+each gate demands, is [`RELEASING.md`](RELEASING.md).
 
 ## Development — how to work on this repository
 
