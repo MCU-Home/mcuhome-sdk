@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Build jobs for the MCUHome firmware framework:
+# Build jobs for the MCUHome firmware framework — and, since this
+# repository cuts three release lines out of one commit, the per-commit
+# answer to "could each of them be released from here".
 #
 #   build-packager          — the build-environment packager
 #                             (containers/build-environment-packager/),
@@ -9,26 +11,53 @@
 #   publish-packager-index  — the OCI index over the two per-architecture
 #                             images build-packager pushes, and the
 #                             digest that pins it.
-#   gate-matter             — path-based trigger deciding whether
-#                             build-firmware needs to run.
-#   build-firmware          — one real Matter firmware, built end to end
-#                             the way a user builds one: in the published
-#                             build environment, through `mcuhome device
-#                             build`.
+#   check-versions          — the bump discipline, as a blocker: a version
+#                             that is already published may not be given
+#                             other inputs.
+#   build-packages          — the SDK, workspace and tools packages of
+#                             THIS commit, built in the packager with a
+#                             +ci.<sha> local version. Everything below
+#                             consumes them; nothing here consumes a
+#                             published package or a package registry.
+#   plan-firmware           — which (SDK, workspace, tools) combinations
+#                             this commit has to be tried in, out of its
+#                             own definition and this repository's GitHub
+#                             releases.
+#   gate-matter             — path-based trigger deciding whether the
+#                             firmware builds need to run.
+#   build-firmware          — one real Matter firmware per planned
+#                             combination and architecture, built the way
+#                             a user builds one: `mcuhome device build`,
+#                             subprocess profile, packages as local
+#                             sources.
 #   compare-firmware        — does the host architecture change the
 #                             firmware? A report, not a gate.
-#   build-sdk-package       — builds and hashes the mcuhome-sdk-<version>
-#                             archive on `main`.
+#   assess-sdk              — the release-readiness table of each line,
+#   assess-workspace          written out of the plan and the outcomes of
+#   assess-tools              those firmware builds.
+#   test-twister            — the Zephyr suites, compiled in the workspace
+#                             and tools packages this commit produced.
 #
-# None of these are the lint/test gates (ci-lint.yml, ci-test.yml):
-# container/firmware/package builds stay outside the gates by policy.
+# WHY THE PACKAGES ARE BUILT ON EVERY PUSH. The three lines are versioned
+# on their own and constrain each other by range, so "does this commit
+# still produce a working environment" cannot be answered by a published
+# artifact — the published one is the previous commit's. Building them
+# here is also what removes the chicken-and-egg the old graph had: nothing
+# in this workflow needs a release of its own version to exist.
 #
-# Known defect, left unchanged in this move: build-firmware's `if:`
-# reads `needs.matter-gate.outputs.run`, but the job below is named
-# `gate-matter`; compare-firmware's `if:` reads `needs.matter.result`,
-# but it depends on `build-firmware`. Both reference job ids that do not
-# exist, so neither condition is ever true and the Matter firmware build
-# and comparison never run in CI.
+# WHAT "PUBLISHED" MEANS HERE: a GitHub release of this repository, and
+# nothing else. The package registry is the users' source and is fed by
+# hand after a release, so a check that asked it would be answering about
+# yesterday. Every resolution below reads local package directories.
+#
+# test-twister lives in this workflow and not in ci-test.yml because it
+# consumes what build-packages produces, and artifacts do not cross a
+# workflow boundary within one run. ci-test.yml declares the skip so
+# `scripts/test check-ci` stays exact.
+#
+# actionlint is clean over this file apart from two shellcheck infos in
+# gate-matter, where the unquoted $paths is the word splitting the job
+# wants: git diff takes a list of pathspecs, not one string.
 #
 # All actions are pinned to commit SHAs, not tags.
 
@@ -38,14 +67,22 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Manual runs exist for the `matter` gate: it is path-triggered, and
-  # "run it anyway" (after a build-environment release, before a release,
-  # to reproduce a bench failure) has to be possible without an empty
-  # commit.
+  # Manual runs exist for the `gate-matter` gate: it is path-triggered,
+  # and "run it anyway" — after a release on any of the three lines, before
+  # a release, to reproduce a bench failure — has to be possible without an
+  # empty commit. A newly published package changes what the assessment
+  # says without changing a line in this repository, and this is how that
+  # answer is asked for.
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  # Pinned, because the compressor decides the bytes: identical zstd
+  # parameters give identical output for one libzstd and not across two,
+  # and a package's SHA-256 is what a build context pins.
+  ZSTANDARD_VERSION: "0.25.0"
 
 jobs:
   # ------------------------------------------------------------------
@@ -53,7 +90,8 @@ jobs:
   # (containers/build-environment-packager/): the pinned toolchain the two
   # environment packages are produced in. It is not a build environment —
   # no device is compiled in it — and it is published from here because
-  # `release.yml`'s package jobs pull it and refuse without it.
+  # the package jobs below and in release.yml pull it and refuse without
+  # it.
   #
   # MULTI-ARCHITECTURE, an OCI index over one manifest per architecture,
   # built natively on each rather than one of them emulated: the tools
@@ -279,15 +317,284 @@ jobs:
           }
 
   # ------------------------------------------------------------------
-  # The trigger for the `matter` job below.
+  # The bump discipline, and it is a blocker rather than a hint.
   #
-  # A Matter build is a quarter of an hour of runner time (13:38 cold on
-  # four cores, REMOTE-BUILD.md), so it must not run on every pull
-  # request — but GitHub has no per-job path filter, and the workflow's
-  # own `on:` block is shared with lint and twister, which DO run on
-  # everything. Hence this gate: ten seconds of plain git, no third-party
-  # action, deciding from the diff whether anything that can break a
-  # Matter build was touched.
+  # Each of the three lines declares its next version in
+  # packaging/build-environment/environment.json. A version that is
+  # already published is immutable — somebody's build context pins it by
+  # hash — so the moment an input of that stage changes, the version has
+  # to move with it, and moving it is how a change says whether it is a
+  # patch, a minor or a major.
+  #
+  # The check needs no build and no container: `release_lines.py` computes
+  # a stage's input hash out of a commit, and the published one is read
+  # off the release's own <archive>.meta.json. Cheap enough to gate the
+  # expensive jobs on, which is what `needs:` below does — a push that is
+  # refused should not also cost an hour of runner time.
+  #
+  # Tags are fetched because a mismatch has to be able to say WHICH input
+  # moved, and that means recomputing the tagged commit's input listing.
+  check-versions:
+    name: Check (version bump discipline)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The tagged commits of the three lines, for the listing diff.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install what the check reads versions with
+        run: python -m pip install --disable-pip-version-check packaging
+
+      - name: scripts/release_readiness.py check-versions
+        env:
+          # Anonymous reads would do for a public repository; the run's own
+          # token is used so the API budget is this run's rather than the
+          # runner's shared one.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          python scripts/release_readiness.py \
+            --repository-slug "$GITHUB_REPOSITORY" check-versions \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------
+  # The three packages of THIS commit.
+  #
+  # Versions come from packaging/build-environment/environment.json with a
+  # `+ci.<short sha>` local segment appended — a local version is the one
+  # shape a package host refuses to publish, so a per-commit package can
+  # never be mistaken for a release. Everything downstream resolves
+  # against these files as local package sources, which is why the
+  # workflow needs no published environment of its own version.
+  #
+  # The tools package is per architecture and each one is built on a
+  # runner of that architecture: it is host binaries plus a wheel set
+  # whose compiled members are built by the packager's interpreter for the
+  # machine it runs on. The packager image is a multi-architecture index,
+  # so the pinned digest pulls the native manifest on each runner without
+  # anything being said about it here.
+  #
+  # The workspace and the SDK are architecture-neutral and built once.
+  build-packages:
+    name: Build (${{ matrix.stage }} package${{ matrix.platform && format(', {0}', matrix.platform) || '' }})
+    needs: check-versions
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      # Pull only — the packager image is published by the jobs above.
+      packages: read
+    strategy:
+      # A broken workspace package and a broken tools package are
+      # different news, and one cancelling the other would hide the second.
+      fail-fast: false
+      matrix:
+        include:
+          - stage: sdk
+            artifact: packages-sdk
+            runner: ubuntu-latest
+          - stage: workspace
+            artifact: packages-workspace
+            runner: ubuntu-latest
+          - stage: tools
+            platform: linux-amd64
+            artifact: packages-tools-linux-amd64
+            runner: ubuntu-latest
+          - stage: tools
+            platform: linux-arm64
+            artifact: packages-tools-linux-arm64
+            runner: ubuntu-24.04-arm
+    env:
+      # Empty on purpose, and not pointless: the package scripts take the
+      # archive's single mtime from SOURCE_DATE_EPOCH when it is set and
+      # from the packaged commit's own committer date when it is not. The
+      # commit is what should decide it, so nothing a runner image happens
+      # to export may reach the script.
+      SOURCE_DATE_EPOCH: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install the pinned compressor
+        run: python -m pip install --disable-pip-version-check "zstandard==${ZSTANDARD_VERSION}"
+
+      # The workspace, the packager image and the archive are on this disk
+      # at the same time and each of them is gigabytes. `rm -rf` on an
+      # absent path is not an error, so the same list serves any runner
+      # image.
+      - name: Make room, and say how much there is
+        if: matrix.stage != 'sdk'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+
+      - name: Resolve the packager image reference
+        if: matrix.stage != 'sdk'
+        id: image
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from packager_image import reference
+
+          print(f"reference={reference()}")
+          PY
+
+      - name: Log in to ghcr.io
+        if: matrix.stage != 'sdk'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pulled, never built as a fallback: a package laid out by an image
+      # nobody else has is a package nobody else can reproduce. A missing
+      # packager means it has not been published yet, which is a blocker
+      # rather than something to paper over.
+      - name: Pull the pinned packager image
+        if: matrix.stage != 'sdk'
+        run: |
+          set -euo pipefail
+          reference='${{ steps.image.outputs.reference }}'
+          docker pull --quiet "$reference" || {
+            echo "::error::$reference is not published — run this workflow on main first" >&2
+            exit 1
+          }
+
+      # HEAD, and therefore the commit — never the working tree. On a pull
+      # request that commit is the merge commit this run checked out, which
+      # is the tree the rest of the workflow is about.
+      - name: Build the package
+        id: build
+        run: |
+          set -euo pipefail
+          suffix="ci.$(git rev-parse --short HEAD)"
+          echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
+          case '${{ matrix.stage }}' in
+            sdk)
+              python scripts/build_sdk_archive.py \
+                --output-dir dist --revision HEAD --version-suffix "$suffix"
+              ;;
+            workspace)
+              python scripts/build_env_package.py workspace \
+                --output-dir dist --work-dir "$RUNNER_TEMP/package-work" \
+                --version-suffix "$suffix"
+              ;;
+            tools)
+              python scripts/build_env_package.py tools \
+                --output-dir dist --work-dir "$RUNNER_TEMP/package-work" \
+                --os "${platform%%-*}" --arch "${platform##*-}" \
+                --version-suffix "$suffix"
+              ;;
+          esac
+          df -h /
+        env:
+          platform: ${{ matrix.platform }}
+
+      - name: Show what was built
+        run: |
+          set -euo pipefail
+          ls -l dist/
+          cat dist/*.meta.json
+          (cd dist && sha256sum -c ./*.sha256)
+
+      # The archive, its checksum, its meta file and the index together:
+      # the downloaded artifact is then already a package source directory
+      # the workbench can be pointed at, rather than four things to
+      # reassemble.
+      - name: Upload the package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist
+          if-no-files-found: error
+          # Long enough to download a failing run's inputs and reproduce
+          # it by hand, short enough that a per-commit gigabyte does not
+          # accumulate.
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # Which combinations this commit has to be tried in.
+  #
+  # Three lines that constrain each other by range cannot be tested as one
+  # triple. What a release of a line promises is the *ends* of the range
+  # it declares, so the catalogue is: the SDK against the lowest and the
+  # highest published workspace it admits; the workspace and the tools
+  # against the oldest and the newest published version above them that
+  # admits their declared version; and each of them against the stage
+  # above as this commit has it.
+  #
+  # Those lists overlap — today they collapse into a single combination,
+  # because no version of the two new lines is published yet — so the plan
+  # deduplicates them and the firmware job below builds each distinct
+  # triple once per architecture. The assessment jobs then read the
+  # outcomes rather than building anything themselves.
+  #
+  # A combination is assembled from exactly one version per stage, which
+  # is why no device file is pinned anywhere below: the build resolves the
+  # chain the way a user's build does, and there is one candidate for it
+  # to resolve to.
+  plan-firmware:
+    name: Plan (firmware combinations)
+    needs: check-versions
+    runs-on: ubuntu-latest
+    outputs:
+      combinations: ${{ steps.plan.outputs.combinations }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install what the plan reads versions with
+        run: python -m pip install --disable-pip-version-check packaging
+
+      - name: scripts/release_readiness.py plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/release_readiness.py \
+            --repository-slug "$GITHUB_REPOSITORY" plan --output plan.json
+          {
+            echo "combinations<<PLAN_EOF"
+            python -c 'import json; print(json.dumps(json.load(open("plan.json"))["combinations"]))'
+            echo "PLAN_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firmware-plan
+          path: plan.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # The trigger for the firmware builds below.
+  #
+  # A Matter build is a quarter of an hour of runner time per combination
+  # and architecture, so it must not run on every pull request — but
+  # GitHub has no per-job path filter. Hence this gate: ten seconds of
+  # plain git, no third-party action, deciding from the diff whether
+  # anything that can break a Matter build was touched.
   #
   # The path list is the firmware and the builder, named explicitly:
   #
@@ -301,29 +608,31 @@ jobs:
   #                             everything that gets compiled into the
   #                             image or decides how
   #   mcuhome/                  the generator and the build orchestration
-  #   scripts/                  pyshim (CHIP codegen imports it) and this
-  #                             job's artifact check
+  #   packaging/                the environment definition, the entry
+  #                             point and the requirement set the packages
+  #                             are built from
+  #   scripts/                  pyshim (CHIP codegen imports it), the
+  #                             package builds and this job's artifact
+  #                             check
   #   the reference example     what the job builds
   #   this workflow             so a change to the job runs the job
   #
   # Deliberately NOT in the list: docs/ other than that one example,
-  # tests/, tests/python/, samples/ and the community files. A change there
-  # cannot alter the firmware this job produces — samples/matter-node is
-  # generator OUTPUT, compared byte for byte by the pytest suite, so a
-  # real change to it arrives together with a change under mcuhome/ that
-  # is in the list.
+  # tests/, samples/ and the community files. A change there cannot alter
+  # the firmware this job produces — samples/matter-node is generator
+  # OUTPUT, compared byte for byte by the pytest suite, so a real change
+  # to it arrives together with a change under mcuhome/ that is in the
+  # list.
   #
-  # west.yml and patches/ stay in the list although the build environment
-  # is a *published* assembly this job no longer builds: they describe
-  # the workspace the next environment release will carry, and running
-  # the firmware build on a change to either is the cheapest way to keep
-  # the reference device honest against the environment that exists
-  # today. What they no longer do is make this job compile against the
-  # new pin — that happens when the environment packages are built.
+  # What the gate no longer decides is whether the environment packages
+  # are built: test-twister compiles in them and runs on everything, so
+  # build-packages is outside this gate.
   #
   # Fail-open: if the base commit cannot be resolved (a force push, a new
   # branch, a shallow history), the job runs. A missed regression is more
-  # expensive than a wasted quarter of an hour.
+  # expensive than a wasted quarter of an hour. A manual run opens the
+  # gate too, which is how a newly published package is assessed without a
+  # commit.
   gate-matter:
     name: Gate (does this touch Matter?)
     runs-on: ubuntu-latest
@@ -356,6 +665,7 @@ jobs:
             include
             lib
             mcuhome
+            packaging
             patches
             scripts
             snippets
@@ -367,7 +677,7 @@ jobs:
             *)                 base='${{ github.event.before }}' ;;
           esac
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            echo "::notice::No base commit to compare against — running the Matter build."
+            echo "::notice::No base commit to compare against — running the Matter builds."
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -395,284 +705,349 @@ jobs:
   #      and imgtool imports it at module load.
   #
   # Three independent blind spots hid the same gap: the twister job
-  # filters the `matter` west group out, the suites in tests/ are
+  # filtered the `matter` west group out, the suites in tests/ are
   # CHIP-free by design, and every Matter build anyone ran locally used
-  # the host's own tools, where the host interpreter quietly supplied
-  # what the environment lacked. Nothing had ever walked the container
-  # path for a Matter build. This job is that walk — compat headers,
-  # generator, `mcuhome device build` and the published build
+  # the host's own tools, where the host interpreter quietly supplied what
+  # the environment lacked. This job is the walk that closes them —
+  # compat headers, generator, `mcuhome device build` and a real build
   # environment, exercised together on the example the node on the bench
-  # was commissioned from. Delete it and those three classes of failure
-  # become invisible again.
+  # was commissioned from.
   #
-  # What it walks is the environment that is *published*, resolved by the
-  # workbench from the package set the build context pins — the same
-  # resolution a user gets, image reference and all. So this job says
-  # "the reference device builds today"; whether a changed west.yml or
-  # patch set still produces a workable environment is answered when the
-  # environment packages are built, which is a release act.
+  # It walks the environment THIS commit produces, not a published one:
+  # the packages come from build-packages as local sources, and the chain
+  # SDK -> workspace -> tools is resolved out of their meta files exactly
+  # as a user's build resolves it out of a registry index. Where the plan
+  # names a published version for a stage, that stage's package is fetched
+  # from its GitHub release instead and turned into a source directory of
+  # its own. Either way the build sees one candidate per stage and pins
+  # what it resolved.
+  #
+  # The subprocess profile, not the container one: an image is an assembly
+  # of two *published* packages, and these two are not published — nor
+  # should a per-commit assembly be pushed to a registry to be able to
+  # compile in it.
   build-firmware:
-    name: Build (Matter firmware)
-    needs: gate-matter
-    if: needs.matter-gate.outputs.run == 'true'
-    runs-on: ${{ matrix.runner }}
-    # Both architectures, every time the gate opens (PO 2026-08-19). The
-    # firmware is the same cross-compiled ARM binary either way — what
-    # differs is the *host* the toolchain runs on, and that is exactly
-    # what a build environment is. Noted as a later optimisation: once
-    # there are timings, whichever architecture turns out slower is the
-    # one that goes behind the gate, and it may well be amd64.
+    name: Build (firmware, ${{ matrix.combination.id }}, ${{ matrix.target.arch }})
+    needs: [gate-matter, plan-firmware, build-packages]
+    if: needs.gate-matter.outputs.run == 'true'
+    runs-on: ${{ matrix.target.runner }}
     strategy:
       fail-fast: false
       matrix:
-        include:
+        combination: ${{ fromJSON(needs.plan-firmware.outputs.combinations) }}
+        # Both architectures, every time the gate opens. The firmware is
+        # the same cross-compiled ARM binary either way — what differs is
+        # the *host* the toolchain runs on, and that is exactly what a
+        # build environment is.
+        target:
           - arch: amd64
+            platform: linux-amd64
             runner: ubuntu-latest
           - arch: arm64
+            platform: linux-arm64
             runner: ubuntu-24.04-arm
     permissions:
       contents: read
-      # Pull only, and not even by this job directly: the workbench
-      # resolves the environment image and fetches it.
-      packages: read
     env:
       # Pins the host-side ccache directory into the workspace so the
-      # cache action has a path it can name. Without it
-      # the workbench's ccache lookup falls back to $XDG_CACHE_HOME/$HOME, which is
-      # the runner's business and not stable across runner images.
-      # `mcuhome device build` creates the two role directories under it
-      # (cache-local, cache-shared) and mounts them where the build
-      # environment reads its compiler cache from. Caching the root therefore
-      # carries the written half; the read-only half stays empty here,
-      # because nobody fills it on a runner.
+      # cache action has a path it can name. Without it the workbench's
+      # ccache lookup falls back to $XDG_CACHE_HOME/$HOME, which is the
+      # runner's business and not stable across runner images.
       MCUHOME_CCACHE_DIR: ${{ github.workspace }}/.ccache
+      COMBINATION: ${{ matrix.combination.id }}
+      PLATFORM: ${{ matrix.target.platform }}
+      ARCH: ${{ matrix.target.arch }}
     steps:
-      # Same topdir rule as the twister job: the workspace top directory
-      # must not be a git repository, so this repo goes one level down.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mcuhome-sdk
 
-      # The `mcuhome` command is a thin shell in its own repository
-      # and this job needs the command, not just the library.
-      # While both repositories are private that means a read-only deploy
-      # key, mirroring what mcu-home/mcuhome-cli already does in the other
-      # direction. To rotate it (repository settings, no tooling):
-      # Public sibling — plain checkout, no deploy key (the key retired
-      # with the going-public flip). Once the packages are published this
-      # becomes a plain pip install.
+      # The `mcuhome` command is a thin shell in its own repository and
+      # this job needs the command, not just the library. Public siblings,
+      # plain checkouts. Once the packages are published this becomes a
+      # plain pip install.
       - name: Checkout the mcuhome command line
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mcu-home/mcuhome-cli
           path: .deps/mcuhome-cli
 
-      # The workbench's home since the repository split — this job drives
-      # `mcuhome device build` end to end, and stages 1-3 live there.
       - name: Checkout the workbench
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mcu-home/mcuhome-workbench
           path: .deps/mcuhome-workbench
 
+      # The workbench depends on the package registry's own reference
+      # verifier, which publishes no distribution — so it is checked out
+      # at the commit the workbench's own CI pins, and nowhere else is
+      # that commit stated. Bumping it is that repository's business.
+      - name: Checkout the package tool
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-packagetool
+          ref: 7ce85fce47b89532dfa1585f0790e0820a1fbc71 # the ref mcuhome-workbench's ci-test.yml pins
+          path: .deps/mcuhome-packagetool
+
+      # 3.13 is not a preference: the tools package ships compiled wheels
+      # built by the packager's interpreter, and the build's virtual
+      # environment is created from them by the interpreter that runs this
+      # job. A different minor would find no candidate for them.
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      # Editable, and that is not a style preference: mcuhome.compiler.workspace's
-      # installed_module_dir() resolves the module directory from the
-      # package's own location and the container mounts it, so a copy in
-      # site-packages would take the Python half of the SDK into the
-      # build and leave the Zephyr module
-      # — components/, compat/, scripts/pyshim/ — behind.
+      # Editable, and that is not a style preference:
+      # mcuhome.compiler.workspace's installed_module_dir() resolves the
+      # module directory from the package's own location, so a copy in
+      # site-packages would take the Python half of the SDK into the build
+      # and leave the Zephyr module — components/, compat/, scripts/pyshim/
+      # — behind.
       #
-      # Since the repository split the model and the compiler come from
-      # this repository, the workbench from its own (checked out above).
-      # The order is the dependency order, which pip does not need but a
-      # reader does. This job builds firmware, so it needs the compiler.
+      # One pip invocation, because mcuhome-workbench requires
+      # mcuhome-packagetool and neither is on an index: pip can only
+      # resolve that edge by seeing both on the same command line.
       - name: Install the builder and its command line
         run: |
           python -m pip install --disable-pip-version-check \
             -e ./mcuhome-sdk/packaging/model \
+            -e ./.deps/mcuhome-packagetool \
             -e ./.deps/mcuhome-workbench \
-            -e ./mcuhome-sdk/packaging/compiler
-          python -m pip install --disable-pip-version-check -e ./.deps/mcuhome-cli
+            -e ./mcuhome-sdk/packaging/compiler \
+            -e ./.deps/mcuhome-cli
           # A build environment delivers an UNSIGNED image and the host
           # signs it afterwards — the private key never enters an
           # environment, so signing is a host duty and imgtool a host
           # tool. This job has no west workspace of its own to borrow
           # bootloader/mcuboot/scripts/imgtool.py from, so it takes the
-          # pip release, pinned to the version the mcuboot pin in
-          # west.yml ships.
+          # pip release, pinned to the version the mcuboot pin in west.yml
+          # ships.
           python -m pip install --disable-pip-version-check imgtool==2.4.0
 
-      # Measured on the 2026-08-09 run: 72 GB total, 34 GB free after this
-      # step. That is comfortable for what the job wants at once — the
-      # environment image (which carries the whole west workspace, Matter
-      # included), a restored compiler cache and the build tree the
-      # container writes back to the host. The host no longer clones
-      # connectedhomeip and its four submodules, so the multi-gigabyte
-      # checkout that used to sit beside the image is gone. The step
-      # stays because the
-      # preinstalled Android/.NET/Haskell toolchains are worth tens of
-      # gigabytes, nothing here uses them, and the headroom is what lets
-      # the image grow without this job becoming the thing that discovers
-      # it.
+      # The unpacked environment, the packages themselves and the build
+      # tree are on this disk at once, and the preinstalled
+      # Android/.NET/Haskell toolchains are worth tens of gigabytes that
+      # nothing here uses.
       - name: Make room on the runner
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
 
       # Which machine is this, really. The two architectures build the
-      # same firmware at measurably different speeds — 420 s against
-      # 264 s cold, 88 s against 67 s warm — and the obvious explanation
-      # is that "4 vCPU" means two physical cores plus their hyperthreads
-      # on one side and four real cores on the other. GitHub does not
-      # publish that, so it is asked here rather than assumed: `lscpu`
-      # answers "Thread(s) per core" and the processor's own name, and
-      # one line in a log settles a question that is otherwise a belief.
+      # same firmware at measurably different speeds, and "4 vCPU" means
+      # two physical cores plus their hyperthreads on one side and four
+      # real cores on the other. GitHub does not publish that, so it is
+      # asked here rather than assumed.
       - name: What machine is this
         run: |
           nproc --all
           lscpu | grep -Ei 'model name|^cpu\(s\)|thread|core|socket|mhz|bogomips' || lscpu
           free -h
 
-      # Logged in so the *pull* the workbench makes carries this run's own
-      # token rather than being anonymous. Resolution itself is anonymous:
-      # which image delivers the package set the build context pins is
-      # answered by reading candidates' labels out of the registry, and
-      # that read needs no credential for a public repository. Only the
-      # daemon fetching the bytes uses the login below.
-      - name: Log in to ghcr.io
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      # One directory per stage, and each holds exactly one version: the
+      # chain then resolves to the combination this leg is about without
+      # anything being pinned in a device file.
+      - name: Take the SDK package of this commit
+        if: matrix.combination.sdk.source == 'checkout'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          name: packages-sdk
+          path: sources/sdk
 
-      # No west workspace is initialised and no patch is applied on the
-      # host, and neither is a gap: the build environment carries a west
-      # workspace with the `matter` group included and the patch set
-      # already applied, and the build runs inside it. The host therefore
-      # never clones connectedhomeip and its four submodules.
+      - name: Take the workspace package of this commit
+        if: matrix.combination.workspace.source == 'checkout'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: packages-workspace
+          path: sources/workspace
+
+      - name: Take the tools package of this commit
+        if: matrix.combination.tools.source == 'checkout'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: packages-tools-${{ matrix.target.platform }}
+          path: sources/tools
+
+      # A published stage comes off its GitHub release — the archive, its
+      # checksum and its meta file — and gets the index.json a release
+      # page does not carry, which is what makes the directory a package
+      # source at all.
+      - name: Take the published packages this combination names
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_TAG: ${{ matrix.combination.sdk.source == 'published' && matrix.combination.sdk.tag || '' }}
+          WORKSPACE_TAG: ${{ matrix.combination.workspace.source == 'published' && matrix.combination.workspace.tag || '' }}
+          TOOLS_TAG: ${{ matrix.combination.tools.source == 'published' && matrix.combination.tools.tag || '' }}
+        run: |
+          set -euo pipefail
+          take() {
+            tag="$1"; into="$2"; pattern="$3"
+            [ -n "$tag" ] || return 0
+            mkdir -p "$into"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$pattern" --pattern "$pattern.sha256" \
+              --pattern "$pattern.meta.json" --dir "$into" --clobber
+            python mcuhome-sdk/scripts/release_readiness.py sources "$into"
+          }
+          take "$SDK_TAG" sources/sdk 'mcuhome-sdk-*.tar.zst'
+          take "$WORKSPACE_TAG" sources/workspace 'mcuhome-build-workspace-*.tar.zst'
+          take "$TOOLS_TAG" sources/tools "mcuhome-build-tools_${PLATFORM}-*.tar.zst"
+
+      - name: Say which packages this leg builds with
+        run: |
+          set -euo pipefail
+          echo "::notice::${{ matrix.combination.label }}"
+          for one in sources/*/index.json; do
+            [ -f "$one" ] || continue
+            echo "--- $one"
+            cat "$one"
+          done
 
       # Carrying the compiler cache is what makes this job affordable to
-      # run twice in a row — 13:38 cold against 2:02 warm on four cores,
-      # measured. It works across runners only because the build
-      # environment is configured for it: compiler_check = content
-      # survives a fetch where the default mtime check does not, and
-      # CCACHE_BASEDIR normalizes the workspace path. Nothing had to be
-      # invented here.
+      # run at all — 13:38 cold against 2:02 warm on four cores, measured.
+      # It works across runners only because the build environment is
+      # configured for it: compiler_check = content survives a fetch where
+      # the default mtime check does not, and CCACHE_BASEDIR normalizes the
+      # workspace path.
       #
       # Restore always, save only from main: an entry may approach the
-      # 5 GB the image allows, and a pull request saving one per run
-      # would spend the repository's cache budget and evict the twister
-      # job's west workspace.
+      # 5 GB the environment allows, and a pull request saving one per run
+      # would spend the repository's cache budget.
       - name: Restore the compiler cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ccache
-          key: ccache-matter-1-${{ runner.os }}-${{ matrix.arch }}-${{ github.run_id }}
+          key: ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-${{ github.run_id }}
           restore-keys: |
-            ccache-matter-1-${{ runner.os }}-${{ matrix.arch }}-
+            ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-
 
-      # `mcuhome device build` resolves the device's SDK pin against the
-      # source directories `--sdk-sources` names before it reaches a
-      # registry, and delivers the selected package to the build
-      # environment as the SDK, so this job has to produce one.
-      # It is the same archive the sdk-package job publishes, built by the
-      # same script into a directory next to the index.json that maps the
-      # pin to it — seconds of work (a `git archive` and one zstd frame),
-      # not the multi-gigabyte west clone the removed steps did. The
-      # script reads the committed revision (HEAD), never the working
-      # tree, and `--repo` defaults to the checkout the script lives in
-      # (here mcuhome-sdk/). zstandard is unpinned on purpose: this archive is
-      # a throwaway build input consumed in the same run, so its bytes
-      # need not reproduce a release's the way the sdk-package job's must.
-      - name: Build the SDK source archive
+      # A project of its own, with the device copied into it: a build
+      # writes a signing key next to the device it signs, and the checkout
+      # is not a place to write one. The key is generated on first use and
+      # dies with the runner; nothing commissions this firmware.
+      - name: Make a project for it
         run: |
-          python -m pip install --disable-pip-version-check zstandard
-          python mcuhome-sdk/scripts/build_sdk_archive.py --output-dir dist/sdk
+          set -euo pipefail
+          mkdir -p project
+          cd project
+          mcuhome project init
+          mkdir -p devices
+          cp ../mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml devices/
 
-      # The example the bench node was commissioned from — the YAML form
-      # of samples/matter-node — built the documented way: in a build
-      # container (the default, and the whole point of this job), against
-      # the SDK archive built above, with the RTT snippet the
-      # debug-output directive requires. The signing key is generated on
-      # first use and dies with the runner; nothing commissions this
-      # firmware, and no key of any consequence exists on a CI runner.
-      # How much of the machine the build may use is left to the
-      # workbench's own detection, as it is for a user who configured
-      # nothing.
-      #
-      # No image is named. Which environment delivers the package set
-      # this build context pins is resolved against the registry by the
-      # workbench, from the labels a candidate declares — the search a
-      # user's build does, so a user's failure mode is this job's too.
+      # The documented invocation, and the whole point of this job. How
+      # much of the machine the build may use is left to the workbench's
+      # own detection, as it is for a user who configured nothing.
       - name: Build the reference Matter device
+        id: build
+        continue-on-error: true
+        working-directory: project
         run: |
-          mcuhome device build mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml \
-            --build-dir build/bmp180-node --sdk-sources dist/sdk
+          set -euo pipefail
+          mcuhome device build devices/00-bmp180-two-endpoints.yaml \
+            --build-dir build/bmp180-node \
+            --build-target local --build-mode subprocess \
+            --sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
+            --sdk-sources "$GITHUB_WORKSPACE/sources/workspace" \
+            --sdk-sources "$GITHUB_WORKSPACE/sources/tools"
 
       # A green build that produced nothing is worse than a red one. The
-      # build directory holds a build-report.json, and the checker
-      # verifies that the report is a well-formed build report, and that
-      # the unsigned firmware, the host-signed firmware in both formats
-      # and the one .ota image are present and non-empty. The build
-      # environment already declared and hashed every artifact it
-      # delivered, so this is a presence-and-shape gate, not a second
-      # hash oracle.
+      # checker verifies that the report is a well-formed build report and
+      # that the unsigned firmware, the host-signed firmware in both
+      # formats and the one .ota image are present and non-empty.
       - name: Check the artifact set
-        run: python3 mcuhome-sdk/scripts/check_build_artifacts.py build/bmp180-node
+        id: artifacts
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: python3 mcuhome-sdk/scripts/check_build_artifacts.py project/build/bmp180-node
 
-      # What this architecture produced, as hashes — the input to the
-      # cross-architecture comparison below. Only the UNSIGNED artifacts:
-      # a signature is not reproducible by construction (ECDSA draws a
-      # random nonce per signature, tests/python asserts exactly that), so
-      # comparing signed images would compare the randomness.
-      # The unsigned firmware itself, not only its hash: "the two
-      # architectures produced different bytes" is a fact, and "they
-      # differ in one build id" and "they differ everywhere" are two
-      # entirely different facts behind it. Only the comparison job can
-      # tell those apart, and only if it has the bytes.
-      #
-      # Unsigned on purpose. A signature is not reproducible by
-      # construction — ECDSA draws a random nonce per signature, which
-      # tests/python asserts — so a signed image would differ between two
-      # runs of the SAME architecture and drown the question.
-      - name: Record what this architecture produced
+      # What this leg produced, as a fact the assessment jobs can read:
+      # one file per combination and architecture, so a missing one means
+      # "not built" rather than "unknown".
+      - name: Record the outcome
+        if: always()
+        env:
+          LABEL: ${{ matrix.combination.label }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.artifacts.outcome }}
         run: |
-          mkdir -p produced
-          cp build/bmp180-node/firmware.bin \
-             build/bmp180-node/firmware.hex \
-             build/bmp180-node/bootloader.hex produced/
-          (cd produced && sha256sum *)
+          set -euo pipefail
+          mkdir -p outcome produced
+          export OUTCOME=failure
+          if [ "$BUILD_OUTCOME" = success ] && [ "$ARTIFACT_OUTCOME" = success ]; then
+            OUTCOME=success
+            cp project/build/bmp180-node/firmware.bin \
+               project/build/bmp180-node/firmware.hex \
+               project/build/bmp180-node/bootloader.hex produced/
+            (cd produced && sha256sum -- *)
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
 
-      - name: Upload what this architecture produced
+          document = {
+              "combination": os.environ["COMBINATION"],
+              "architecture": os.environ["ARCH"],
+              "outcome": os.environ["OUTCOME"],
+              "label": os.environ["LABEL"],
+          }
+          name = "result-{combination}-{architecture}.json".format(**document)
+          Path("outcome", name).write_text(
+              json.dumps(document, indent=2, sort_keys=True) + "\n"
+          )
+          print(name)
+          PY
+          cat "outcome/result-${COMBINATION}-${ARCH}.json"
+
+      - name: Upload the outcome
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: firmware-${{ matrix.arch }}
+          name: outcome-${{ matrix.combination.id }}-${{ matrix.target.arch }}
+          path: outcome/
+          if-no-files-found: error
+          retention-days: 7
+
+      # Only the UNSIGNED artifacts travel: a signature is not
+      # reproducible by construction (ECDSA draws a random nonce per
+      # signature, which tests/python asserts), so comparing signed images
+      # would compare the randomness. The firmware itself and not only its
+      # hash, because "they differ in one build id" and "they differ
+      # everywhere" are two entirely different facts and only the
+      # comparison job can tell them apart.
+      - name: Upload what this architecture produced
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firmware-${{ matrix.combination.id }}-${{ matrix.target.arch }}
           path: produced/
           retention-days: 7
 
       - name: Save the compiler cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ccache
-          key: ccache-matter-1-${{ runner.os }}-${{ matrix.arch }}-${{ github.run_id }}
+          key: ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-${{ github.run_id }}
+
+      # The outcome is recorded and uploaded before this fires, which is
+      # the only reason the build step is allowed to continue on error.
+      - name: The build has to have succeeded
+        if: steps.build.outcome != 'success' || steps.artifacts.outcome != 'success'
+        run: |
+          echo "::error::${{ matrix.combination.label }} did not build on ${ARCH}" >&2
+          exit 1
 
   # ------------------------------------------------------------------
-  # Does the host architecture change the firmware? A report, not a gate
-  # (PO 2026-08-19).
+  # Does the host architecture change the firmware? A report, not a gate.
   #
-  # The two `matter` legs cross-compile the same ARM firmware with the
-  # same pinned toolchain, from the same sources, in the same build
-  # environment — only the machine the compiler itself runs on differs.
-  # Byte-identical output is therefore the *expected* answer and a
-  # genuinely useful one: it says the environment, and not the host,
+  # The two legs of the `checkout` combination cross-compile the same ARM
+  # firmware with the same pinned toolchain, from the same sources, in the
+  # same build environment — only the machine the compiler itself runs on
+  # differs. Byte-identical output is therefore the *expected* answer and
+  # a genuinely useful one: it says the environment, and not the host,
   # decides what a device gets.
   #
   # It is deliberately not a gate. A difference here has a long list of
@@ -684,13 +1059,13 @@ jobs:
   compare-firmware:
     name: Compare (firmware across architectures)
     needs: build-firmware
-    if: always() && needs.matter.result == 'success'
+    if: always() && needs.build-firmware.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Download what each architecture produced
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          pattern: firmware-*
+          pattern: firmware-checkout-*
           path: produced
 
       - name: Checkout
@@ -699,14 +1074,20 @@ jobs:
           path: mcuhome-sdk
 
       # Not a hash comparison: those two hashes already differ and say
-      # nothing about why. This prints where and what — how many bytes,
-      # in how many regions, at which offsets, and the neighbourhood as
-      # text, which is how a compiler stamp or a path announces itself.
+      # nothing about why. This prints where and what — how many bytes, in
+      # how many regions, at which offsets, and the neighbourhood as text,
+      # which is how a compiler stamp or a path announces itself.
       - name: Compare them
         run: |
+          set -euo pipefail
+          left=produced/firmware-checkout-amd64
+          right=produced/firmware-checkout-arm64
+          if [ ! -d "$left" ] || [ ! -d "$right" ]; then
+            echo "::notice::the checkout combination was not built on both architectures — nothing to compare"
+            exit 0
+          fi
           python3 mcuhome-sdk/scripts/compare_firmware.py \
-            produced/firmware-amd64 produced/firmware-arm64 \
-            --label-left amd64 --label-right arm64 | tee comparison.txt
+            "$left" "$right" --label-left amd64 --label-right arm64 | tee comparison.txt
           {
             echo '## Does the host architecture change the firmware?'
             echo
@@ -716,6 +1097,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the comparison
+        if: hashFiles('comparison.txt') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: firmware-comparison
@@ -723,60 +1105,211 @@ jobs:
           retention-days: 7
 
   # ------------------------------------------------------------------
-  # The SDK package (B2)
-  # ------------------------------------------------------------------
+  # The release-readiness tables: one per line, written out of the plan
+  # and the outcomes above. They build nothing — every combination the
+  # catalogue names was built once by build-firmware, whichever line asked
+  # for it.
   #
-  # CI builds and hashes the `mcuhome-sdk-<version>` archive; this job is
-  # that. It is not a gate — nothing about it can fail a pull request,
-  # because it runs on `main` only — and it publishes nowhere. What it
-  # produces is a workflow artifact: a file an operator can download into
-  # the local source directory the build server searches first, which is
-  # "the whole first implementation" of the package index.
-  #
-  # The pytest suite (tests/python/test_sdk_archive.py) is what proves the
-  # bytes are deterministic and the allowlist holds; this job's value is
-  # that the archive gets built from a clean checkout by something other
-  # than a developer's machine, which is the same reason the `matter` job
-  # exists.
-  build-sdk-package:
-    name: Build (SDK package)
+  # Red only where a line claims something that is not true: a combination
+  # assembled from published versions and this commit's own definition is
+  # one somebody could put together today, so a broken one is a broken
+  # promise. "Nothing published satisfies this yet" is a verdict, not a
+  # failure.
+  assess-sdk:
+    name: Assess (SDK release readiness)
+    needs: [plan-firmware, build-firmware]
+    if: always() && needs.plan-firmware.result == 'success'
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install what the summary reads versions with
+        run: python -m pip install --disable-pip-version-check packaging
+      - name: Download the plan
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: firmware-plan
+          path: plan
+      - name: Download the outcomes
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: outcome-*
+          path: outcomes
+        continue-on-error: true
+      - name: scripts/release_readiness.py summarize sdk
+        run: |
+          set -o pipefail
+          python scripts/release_readiness.py summarize sdk \
+            --plan plan/plan.json --results outcomes \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
+  assess-workspace:
+    name: Assess (build workspace release readiness)
+    needs: [plan-firmware, build-firmware]
+    if: always() && needs.plan-firmware.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install what the summary reads versions with
+        run: python -m pip install --disable-pip-version-check packaging
+      - name: Download the plan
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: firmware-plan
+          path: plan
+      - name: Download the outcomes
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: outcome-*
+          path: outcomes
+        continue-on-error: true
+      - name: scripts/release_readiness.py summarize workspace
+        run: |
+          set -o pipefail
+          python scripts/release_readiness.py summarize workspace \
+            --plan plan/plan.json --results outcomes \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  assess-tools:
+    name: Assess (build tools release readiness)
+    needs: [plan-firmware, build-firmware]
+    if: always() && needs.plan-firmware.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install what the summary reads versions with
+        run: python -m pip install --disable-pip-version-check packaging
+      - name: Download the plan
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: firmware-plan
+          path: plan
+      - name: Download the outcomes
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: outcome-*
+          path: outcomes
+        continue-on-error: true
+      - name: scripts/release_readiness.py summarize tools
+        run: |
+          set -o pipefail
+          python scripts/release_readiness.py summarize tools \
+            --plan plan/plan.json --results outcomes \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------
+  # The Zephyr suites in tests/, compiled in the build environment this
+  # commit produces.
+  #
+  # The workspace package IS a west workspace — the manifest's projects at
+  # the revisions west.yml pins, with patches/ applied and the manifest
+  # directory left empty, because the SDK is a package a build is handed
+  # rather than environment content. So the preparation is: unpack it,
+  # put this checkout where the manifest repository belongs, unpack the
+  # tools package beside it and create the build's virtual environment
+  # from the wheel set it ships (which is what a provisioning profile does
+  # before the first step, and what the package's own entry point expects
+  # to find).
+  #
+  # No image and no `west update`: the old job pulled a *published*
+  # assembly and laid a workspace out with its west, which meant this
+  # repository's own suites were compiled against an environment from
+  # before the commit under test. Now they are compiled against the one
+  # this commit defines.
+  #
+  # The `matter` group comes along — it is in the package — which costs
+  # nothing here: twister compiles what -T names.
+  test-twister:
+    name: Test (twister)
+    needs: build-packages
+    runs-on: ubuntu-latest
+    env:
+      # The unpacked tools package, which is what puts scripts/test.d/
+      # twister into its package mode: host, no container, the tool
+      # variables the environment's entry point would state.
+      MCUHOME_SDK_BUILD_TOOLS: ${{ github.workspace }}/environment/tools
+    steps:
+      # The checkout does not sit at the workspace top here: it is copied
+      # into the workspace package's manifest directory below, which is
+      # where west already expects the manifest repository to be.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: checkout
+
+      # 3.13, for the same reason the firmware job needs it: the wheel set
+      # in the tools package is compiled for it.
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      # Pinned, because the compressor decides the bytes. Identical zstd
-      # parameters give identical output for one libzstd and not across
-      # two, and the archive's SHA-256 is what a build context pins — so
-      # an unpinned compressor would quietly change the identity of every
-      # build that used the package.
-      - name: Install zstandard
-        run: python -m pip install --disable-pip-version-check zstandard==0.25.0
-
-      # HEAD, and therefore the commit — never the working tree. The
-      # script reads the release version out of that same commit, so the
-      # file name and the content cannot disagree.
-      - name: Build the archive
-        run: python scripts/build_sdk_archive.py --output-dir dist/sdk --revision HEAD
-
-      - name: Show what was built
+      - name: Make room on the runner
         run: |
-          ls -l dist/sdk
-          cat dist/sdk/index.json
-          (cd dist/sdk && sha256sum -c ./*.sha256)
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
 
-      # The archive, its sidecar and the index together: a downloaded
-      # artifact is then already a source directory the build server can
-      # be pointed at, rather than three things to reassemble.
-      - name: Upload the archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Take the workspace package of this commit
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: mcuhome-sdk-package
-          path: dist/sdk
-          if-no-files-found: error
+          name: packages-workspace
+          path: packages/workspace
+
+      - name: Take the tools package of this commit
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: packages-tools-linux-amd64
+          path: packages/tools
+
+      # What a provisioning profile does, done here by hand because this
+      # job provisions no store: unpack both packages, create the build's
+      # virtual environment from the wheel set with --no-index (the set is
+      # complete by construction), and check each package's own statement
+      # of what it is on the way.
+      - name: Unpack the environment
+        run: |
+          set -euo pipefail
+          mkdir -p environment/workspace environment/tools
+          zstd -dc packages/workspace/mcuhome-build-workspace-*.tar.zst \
+            | tar -x -C environment/workspace
+          zstd -dc packages/tools/mcuhome-build-tools_linux-amd64-*.tar.zst \
+            | tar -x -C environment/tools
+          test -f environment/workspace/build-workspace.json
+          test -f environment/tools/build-tools.json
+          python -m venv environment/tools/venv
+          environment/tools/venv/bin/python -m pip install \
+            --no-cache-dir --disable-pip-version-check --no-index \
+            --find-links environment/tools/wheels environment/tools/wheels/*.whl
+          df -h /
+
+      # The manifest directory is present and empty in the package, and
+      # this checkout is what belongs in it: the suites have to be
+      # compiled against the workspace THIS commit's west.yml describes,
+      # with THIS commit's tests.
+      - name: Put this checkout where the manifest repository belongs
+        run: |
+          set -euo pipefail
+          workspace=environment/workspace/workspace
+          test -d "$workspace/mcuhome-sdk"
+          cp -a checkout/. "$workspace/mcuhome-sdk/"
+          ls "$workspace"
+
+      - name: scripts/test twister
+        run: |
+          set -euo pipefail
+          workspace="$PWD/environment/workspace/workspace"
+          "$workspace/mcuhome-sdk/scripts/test" twister "$workspace"

@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Test gate for the MCUHome firmware framework: one job per wrapper in
-# scripts/test.d/ (pytest, twister), plus a pre-check that every wrapper
-# has a job here.
+# Test gate for the MCUHome firmware framework: a job per wrapper in
+# scripts/test.d/, plus a pre-check that every wrapper has one or is
+# declared skipped with a reason.
 #
 #   test-pytest  — the Python suite in tests/python/ (the fast half of
 #                  the test strategy, docs/design/builder-pipeline.md
@@ -11,16 +11,16 @@
 #                  output, and the closure the SDK entry point is allowed
 #                  to import. `-rs` keeps any skip loud in the log rather
 #                  than a dot.
-#   test-twister — the Zephyr test suites in tests/, compiled and run
-#                  inside MCUHome's build environment image: the same
-#                  environment `mcuhome device build` compiles a device
-#                  in, which is the point of having one. Everything
-#                  scripts/test.d/twister cannot do for itself — logging
-#                  in to ghcr.io, pulling the image, restoring the
-#                  west-workspace cache, `west init`/`west update` —
-#                  stays a preparation step in this job; see that
-#                  wrapper's head comment for what it checks once handed
-#                  a prepared workspace.
+#
+# The twister wrapper's job is NOT here, and the skip declaration below
+# says where it is. It compiles the Zephyr suites in the build environment
+# this commit produces — the workspace and tools packages ci-build.yml's
+# build-packages job builds — and artifacts do not cross a workflow
+# boundary within one run, so the job has to live beside the job that
+# produces them. It is `test-twister` there, under the same name and with
+# the same display name.
+#
+# skip-gate: twister: runs as the test-twister job of ci-build.yml, where the environment packages it compiles in are built
 #
 # --group needs pip >= 25.1; test-pytest upgrades pip in its fresh .venv
 # before using it.
@@ -78,120 +78,3 @@ jobs:
 
       - name: scripts/test pytest
         run: scripts/test pytest -rs
-
-  test-twister:
-    name: Test (twister)
-    needs: check-gates
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # Pull only. A build environment image is published by the release
-      # workflow, out of the two environment packages a release names —
-      # never by a job that merely uses one.
-      packages: read
-    # The one place in this repository that names an image reference. The
-    # environment is `docs/design/build-environment.md`'s package set,
-    # delivered as `<workspace package version>-r<n>`, and which assembly
-    # this repository's own checks run in is a deliberate statement rather
-    # than something derived: `main` is developed against the last
-    # *published* environment, and bumping this repository's version
-    # publishes nothing. Raise it when a newer assembly is published and
-    # the tests should move to it.
-    env:
-      BUILD_ENVIRONMENT_IMAGE: ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1
-    steps:
-      # The checkout goes one level down: this repository is the west
-      # manifest repository of a T2 workspace, and the workspace top
-      # directory (GITHUB_WORKSPACE, here) must not be a git repository.
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: mcuhome-sdk
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      - name: Create .venv
-        run: |
-          cd mcuhome-sdk
-          python -m venv .venv
-          .venv/bin/pip install --disable-pip-version-check -U pip
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Pulled, never built: this image is an assembly of two *published*
-      # packages, verified against the package registry's signed index by
-      # the release workflow. A copy assembled on this runner would
-      # deliver bytes no index names, so a reference that does not resolve
-      # is a job that fails rather than one that improvises.
-      #
-      # scripts/test.d/twister takes the highest assembly revision present
-      # on the machine, so pulling it here is what tells the wrapper which
-      # one to use.
-      - name: Pull the build environment image
-        run: |
-          docker pull --quiet "$BUILD_ENVIRONMENT_IMAGE" || {
-            echo "::error::$BUILD_ENVIRONMENT_IMAGE is not published — check the reference in this workflow" >&2
-            exit 1
-          }
-
-      # Keyed on west.yml alone: that file is the complete description of
-      # what `west update` produces. Zephyr and the modules are fetched
-      # shallow and narrow, which is what keeps this cache small enough to
-      # be worth having.
-      #
-      # The path list must cover EVERY directory west creates, because a
-      # cache hit skips `west update` entirely: a project the cache did
-      # not carry is then simply absent from the workspace. That is not
-      # hypothetical — mcuboot lands in bootloader/, the original list
-      # stopped at modules/, and the first warm-cache run after the
-      # ota_staging suite appeared failed on a missing
-      # bootutil/bootutil_public.h (flash_img includes it via
-      # CONFIG_IMG_MANAGER). The `west-2` segment versions the path set:
-      # bumping it retires caches saved with the old, incomplete list,
-      # which a key based on west.yml alone would happily restore.
-      - name: Restore the west workspace
-        id: west-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            .west
-            zephyr
-            modules
-            bootloader
-          key: west-2-${{ runner.os }}-${{ hashFiles('mcuhome-sdk/west.yml') }}
-
-      # Without the Matter SDK: every suite in tests/ is CHIP-free by
-      # design (and the reason tests/twister/matter_tables/ tests the
-      # table validator rather than the runtime). Skipping the `matter`
-      # group keeps a multi-gigabyte clone with submodules out of CI.
-      #
-      # The workspace is laid out by the image's own west — the one the
-      # suites are then compiled with — and it is *this checkout's*
-      # west.yml that is realized, never the workspace baked into the
-      # image: a commit that moves a Zephyr pin has to be tested against
-      # what it pins. The environment's tools are not on PATH (its entry
-      # point states them, and that entry point runs a build step rather
-      # than a shell), so west is named by the path the image exports.
-      - name: Initialize the west workspace
-        if: steps.west-cache.outputs.cache-hit != 'true'
-        run: |
-          docker run --rm --user "$(id -u):$(id -g)" \
-            --volume "$PWD:$PWD" --workdir "$PWD" \
-            "$BUILD_ENVIRONMENT_IMAGE" \
-            sh -euc '
-              west="$MCUHOME_BUILD_ENV_TOOLS/venv/bin/west"
-              "$west" init -l mcuhome-sdk
-              "$west" config manifest.group-filter -- -matter
-              "$west" update --narrow -o=--depth=1
-            '
-
-      - name: scripts/test twister
-        run: mcuhome-sdk/scripts/test twister "$PWD"
