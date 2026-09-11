@@ -902,3 +902,219 @@ def test_an_archive_without_a_checksum_is_refused(readiness, tmp_path):
     with pytest.raises(SystemExit) as refusal:
         readiness.write_index(tmp_path)
     assert "vouched for by nothing" in str(refusal.value)
+
+
+# --------------------------------------------------------------------------
+# The release gate: the catalogue under the rule a tag lives by
+# --------------------------------------------------------------------------
+#
+# Only published versions count, and "published" is a GitHub release. The
+# three cases that decide a release are: this line requires something
+# nobody has published (blocked), nothing published sits on top of it (a
+# line start, and a verdict), and both ends of a published range exist
+# (what a release promises).
+
+
+def workspace_release(version="0.1.0", tools="~=0.1.0"):
+    return (
+        release_entry(
+            f"workspace-v{version}",
+            f"mcuhome-build-workspace-{version}.tar.zst",
+            f"mcuhome-build-workspace-{version}.tar.zst.meta.json",
+        ),
+        meta_document(
+            name="mcuhome-build-workspace",
+            version=version,
+            requires={"mcuhome-build-tools": tools} if tools else None,
+        ),
+    )
+
+
+def tools_release(version="0.1.0"):
+    return (
+        release_entry(
+            f"tools-v{version}",
+            f"mcuhome-build-tools_linux-amd64-{version}.tar.zst",
+            f"mcuhome-build-tools_linux-amd64-{version}.tar.zst.meta.json",
+        ),
+        meta_document(name="mcuhome-build-tools", version=version, architecture="linux-amd64"),
+    )
+
+
+def sdk_release(version="0.1.9", workspace="~=0.1.0"):
+    return (
+        release_entry(
+            f"v{version}",
+            f"mcuhome-sdk-{version}.tar.zst",
+            f"mcuhome-sdk-{version}.tar.zst.meta.json",
+        ),
+        meta_document(
+            name="mcuhome-sdk",
+            version=version,
+            requires={"mcuhome-build-workspace": workspace},
+        ),
+    )
+
+
+def world(tmp_path, *made):
+    """A published world: the release inventory and its meta documents."""
+    releases = []
+    for entry, document in made:
+        releases.append(entry)
+        write_meta(tmp_path, entry["tag_name"], f"{entry['tag_name']}.tar.zst.meta.json", document)
+    return releases
+
+
+def gate(readiness, stage, releases, tmp_path):
+    return readiness.build_gate(
+        stage=stage,
+        revision="HEAD",
+        releases=releases,
+        metas=readiness.directory_metas(tmp_path),
+        repository=REPO_ROOT,
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage", "names"),
+    [("sdk", "mcuhome-build-workspace"), ("workspace", "mcuhome-build-tools")],
+)
+def test_a_line_whose_requirement_is_unpublished_is_blocked(readiness, tmp_path, stage, names):
+    """Publishing a package no chain can be resolved through is a dead end."""
+    answer = gate(readiness, stage, [], tmp_path)
+    assert names in answer["blocked"]
+    # The fix is the order the first releases have to go in.
+    assert "Release the" in answer["blocked"]
+    assert answer["combinations"] == []
+
+
+def test_the_tools_line_has_nothing_below_it_and_is_never_blocked(readiness, tmp_path):
+    answer = gate(readiness, "tools", [], tmp_path)
+    assert "blocked" not in answer
+
+
+def test_a_line_start_is_tried_under_this_commit(readiness, tmp_path, declared):
+    """Nothing published accepts it, so only this commit can say anything."""
+    answer = gate(readiness, "tools", [], tmp_path)
+    (combination,) = answer["combinations"]
+    assert combination["tools"] == {"source": "release", "version": declared["tools"]}
+    assert combination["workspace"]["source"] == "checkout"
+    assert combination["sdk"]["source"] == "checkout"
+    assert "nothing for" in answer["verdicts"]["up"]
+
+
+def test_a_workspace_release_takes_the_tools_it_requires(readiness, tmp_path, declared):
+    """Published below, this commit's above — the chain a line start has."""
+    releases = world(tmp_path, tools_release())
+    answer = gate(readiness, "workspace", releases, tmp_path)
+    (combination,) = answer["combinations"]
+    assert combination["workspace"] == {"source": "release", "version": declared["workspace"]}
+    assert combination["tools"] == {
+        "source": "published",
+        "version": "0.1.0",
+        "tag": "tools-v0.1.0",
+    }
+    assert combination["sdk"]["source"] == "checkout"
+    assert answer["verify"]["mode"] == "pushed-image"
+
+
+def test_an_sdk_release_is_tried_against_the_published_range(readiness, tmp_path, declared):
+    releases = world(tmp_path, tools_release(), workspace_release())
+    answer = gate(readiness, "sdk", releases, tmp_path)
+    (combination,) = answer["combinations"]
+    assert combination["sdk"] == {"source": "release", "version": declared["sdk"]}
+    assert combination["workspace"]["source"] == "published"
+    assert combination["tools"]["source"] == "published"
+    # The image an SDK release is verified in is the one of the workspace it
+    # resolves to, and it may not exist yet.
+    assert answer["verify"] == {
+        "mode": "published-image",
+        "combination": combination["id"],
+        "workspace_version": "0.1.0",
+    }
+
+
+def test_a_published_workspace_with_unpublished_tools_blocks_an_sdk_release(readiness, tmp_path):
+    """The chain has to hold end to end, not only at the first link."""
+    releases = world(tmp_path, workspace_release())
+    answer = gate(readiness, "sdk", releases, tmp_path)
+    assert "resolves to" in answer["blocked"]
+    assert "mcuhome-build-tools" in answer["blocked"]
+
+
+def test_the_gate_carries_only_the_line_being_released(readiness, tmp_path):
+    releases = world(tmp_path, tools_release(), workspace_release())
+    answer = gate(readiness, "sdk", releases, tmp_path)
+    # The SDK has no stage above it, so one direction and one only.
+    assert set(answer["catalogue"]) == {"down"}
+    assert set(answer["verdicts"]) == {"down"}
+
+
+def test_both_ends_of_a_published_range_are_tried(readiness, tmp_path):
+    releases = world(
+        tmp_path, tools_release(), workspace_release("0.1.0"), workspace_release("0.1.9")
+    )
+    answer = gate(readiness, "sdk", releases, tmp_path)
+    tried = sorted(one["workspace"]["version"] for one in answer["combinations"])
+    assert tried == ["0.1.0", "0.1.9"]
+    # A release promises the whole range, so the image worth verifying is
+    # the one a user actually resolves to: the newest.
+    assert answer["verify"]["workspace_version"] == "0.1.9"
+
+
+def test_a_tools_release_is_verified_by_an_image_revision_and_says_so(readiness, tmp_path):
+    answer = gate(readiness, "tools", [], tmp_path)
+    assert answer["verify"]["mode"] == "skip"
+    assert "revision dispatch" in answer["verify"]["reason"]
+
+
+# --------------------------------------------------------------------------
+# image-packages: what an image of one workspace release delivers
+# --------------------------------------------------------------------------
+
+
+def test_an_image_delivers_the_newest_tools_the_workspace_accepts(release, readiness, tmp_path):
+    releases = world(tmp_path, tools_release("0.1.0"), tools_release("0.1.4"), sdk_release())
+    answer = release.image_packages(
+        workspace_meta=meta_document(
+            name="mcuhome-build-workspace",
+            version="0.1.0",
+            requires={"mcuhome-build-tools": "~=0.1.0"},
+        ),
+        releases=releases,
+        metas=readiness.directory_metas(tmp_path),
+    )
+    assert answer["tools_tag"] == "tools-v0.1.4"
+    assert answer["workspace_version"] == "0.1.0"
+    # The SDK is not part of the image; it is what the verification
+    # afterwards compiles.
+    assert answer["sdk_tag"] == "v0.1.9"
+
+
+def test_an_image_whose_tools_are_unpublished_is_refused(release, readiness, tmp_path):
+    releases = world(tmp_path, tools_release("0.9.0"))
+    with pytest.raises(SystemExit, match="no published version satisfies it"):
+        release.image_packages(
+            workspace_meta=meta_document(
+                name="mcuhome-build-workspace",
+                version="0.1.0",
+                requires={"mcuhome-build-tools": "~=0.1.0"},
+            ),
+            releases=releases,
+            metas=readiness.directory_metas(tmp_path),
+        )
+
+
+def test_a_workspace_no_sdk_accepts_has_no_sdk_to_verify_with(release, readiness, tmp_path):
+    releases = world(tmp_path, tools_release("0.1.0"), sdk_release(workspace="~=0.9.0"))
+    answer = release.image_packages(
+        workspace_meta=meta_document(
+            name="mcuhome-build-workspace",
+            version="0.1.0",
+            requires={"mcuhome-build-tools": "~=0.1.0"},
+        ),
+        releases=releases,
+        metas=readiness.directory_metas(tmp_path),
+    )
+    assert answer["sdk_tag"] == ""
+    assert answer["tools_tag"] == "tools-v0.1.0"

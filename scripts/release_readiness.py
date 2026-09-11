@@ -99,11 +99,13 @@ __all__ = [
     "Published",
     "Stage",
     "accepts",
+    "build_gate",
     "build_plan",
     "check_versions",
     "constraint_on",
     "directory_metas",
     "published_of",
+    "resolvable",
     "summarize",
     "write_index",
 ]
@@ -662,6 +664,33 @@ class _Combinations:
         return candidate
 
 
+def resolvable(
+    inventory: dict[str, list[Published]], metas: MetaSource
+) -> dict[str, list[Published]]:
+    """The published versions anything may resolve to, with their meta read.
+
+    A version whose release carries no ``<archive>.meta.json`` says nothing
+    about what it requires, so no chain can be resolved through it — the
+    workbench refuses such a version as a candidate and this module answers
+    the same way. Reading the documents is one download per version, which
+    is why it happens here rather than in the inventory.
+    """
+    return {
+        stage: [
+            Published(
+                stage=one.stage,
+                version=one.version,
+                tag=one.tag,
+                assets=one.assets,
+                meta=(metas(one) or [None])[0],
+            )
+            for one in entries
+            if one.has_meta
+        ]
+        for stage, entries in inventory.items()
+    }
+
+
 def _ends(entries: list[Published]) -> list[tuple[Published, str]]:
     """The lowest and the highest of *entries*, each with what it is."""
     if not entries:
@@ -713,20 +742,7 @@ def build_plan(
     }
     here = {stage: Stage("checkout", version) for stage, version in declared.items()}
     inventory = {stage: published_of(stage, releases) for stage in release_lines.STAGES}
-    candidates = {
-        stage: [
-            Published(
-                stage=one.stage,
-                version=one.version,
-                tag=one.tag,
-                assets=one.assets,
-                meta=(metas(one) or [None])[0],
-            )
-            for one in entries
-            if one.has_meta
-        ]
-        for stage, entries in inventory.items()
-    }
+    candidates = resolvable(inventory, metas)
     published_by_version = {
         stage: {one.version: one for one in entries} for stage, entries in candidates.items()
     }
@@ -969,6 +985,277 @@ def _upward(
             f"and this commit's own constraint {own!r} does not either."
         )
     return rows, verdict
+
+
+# --------------------------------------------------------------------------
+# gate: what a tag has to pass before anything is published
+# --------------------------------------------------------------------------
+#
+# The catalogue above, under the rule a tag lives by — only published
+# versions count — with three things a tag needs and a push does not:
+#
+#   1. the tagged line's own package is the one being RELEASED. It is still
+#      built from this commit, but at the version the tag names and with no
+#      local suffix, and it is what gets uploaded. The combinations say so,
+#      because the firmware jobs and the publish job read them.
+#   2. a line whose own requirement nothing published satisfies is BLOCKED.
+#      Publishing a package no chain can be resolved through is publishing
+#      a dead end, and the verdict already says which line to release
+#      first.
+#   3. a line that nothing published sits ON TOP of is a line start, not a
+#      failure. The first build workspace package exists before any SDK
+#      asks for it, so it is tried under the SDK of this commit and the
+#      verdict says that no release uses it yet.
+#
+# Only the tagged stage's half of the catalogue travels: the other two
+# lines' rows are about a release nobody is cutting, and building firmware
+# for them would be runner time spent on somebody else's question.
+
+
+def _newest_accepting(candidates: list[Published], family: str, version: str) -> Published | None:
+    """The newest published package whose own constraint admits *version*."""
+    return next(
+        (
+            one
+            for one in reversed(candidates)
+            if accepts(constraint_on(one.requires(), family), version)
+        ),
+        None,
+    )
+
+
+def _below(
+    *,
+    stage: str,
+    declared: dict[str, str],
+    environment: dict,
+    candidates: dict[str, list[Published]],
+) -> tuple[dict[str, dict], str]:
+    """Every stage under the tagged one, resolved the way a user resolves it.
+
+    Down the chain, newest published satisfying each constraint — the
+    answer a workbench gives. A missing link is what BLOCKS a release:
+    publishing a package whose own requirement nothing published satisfies
+    is publishing a dead end, and it is far better to learn that before the
+    archives exist than from the first person who tries to build with it.
+    """
+    stages: dict[str, dict] = {}
+    owner = stage
+    requires = release_lines.requires_of(environment, stage)
+    owner_version = declared[stage]
+    while owner in NEXT_STAGE:
+        lower = NEXT_STAGE[owner]
+        constraint = constraint_on(requires, FAMILY[lower])
+        satisfying = [one for one in candidates[lower] if accepts(constraint, one.version)]
+        if not satisfying:
+            where = (
+                ""
+                if owner == stage
+                else f"{FAMILY[owner]} {owner_version} is what this release resolves to, and "
+            )
+            return stages, (
+                f"{where}{FAMILY[owner]} {owner_version} requires {FAMILY[lower]} "
+                f"{constraint!r}, and nothing published satisfies it.\n"
+                f"{FAMILY[stage]} {declared[stage]} cannot be released: a package no chain can "
+                f"be resolved through is a dead end.\n"
+                f"Release the {FAMILY[lower]} line first — tag {TAG_PREFIX[lower]}<version> "
+                "with a version that constraint admits — and cut this one afterwards."
+            )
+        newest = satisfying[-1]
+        stages[lower] = {"source": "published", "version": newest.version, "tag": newest.tag}
+        owner, requires, owner_version = lower, newest.requires(), newest.version
+    return stages, ""
+
+
+def _above(
+    *, stage: str, declared: dict[str, str], candidates: dict[str, list[Published]]
+) -> tuple[dict[str, dict], list[str]]:
+    """Every stage over the tagged one: published where one takes it, else this commit.
+
+    A line starts somewhere. The first build workspace package exists before
+    any SDK asks for it, so "nothing published accepts this" is a verdict
+    and not a failure — but it has to be said, because it means the release
+    above has to follow.
+    """
+    stages: dict[str, dict] = {}
+    notes: list[str] = []
+    lower, lower_version = stage, declared[stage]
+    while lower in STAGE_ABOVE:
+        upper = STAGE_ABOVE[lower]
+        newest = _newest_accepting(candidates[upper], FAMILY[lower], lower_version)
+        if newest is None:
+            stages[upper] = {"source": "checkout", "version": declared[upper]}
+            notes.append(
+                f"no published {FAMILY[upper]} accepts {FAMILY[lower]} {lower_version} — "
+                "this commit's is used"
+            )
+            lower, lower_version = upper, declared[upper]
+            continue
+        stages[upper] = {"source": "published", "version": newest.version, "tag": newest.tag}
+        lower, lower_version = upper, newest.version
+    return stages, notes
+
+
+def build_gate(
+    *,
+    stage: str,
+    revision: str,
+    releases: list[dict],
+    metas: MetaSource,
+    repository: Path = REPO_ROOT,
+) -> dict:
+    """What a tag of *stage* has to pass, as the document the workflow reads.
+
+    The catalogue is the one every push writes, under the rule a tag lives
+    by — only published versions count — trimmed to the line being released:
+    the other two lines' rows are about a release nobody is cutting, and
+    building firmware for them would be runner time spent on somebody else's
+    question. Three things a tag needs and a push does not are added.
+
+    **The tagged line's package is the one being RELEASED.** It is still
+    built from this commit, but at the version the tag names and with no
+    local suffix, and it is what gets uploaded — so the combinations say
+    ``release`` rather than ``checkout`` for it, and the publish job names
+    its assets from that.
+
+    **A line whose own requirement nothing published satisfies is BLOCKED**,
+    before anything is built (:func:`_below`).
+
+    **A line nothing published sits on top of is a line start**, not a
+    failure: where the catalogue's published-only rows leave nothing to
+    build at all, one combination is assembled out of the chain around this
+    release — published below, this commit's above — and the verdict says
+    that no release uses it yet.
+    """
+    environment = release_lines.environment(repository, revision)
+    declared = {one: release_lines.version_of(environment, one) for one in release_lines.STAGES}
+    candidates = resolvable(
+        {one: published_of(one, releases) for one in release_lines.STAGES}, metas
+    )
+    below, refusal = _below(
+        stage=stage, declared=declared, environment=environment, candidates=candidates
+    )
+    if refusal:
+        return {
+            "declared": declared,
+            "catalogue": {},
+            "verdicts": {},
+            "combinations": [],
+            "blocked": refusal,
+        }
+
+    plan = build_plan(
+        revision=revision,
+        releases=releases,
+        metas=metas,
+        repository=repository,
+        published_only=True,
+    )
+    document = plan.document()
+    by_id = {one["id"]: one for one in document["combinations"]}
+    catalogue: dict[str, list[dict]] = {}
+    wanted: list[dict] = []
+    for direction, rows in plan.catalogue.get(stage, {}).items():
+        catalogue[direction] = [row.document() for row in rows]
+        for row in rows:
+            if row.combination and by_id[row.combination] not in wanted:
+                wanted.append(by_id[row.combination])
+
+    if not wanted:
+        combination, row = _chain(
+            stage=stage, declared=declared, below=below, candidates=candidates
+        )
+        wanted.append(combination)
+        for direction in catalogue or {"up": []}:
+            catalogue.setdefault(direction, []).append(row)
+
+    for combination in wanted:
+        if combination[stage]["source"] == "checkout":
+            combination[stage]["source"] = "release"
+
+    return {
+        "declared": declared,
+        "catalogue": catalogue,
+        "verdicts": plan.verdicts.get(stage, {}),
+        "combinations": wanted,
+        "verify": _verify(stage=stage, catalogue=catalogue, combinations=wanted),
+    }
+
+
+def _chain(
+    *,
+    stage: str,
+    declared: dict[str, str],
+    below: dict[str, dict],
+    candidates: dict[str, list[Published]],
+) -> tuple[dict, dict]:
+    """The one combination a release is tried in when nothing published can.
+
+    Built here rather than by the planner because the planner's tag-time
+    rule is exactly that this triple does not count — and for the line being
+    released it is the only thing that can say anything at all.
+    """
+    above, notes = _above(stage=stage, declared=declared, candidates=candidates)
+    stages = {
+        **{one: {"source": "checkout", "version": declared[one]} for one in release_lines.STAGES},
+        **below,
+        **above,
+        stage: {"source": "release", "version": declared[stage]},
+    }
+    combination = {
+        "id": "line-start",
+        "label": " + ".join(
+            f"{FAMILY[one]} {stages[one]['version']}"
+            + ("" if stages[one]["source"] == "published" else " (this commit)")
+            for one in release_lines.STAGES
+        ),
+        "required": True,
+        "reason": "",
+        **stages,
+    }
+    upper = STAGE_ABOVE.get(stage)
+    row = {
+        "role": f"the {FAMILY[upper]} of this commit" if upper else "the chain of this commit",
+        "subject": (
+            f"{FAMILY[upper]} {declared[upper]} (this commit)" if upper else combination["label"]
+        ),
+        "combination": "line-start",
+        "required": True,
+        "note": "; ".join(notes),
+    }
+    return combination, row
+
+
+def _verify(*, stage: str, catalogue: dict[str, list[dict]], combinations: list[dict]) -> dict:
+    """Which image the release is verified in, once it is published.
+
+    The chain a user would resolve is the newest of everything, so the last
+    row of the direction that decides this line is the one worth verifying:
+    for an SDK release the highest published build workspace it admits, for
+    a build workspace release the newest published SDK that takes it.
+    """
+    direction = "down" if stage == "sdk" else "up"
+    last = next((row for row in reversed(catalogue.get(direction, [])) if row["combination"]), None)
+    chosen = last["combination"] if last else (combinations[-1]["id"] if combinations else "")
+    if stage == "workspace":
+        return {"mode": "pushed-image", "combination": chosen}
+    if stage == "sdk":
+        found = next((one for one in combinations if one["id"] == chosen), None)
+        return {
+            "mode": "published-image",
+            "combination": chosen,
+            "workspace_version": found["workspace"]["version"] if found else "",
+        }
+    return {
+        "mode": "skip",
+        "combination": chosen,
+        "reason": (
+            "a build-environment image delivers a build workspace package and the build tools "
+            "that package accepts, and no published image can declare tools that did not exist "
+            "when it was assembled. Take them into an image with the revision dispatch "
+            "(workspace_version + revision) — that run verifies the result."
+        ),
+    }
 
 
 # --------------------------------------------------------------------------

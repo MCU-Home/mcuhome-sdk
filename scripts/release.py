@@ -1,305 +1,520 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Cut a release: version, optional changelog, gates, commit, tag — and stop there.
+"""The release act: what a tag is about, what it has to pass, what it publishes.
 
-Nobody remembers a release procedure, and the parts of one that are
-remembered wrongly are the expensive parts. This script is the whole
-local half of it, and it is **deliberately repository-agnostic**: what
-differs between MCUHome's repositories is a small block in
-``pyproject.toml``, not this file, so the same script serves the SDK
-today and `mcuhome`, `cli` and `build-server` when they publish.
+This repository cuts **three release lines out of one history** — the SDK
+package, the build workspace package and the build tools packages — and
+each of them carries a version of its own, declared in
+``packaging/build-environment/environment.json``. A tag says which line it
+releases by its prefix:
 
-```toml
-[tool.mcuhome-release]
-version_files = ["mcuhome/model/__init__.py"]   # every place the number is written
-changelog     = "CHANGELOG.md"                  # optional — omit where no changelog is kept
-tag_prefix    = "v"
-branch        = "main"
-gates         = ["{python} -m ruff check .", "{python} -m pytest -q tests/python"]
-next_steps    = ["git push && git push origin {tag}", "…"]
-```
+===================== =======================================
+``v<version>``        the SDK package
+``workspace-v…``      the build workspace package
+``tools-v…``          the build tools packages, one per platform
+===================== =======================================
 
-``changelog`` is optional: a repository that keeps no changelog simply
-omits the key, and the release runs with no changelog step at all — no
-file is read, written or required. Naming a ``changelog`` keeps today's
-behaviour exactly: the file must exist and its ``## [Unreleased]``
-section must be non-empty, or the release is refused before anything is
-written.
+Three questions follow from that, and this module answers them for
+``.github/workflows/release.yml``:
 
-**It stops before pushing, on purpose.** Everything up to the tag is
-local and reversible (`git reset`, `git tag -d`); the push is the moment
-a release becomes other people's problem, so it stays a decision someone
-makes rather than a side effect of running a script.
+``check-tag``
+    Which line is this, and does the version it names match what the
+    tagged commit declares for that line? The archives are named after the
+    version in the **commit**, never after the tag, so a tag on an unbumped
+    commit would publish bytes under a number that means something else —
+    and a published version is immutable and eternal. Checked before
+    anything is built.
 
-Two guards matter more than the convenience:
+``gate``
+    What has to be built and to pass before anything is published. The
+    catalogue is the one ``scripts/release_readiness.py`` writes per commit,
+    under the rule a tag lives by: **only published versions count**, where
+    published means a GitHub release of this repository and never a package
+    registry. The tagged line's own package is built in this run at its
+    real version; the stages around it are published releases; and where
+    the line below has nothing published that satisfies what this one
+    requires, the release is blocked rather than tested against something
+    nobody could resolve to.
 
-- **The tag must name the version the commit declares.** The SDK archive
-  is named after ``__version__`` *as the tagged commit carries it*, not
-  after the tag, so a tag on an unbumped commit yields a package whose
-  name disagrees with the release it hangs on. ``--check-tag`` is that
-  same check with no dependencies, so CI runs it before building
-  anything.
-- **A version only ever moves forward.** Published versions are
-  immutable and eternal; a re-used or lowered number is refused here
-  rather than discovered at the package host.
+``assets``
+    Exactly the files the release publishes, out of the directory they were
+    built into — so what is uploaded is the set that was tested, and
+    nothing else travels with it.
+
+``image-packages``
+    The chain around one build workspace package: the newest published
+    build tools its own meta file accepts — which is what an image of that
+    package delivers — and the newest published SDK that accepts the
+    workspace, which is what a verification afterwards compiles.
+
+**What this module is not.** It cuts nothing, commits nothing and tags
+nothing: a tag is a deliberate act, made by hand, and the whole procedure
+around it is ``RELEASING.md``. Everything here answers questions about a
+tag that already exists.
 
 Usage::
 
-    release.py <version> [--dry-run]
-    release.py --check-tag <tag>      # what CI runs; stdlib only
+    release.py check-tag <tag> [--revision <rev>]
+    release.py gate <tag> --output gate.json [--releases F] [--metas D]
+    release.py assets <stage> --version <version> --directory <dir>
+    release.py image-packages (--workspace-meta F | --workspace-version V)
+
+Exit status: 0 when the answer is yes, 1 when it is a refusal — a tag that
+names the wrong version, a blocked release, a missing asset — and 2 on a
+usage error.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
-import shlex
+import hashlib
+import json
+import shutil
 import subprocess
 import sys
-import tomllib
-from dataclasses import dataclass, field
-from datetime import date
+import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import release_lines  # noqa: E402 - repo-relative import, needs the path above
+import release_readiness  # noqa: E402 - same
+
+__all__ = [
+    "PLATFORMS",
+    "artifact_name",
+    "check_tag",
+    "digest_of",
+    "gate_packages",
+    "image_packages",
+    "line_of",
+    "release_assets",
+]
+
+#: This repository, seen from ``scripts/``.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: The two spellings a version assignment takes in these repositories:
-#: ``__version__`` in the package, ``version`` in a static project table.
-ASSIGNMENT = re.compile(r"^(__version__|version)(\s*=\s*)([\"'])(?P<value>[^\"']+)\3", re.MULTILINE)
+#: The platforms the tools line publishes a package for. Everything that
+#: builds firmware is built on both of them, so every release needs both.
+PLATFORMS = ("linux-amd64", "linux-arm64")
 
-UNRELEASED = "## [Unreleased]"
-
-
-class Refused(SystemExit):
-    """A refusal with the reason on the way out — never a traceback."""
-
-    def __init__(self, message: str, hint: str = "") -> None:
-        super().__init__(f"{message}\n{hint}" if hint else message)
-
-
-@dataclass(frozen=True)
-class Config:
-    """The per-repository half of a release."""
-
-    version_files: list[Path]
-    changelog: Path | None
-    tag_prefix: str = "v"
-    branch: str = "main"
-    gates: list[str] = field(default_factory=list)
-    next_steps: list[str] = field(default_factory=list)
+#: The runner label a platform's package is built on. It is workflow
+#: knowledge and it is stated here because a *computed* package matrix has
+#: to carry it: a GitHub matrix cannot map one of its own values onto
+#: another. ``None`` is the architecture-neutral stages, which run anywhere.
+RUNNER_FOR_PLATFORM = {
+    None: "ubuntu-latest",
+    "linux-amd64": "ubuntu-latest",
+    "linux-arm64": "ubuntu-24.04-arm",
+}
 
 
-def load_config(root: Path) -> Config:
-    project = root / "pyproject.toml"
-    if not project.is_file():
-        raise Refused(f"{project} is missing — this is not a release-able repository")
-    table = tomllib.loads(project.read_text(encoding="utf-8")).get("tool", {})
-    block = table.get("mcuhome-release")
-    if not isinstance(block, dict):
-        raise Refused(
-            "pyproject.toml declares no [tool.mcuhome-release] block.",
-            "That block is what makes this script repository-agnostic; see its docstring.",
-        )
-    files = [root / name for name in block.get("version_files", [])]
-    if not files:
-        raise Refused("[tool.mcuhome-release] names no version_files")
-    changelog = block.get("changelog")
-    return Config(
-        version_files=files,
-        changelog=root / changelog if changelog is not None else None,
-        tag_prefix=block.get("tag_prefix", "v"),
-        branch=block.get("branch", "main"),
-        gates=list(block.get("gates", [])),
-        next_steps=list(block.get("next_steps", [])),
-    )
+def _gh(*arguments: str) -> str:
+    """One ``gh`` call, its stdout, and no shell."""
+    completed = subprocess.run(["gh", *arguments], check=True, stdout=subprocess.PIPE, text=True)
+    return completed.stdout
 
 
-def declared_version(path: Path) -> str:
-    """The version *path* writes down, or a refusal naming the file."""
-    if not path.is_file():
-        raise Refused(f"{path} is missing, but [tool.mcuhome-release] lists it")
-    found = ASSIGNMENT.findall(path.read_text(encoding="utf-8"))
-    if len(found) != 1:
-        raise Refused(
-            f"{path} holds {len(found)} version assignments, expected exactly one",
-            "A version has one place per file — otherwise a bump can half-apply.",
-        )
-    return found[0][3]
+def artifact_name(stage: str, platform: str | None) -> str:
+    """The artifact one package build uploads, per stage and platform.
+
+    One name in one place: the firmware, publish and image jobs download it
+    back by exactly this name, and ``ci-build.yml`` writes the same one for
+    its per-commit packages.
+    """
+    return f"packages-{stage}" + (f"-{platform}" if platform else "")
 
 
-def set_version(path: Path, old: str, new: str) -> None:
-    """Rewrite the one version assignment in *path*, or refuse."""
-    text = path.read_text(encoding="utf-8")
-    rewritten, count = ASSIGNMENT.subn(
-        lambda match: match.group(0).replace(f"{match.group('value')}", new), text, count=1
-    )
-    if count != 1 or declared_version(path) != old:
-        raise Refused(f"{path}: could not rewrite the version assignment")
-    path.write_text(rewritten, encoding="utf-8")
+# --------------------------------------------------------------------------
+# check-tag: which line a tag releases
+# --------------------------------------------------------------------------
 
 
-def update_changelog(path: Path, version: str, when: date) -> None:
-    """Move everything under ``## [Unreleased]`` into a dated section for *version*."""
-    if not path.is_file():
-        raise Refused(f"{path} is missing")
-    text = path.read_text(encoding="utf-8")
-    start = text.find(UNRELEASED)
-    if start < 0:
-        raise Refused(f"{path} has no '{UNRELEASED}' section")
-    body_from = start + len(UNRELEASED)
-    following = text.find("\n## ", body_from)
-    body_to = len(text) if following < 0 else following + 1
-    body = text[body_from:body_to]
-    if not body.strip():
-        raise Refused(
-            f"{path}: the Unreleased section is empty",
-            "A release with nothing to say about it is a defect, not a release.",
-        )
-    entries = body.lstrip("\n")
-    section = f"{UNRELEASED}\n\n## [{version}] - {when.isoformat()}\n\n{entries}"
-    path.write_text(text[:start] + section + text[body_to:], encoding="utf-8")
+def line_of(tag: str) -> tuple[str, str]:
+    """``(stage, version)`` for *tag*, or a refusal naming the three shapes.
 
-
-def git(*arguments: str, root: Path = REPO_ROOT, check: bool = True) -> str:
-    done = subprocess.run(
-        ["git", "-C", str(root), *arguments],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if check and done.returncode:
-        raise Refused(f"git {' '.join(arguments)} failed:\n{done.stderr.strip()}")
-    return done.stdout.strip()
-
-
-def check_working_state(config: Config, tag: str, root: Path) -> None:
-    """Everything that must be true before a release is even attempted."""
-    if git("status", "--porcelain", root=root):
-        raise Refused(
-            "The working tree has uncommitted changes.",
-            "A release describes a commit; commit or stash first.",
-        )
-    branch = git("rev-parse", "--abbrev-ref", "HEAD", root=root)
-    if branch != config.branch:
-        raise Refused(f"On branch {branch}, but releases are cut from {config.branch}.")
-    if git("tag", "--list", tag, root=root):
-        raise Refused(
-            f"The tag {tag} already exists.",
-            "A version is published once and never replaced — use the next number.",
-        )
-    git("fetch", "--quiet", "origin", root=root)
-    remote = git("rev-parse", f"origin/{config.branch}", root=root, check=False)
-    if remote and git("rev-parse", "HEAD", root=root) != remote:
-        raise Refused(
-            f"HEAD and origin/{config.branch} differ.",
-            "Pull or push first — a release must be reproducible from what others can see.",
-        )
-
-
-def check_version(new: str, old: str) -> None:
+    Three lines share one repository, so the prefix is the only thing that
+    says which of them a tag is about. The longest matching prefix wins —
+    ``workspace-v`` and ``tools-v`` do not start with ``v``, so there is
+    nothing ambiguous today, and the rule stays right if a future prefix
+    ever is.
+    """
     from packaging.version import InvalidVersion, Version
 
-    try:
-        candidate = Version(new)
-    except InvalidVersion as broken:
-        raise Refused(f"{new!r} is not a PEP 440 version") from broken
-    if candidate < Version(old):
-        raise Refused(
-            f"{new} comes before the declared {old}.",
-            "Versions only move forward: what is published is permanent.",
-        )
-    # Equal is allowed on purpose: a version the tree declares but that
-    # was never released — the first release of all, or a number bumped
-    # in an earlier commit — is a legitimate thing to cut. What must
-    # never happen twice is *publishing* one, and that is what the tag
-    # check below and the package host's duplicate refusal are for.
+    prefixes = sorted(
+        release_readiness.TAG_PREFIX.items(), key=lambda item: len(item[1]), reverse=True
+    )
+    for stage, prefix in prefixes:
+        if not tag.startswith(prefix):
+            continue
+        version = tag[len(prefix) :]
+        try:
+            Version(version)
+        except InvalidVersion:
+            break
+        return stage, version
+    raise SystemExit(
+        f"{tag!r} names no release line of this repository.\n"
+        "A tag releases exactly one of them, and says which by its prefix:\n"
+        "  v<version>            the SDK package\n"
+        "  workspace-v<version>  the build workspace package\n"
+        "  tools-v<version>      the build tools packages\n"
+        "The version part is a PEP 440 version."
+    )
 
 
-def run_gates(config: Config, root: Path) -> None:
-    for gate in config.gates:
-        command = shlex.split(gate.format(python=sys.executable))
-        print(f"→ {' '.join(command)}")
-        if subprocess.run(command, cwd=root, check=False).returncode:
-            raise Refused(
-                "A gate failed — releasing anyway is how a broken release happens.",
-                "Fix it, commit, and run this again.",
-            )
+def check_tag(*, tag: str, revision: str = "HEAD", repository: Path = REPO_ROOT, out=None) -> int:
+    """Hold *tag* against the version its line declares at *revision*.
 
-
-def check_tag(tag: str, root: Path = REPO_ROOT) -> int:
-    """Whether *tag* names the version the tree declares. Stdlib only, for CI.
-
-    The archive is named after the version the *commit* carries, so a tag
-    that says something else produces a package whose name contradicts
-    the release it is attached to. Cheap to check, silent and expensive
-    to miss.
+    Prints ``key=value`` lines, which is what a workflow appends to its job
+    outputs; a disagreement is a refusal with the fix in it.
     """
-    config = load_config(root)
-    version = declared_version(config.version_files[0])
-    expected = f"{config.tag_prefix}{version}"
-    if tag != expected:
-        print(
-            f"REFUSED  the tag is {tag}, but {config.version_files[0].name} declares "
-            f"{version} — expected {expected}.\n"
-            "         Bump the version first, then tag: the archive is named after the "
-            "version in the commit, never after the tag.",
-            file=sys.stderr,
+    out = sys.stdout if out is None else out
+    stage, version = line_of(tag)
+    declared = release_lines.version_of(release_lines.environment(repository, revision), stage)
+    if version != declared:
+        raise SystemExit(
+            f"{tag} would release the {stage} line as {version}, and "
+            f"{release_lines.ENVIRONMENT_FILE} at this commit declares {stage}.version "
+            f"{declared}.\n"
+            "Bump the version first and tag the commit that carries it: the packages are "
+            "named after the version in the commit, never after the tag."
         )
-        return 1
-    print(f"OK  {tag} matches the declared version {version}")
+    print(f"stage={stage}", file=out)
+    print(f"version={version}", file=out)
+    print(f"tag={tag}", file=out)
+    print(f"family={release_readiness.FAMILY[stage]}", file=out)
     return 0
+
+
+# --------------------------------------------------------------------------
+# assets: exactly what a release of one line publishes
+# --------------------------------------------------------------------------
+
+
+def release_assets(directory: Path, *, stage: str, version: str) -> list[Path]:
+    """The files a release of *stage* uploads, checked against *directory*.
+
+    Exactly three per package — the archive, its ``.sha256`` and its
+    ``.meta.json`` — because that is what the package host's publish
+    pipeline reads: it refuses a package whose checksum sidecar is absent
+    and, for these sources, one whose meta file is. Nothing else may
+    travel. An ``index.json`` belongs to a *source* and a source is signed
+    over there, and an archive in this directory that the tag is not about
+    means the run built something it is not releasing.
+
+    The tools line publishes one package per platform and both have to be
+    on the one release: the family's meta entry is recorded only once every
+    member exists at its version.
+    """
+    names = (
+        [
+            f"{release_readiness.FAMILY[stage]}_{platform}-{version}.tar.zst"
+            for platform in PLATFORMS
+        ]
+        if stage == "tools"
+        else [f"{release_readiness.FAMILY[stage]}-{version}.tar.zst"]
+    )
+    wanted: list[Path] = []
+    for name in names:
+        for asset in (name, f"{name}.sha256", f"{name}{release_lines.META_SUFFIX}"):
+            path = directory / asset
+            if not path.is_file():
+                raise SystemExit(
+                    f"{directory}/{asset} is missing, and a release of the {stage} line "
+                    "publishes it.\nA package travels as three files: the archive, its "
+                    "checksum and its meta file."
+                )
+            wanted.append(path)
+    strays = sorted(path.name for path in directory.glob("*.tar.zst") if path.name not in names)
+    if strays:
+        raise SystemExit(
+            f"{directory} holds archives this release does not publish: "
+            f"{', '.join(strays)}.\nA tag releases one line, and "
+            f"{release_readiness.TAG_PREFIX[stage]}{version} is about "
+            f"{', '.join(names)}."
+        )
+    return wanted
+
+
+# --------------------------------------------------------------------------
+# The package matrix a gate run has to build
+# --------------------------------------------------------------------------
+
+
+def gate_packages(combinations: list[dict]) -> list[dict]:
+    """Which packages this run builds, read off the combinations it will try.
+
+    Every stage a combination takes from this commit is built here: the
+    tagged line at the version the tag names and with **no** local suffix —
+    those are the bytes that get published — and any stand-in for a line
+    that has nothing published, under a local version no package host will
+    accept. The tools stage is always built for both platforms, because the
+    firmware is built on both and each host needs its own.
+    """
+    wanted: dict[str, str] = {}
+    for combination in combinations:
+        for stage in release_lines.STAGES:
+            source = (combination.get(stage) or {}).get("source")
+            if source in ("release", "checkout") and wanted.get(stage) != "release":
+                wanted[stage] = source
+    matrix: list[dict] = []
+    for stage in release_lines.STAGES:
+        if stage not in wanted:
+            continue
+        for platform in PLATFORMS if stage == "tools" else (None,):
+            matrix.append(
+                {
+                    "stage": stage,
+                    "platform": platform or "",
+                    "artifact": artifact_name(stage, platform),
+                    "runner": RUNNER_FOR_PLATFORM[platform],
+                    "release": wanted[stage] == "release",
+                }
+            )
+    return matrix
+
+
+def digest_of(path: Path) -> str:
+    """The sha256 of one file, as the sixty-four hex digits an index records."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+# --------------------------------------------------------------------------
+# image-packages: what an image of one workspace release delivers
+# --------------------------------------------------------------------------
+
+
+def image_packages(
+    *,
+    workspace_meta: dict,
+    releases: list[dict],
+    metas,
+) -> dict[str, str]:
+    """The chain around one build workspace package, for the image jobs.
+
+    An image is an assembly of a workspace package and the build tools that
+    package accepts — never of "the tag's version" for both, because the two
+    lines do not share a cadence. Which tools that is comes out of the
+    workspace package's own meta file: a PEP 440 constraint, resolved to the
+    **newest published** version satisfying it, which is the same answer a
+    workbench provisioning that package gets.
+
+    The SDK above it is resolved the same way and is not part of the image:
+    it is what the verification afterwards compiles, and a workspace release
+    that no published SDK accepts simply has none yet.
+    """
+    package = workspace_meta.get("package") or {}
+    workspace_version = package.get("version")
+    if not isinstance(workspace_version, str):
+        raise SystemExit("the workspace meta file names no version")
+    requires = workspace_meta.get("requires")
+    requires = requires if isinstance(requires, dict) else {}
+    published = {
+        stage: release_readiness.published_of(stage, releases) for stage in ("sdk", "tools")
+    }
+    resolved = release_readiness.resolvable(published, metas)
+
+    constraint = release_readiness.constraint_on(requires, release_readiness.FAMILY["tools"])
+    satisfying = [
+        one for one in resolved["tools"] if release_readiness.accepts(constraint, one.version)
+    ]
+    if not satisfying:
+        raise SystemExit(
+            f"{release_readiness.FAMILY['workspace']} {workspace_version} requires "
+            f"{release_readiness.FAMILY['tools']} {constraint!r}, and no published version "
+            "satisfies it.\nAn image delivers the tools a workspace package accepts, so "
+            "release that line first."
+        )
+    tools = satisfying[-1]
+
+    accepting = [
+        one
+        for one in resolved["sdk"]
+        if release_readiness.accepts(
+            release_readiness.constraint_on(one.requires(), release_readiness.FAMILY["workspace"]),
+            workspace_version,
+        )
+    ]
+    sdk = accepting[-1] if accepting else None
+    return {
+        "workspace_version": workspace_version,
+        "tools_tag": tools.tag,
+        "tools_version": tools.version,
+        "sdk_tag": sdk.tag if sdk else "",
+        "sdk_version": sdk.version if sdk else "",
+    }
+
+
+# --------------------------------------------------------------------------
+# The command line
+# --------------------------------------------------------------------------
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("version", nargs="?", help="the version to release, e.g. 0.1.0")
-    parser.add_argument("--check-tag", help="only check that a tag matches the declared version")
-    parser.add_argument("--dry-run", action="store_true", help="show the changes, then undo them")
-    parser.add_argument("--repo", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--repo", type=Path, default=REPO_ROOT, help="the checkout to read the revision from"
+    )
+    parser.add_argument("--revision", default="HEAD", help="the commit to read (default: HEAD)")
+    parser.add_argument("--releases", type=Path, help="read the release inventory from this file")
+    parser.add_argument(
+        "--metas", type=Path, help="read published meta documents from <dir>/<tag>/ instead"
+    )
+    parser.add_argument(
+        "--repository-slug", help="<owner>/<name> of the repository whose releases decide"
+    )
+    sub = parser.add_subparsers(dest="question", required=True)
+
+    tag_check = sub.add_parser("check-tag", help="which line a tag releases, and its version")
+    tag_check.add_argument("tag")
+
+    gate = sub.add_parser("gate", help="what this tag has to pass before anything is published")
+    gate.add_argument("tag")
+    gate.add_argument("--output", type=Path, required=True, help="where the gate plan is written")
+
+    assets = sub.add_parser("assets", help="exactly the files this release publishes")
+    assets.add_argument("stage", choices=release_lines.STAGES)
+    assets.add_argument("--version", required=True)
+    assets.add_argument("--directory", type=Path, required=True)
+
+    image = sub.add_parser("image-packages", help="the chain around one build workspace package")
+    source = image.add_mutually_exclusive_group(required=True)
+    source.add_argument("--workspace-meta", type=Path, help="the package's meta file, on disk")
+    source.add_argument(
+        "--workspace-version", help="a published version, whose meta file is downloaded"
+    )
+
     arguments = parser.parse_args(argv)
 
-    root = arguments.repo.resolve()
-    if arguments.check_tag:
-        return check_tag(arguments.check_tag, root)
-    if not arguments.version:
-        parser.error("a version is required (or --check-tag)")
+    if arguments.question == "check-tag":
+        return check_tag(tag=arguments.tag, revision=arguments.revision, repository=arguments.repo)
 
-    config = load_config(root)
-    current = declared_version(config.version_files[0])
-    check_version(arguments.version, current)
-    tag = f"{config.tag_prefix}{arguments.version}"
-    check_working_state(config, tag, root)
-    run_gates(config, root)
-
-    touched = [*config.version_files, *([config.changelog] if config.changelog else [])]
-    for path in config.version_files:
-        if declared_version(path) != current:
-            raise Refused(
-                f"{path} declares {declared_version(path)}, "
-                f"{config.version_files[0]} declares {current} — they must agree first"
-            )
-        set_version(path, current, arguments.version)
-    if config.changelog is not None:
-        update_changelog(config.changelog, arguments.version, date.today())
-
-    if arguments.dry_run:
-        print(git("diff", root=root))
-        git("checkout", "--", *[str(path.relative_to(root)) for path in touched], root=root)
-        print("\n(dry run — nothing was committed, the files are back as they were)")
+    if arguments.question == "assets":
+        for path in release_assets(
+            arguments.directory, stage=arguments.stage, version=arguments.version
+        ):
+            print(path)
         return 0
 
-    git("add", *[str(path.relative_to(root)) for path in touched], root=root)
-    git("commit", "-s", "-m", f"chore(release): {arguments.version}", root=root)
-    git("tag", "-a", tag, "-m", f"{root.name} {arguments.version}", root=root)
+    if arguments.question == "image-packages":
+        return _image_packages(arguments)
 
-    print(f"\nReleased {arguments.version} locally: commit + tag {tag}.")
-    print("Nothing has been pushed. Next:\n")
-    for step in config.next_steps:
-        print(f"  {step.format(tag=tag, version=arguments.version)}")
-    print("\nTo undo: git tag -d " + tag + " && git reset --hard HEAD~1")
+    return _gate(arguments)
+
+
+def _published_world(arguments, work: Path):
+    """The release inventory and the meta source every question here reads.
+
+    Both edges are injectable — ``--releases`` and ``--metas`` — so every
+    answer is reproducible without a network, which is what the tests use
+    and what lets a release be rehearsed on a bench.
+    """
+    if arguments.releases is not None:
+        releases = json.loads(arguments.releases.read_text(encoding="utf-8"))
+        if not isinstance(releases, list):
+            raise SystemExit(f"{arguments.releases} is not a list of releases")
+    else:
+        releases = release_readiness.fetch_releases(
+            release_readiness.repository_slug(arguments.repository_slug)
+        )
+    if arguments.metas is not None:
+        metas = release_readiness.directory_metas(arguments.metas)
+    else:
+        metas = release_readiness.download_metas(
+            release_readiness.repository_slug(arguments.repository_slug), work
+        )
+    return releases, metas
+
+
+def _image_packages(arguments) -> int:
+    """``image-packages``: the tools an image delivers and the SDK above it."""
+    work = Path(tempfile.mkdtemp(prefix="mcuhome-release-image-"))
+    try:
+        releases, metas = _published_world(arguments, work)
+        if arguments.workspace_meta is not None:
+            meta = json.loads(arguments.workspace_meta.read_text(encoding="utf-8"))
+        else:
+            meta = _published_workspace_meta(arguments, work)
+        answer = image_packages(workspace_meta=meta, releases=releases, metas=metas)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    for key, value in answer.items():
+        print(f"{key}={value}")
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover
+def _published_workspace_meta(arguments, work: Path) -> dict:
+    """The meta file of a published workspace release, off its release page."""
+    tag = f"{release_readiness.TAG_PREFIX['workspace']}{arguments.workspace_version}"
+    into = work / tag
+    into.mkdir(parents=True, exist_ok=True)
+    _gh(
+        "release",
+        "download",
+        tag,
+        "--repo",
+        release_readiness.repository_slug(arguments.repository_slug),
+        "--pattern",
+        f"*{release_lines.META_SUFFIX}",
+        "--dir",
+        str(into),
+        "--clobber",
+    )
+    found = sorted(into.glob(f"*{release_lines.META_SUFFIX}"))
+    if not found:
+        raise SystemExit(
+            f"{tag} carries no {release_lines.META_SUFFIX} asset, so that release does not "
+            "say what it requires and no image can be assembled from it."
+        )
+    return json.loads(found[0].read_text(encoding="utf-8"))
+
+
+def _gate(arguments) -> int:
+    """``gate``: the catalogue, the package matrix, and what it publishes."""
+    stage, version = line_of(arguments.tag)
+    declared = release_lines.version_of(
+        release_lines.environment(arguments.repo, arguments.revision), stage
+    )
+    if version != declared:
+        raise SystemExit(
+            f"{arguments.tag} would release {version} and this commit declares {declared} — "
+            "run check-tag first."
+        )
+    work = Path(tempfile.mkdtemp(prefix="mcuhome-release-gate-"))
+    try:
+        releases, metas = _published_world(arguments, work)
+        document = release_readiness.build_gate(
+            stage=stage,
+            revision=arguments.revision,
+            releases=releases,
+            metas=metas,
+            repository=arguments.repo,
+        )
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    document["release"] = {
+        "stage": stage,
+        "version": version,
+        "tag": arguments.tag,
+        "family": release_readiness.FAMILY[stage],
+    }
+    document["packages"] = gate_packages(document["combinations"])
+    arguments.output.write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(json.dumps(document, indent=2, sort_keys=True))
+    blocked = document.get("blocked")
+    if blocked:
+        print(f"\n{blocked}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - the command line's entry point
     raise SystemExit(main(sys.argv[1:]))

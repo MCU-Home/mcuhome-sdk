@@ -51,29 +51,6 @@ dev = [
   "pre-commit-hooks==5.0.0",
 ]
 
-# Where `scripts/release.py` finds this repository's release-relevant
-# parts. The script itself is repository-agnostic — what differs between
-# MCUHome's repositories is this block, so the same file serves all of
-# them.
-[tool.mcuhome-release]
-version_files = ["mcuhome/model/__init__.py"]
-tag_prefix = "v"
-branch = "main"
-gates = [
-  "{python} -m ruff check .",
-  "{python} -m ruff format --check .",
-  "{python} -m pytest -q tests/python",
-]
-next_steps = [
-  "git push && git push origin {tag}",
-  "",
-  "Want the image? Dispatch the tools build if wanted (RELEASING.md",
-  "step 2), wait for the operator to publish (step 3) so both",
-  "mirror-1.packages.mcuhome.org/build-workspace/ and .../build-tools/",
-  "index.json list this version, then:",
-  "  gh workflow run release.yml -f tag={tag} -f image=true",
-]
-
 [tool.ruff]
 line-length = 100
 target-version = "py313"
