@@ -199,8 +199,32 @@ def test_the_labels_are_sorted_by_member_name(assembler):
 def test_a_package_member_parses_with_and_without_a_hash(assembler, member, value):
     parsed = assembler.package_members({**DECLARATION, member: value})
     name = member[len("packages.") :]
-    assert parsed[name][0] == value.split("@", 1)[0]
-    assert parsed[name][1] == (value.split("@sha256:")[1] if "@" in value else None)
+    assert parsed[name].version == value.split("@", 1)[0]
+    assert parsed[name].sha256 == (value.split("@sha256:")[1] if "@" in value else None)
+    assert not parsed[name].constraint
+
+
+def test_a_family_member_may_state_a_range(assembler):
+    """Which tools an environment is delivered with is not the carrier's to fix."""
+    parsed = assembler.package_members({**DECLARATION, "packages.mcuhome-build-tools": "~=1.2.0"})
+    member = parsed["mcuhome-build-tools"]
+    assert member.constraint == "~=1.2.0"
+    assert member.version == "" and member.sha256 is None
+    assert member.admits("1.2.4") and not member.admits("1.3.0")
+    assert member.described() == "~=1.2.0"
+
+
+def test_a_range_on_one_platforms_package_is_refused(assembler):
+    """A delivery of exact bytes cannot be a range."""
+    with pytest.raises(SystemExit, match="one platform's package"):
+        assembler.package_members(
+            {**DECLARATION, "packages.mcuhome-build-tools_linux-amd64": "~=1.2.0"}
+        )
+
+
+def test_a_range_that_is_not_pep_440_is_refused(assembler):
+    with pytest.raises(SystemExit, match="not a PEP 440 constraint"):
+        assembler.package_members({**DECLARATION, "packages.mcuhome-build-tools": "~=~=1"})
 
 
 @pytest.mark.parametrize(
@@ -349,6 +373,38 @@ def test_a_declaration_that_already_names_the_platform_is_accepted(assembler, pa
     }
     resolved = assembler.resolve(declared=declared, workspace=workspace, tools=tools)
     assert resolved["packages.mcuhome-build-tools_linux-amd64"].startswith("1.2.0@sha256:")
+
+
+def test_a_declared_range_resolves_to_the_archive_it_is_handed(assembler, package_set, tmp_path):
+    """The case the range exists for: a tools patch the workspace accepts.
+
+    The carrier declares `~=1.2.0` and this image is assembled from 1.2.4,
+    which was published long after that workspace package. An equality
+    check here would refuse it and freeze the workspace release to the one
+    tools version that happened to be newest the day it was cut.
+    """
+    workspace, _tools = package_set
+    newer = tmp_path / "mcuhome-build-tools_linux-amd64-1.2.4.tar.zst"
+    _tools_archive(newer, package="mcuhome-build-tools_linux-amd64", version="1.2.4", arch="amd64")
+    declared = {**DECLARATION, "packages.mcuhome-build-tools": "~=1.2.0"}
+    resolved = assembler.resolve(declared=declared, workspace=workspace, tools=newer)
+    # What the image states is never a range: a delivery names the one
+    # package it contains, at its version and its hash.
+    assert resolved["packages.mcuhome-build-tools_linux-amd64"] == (
+        f"1.2.4@sha256:{_sha256(newer)}"
+    )
+    assert "packages.mcuhome-build-tools" not in resolved
+    assert not any("~=" in value for value in resolved.values())
+
+
+def test_an_archive_outside_the_declared_range_is_refused(assembler, package_set, tmp_path):
+    """A range is a range, not "anything": 2.0.0 is not `~=1.2.0`."""
+    workspace, _tools = package_set
+    other = tmp_path / "mcuhome-build-tools_linux-amd64-2.0.0.tar.zst"
+    _tools_archive(other, package="mcuhome-build-tools_linux-amd64", version="2.0.0", arch="amd64")
+    declared = {**DECLARATION, "packages.mcuhome-build-tools": "~=1.2.0"}
+    with pytest.raises(SystemExit, match=r"~=1\.2\.0"):
+        assembler.resolve(declared=declared, workspace=workspace, tools=other)
 
 
 def test_an_archive_the_declaration_does_not_name_is_refused(assembler, package_set, tmp_path):

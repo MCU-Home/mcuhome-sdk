@@ -61,7 +61,19 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+except ModuleNotFoundError:  # a system python, not the repo's venv
+    sys.exit(
+        "build_env_image.py needs the packaging module.\n"
+        "A package's declaration states the range of build tools it is delivered\n"
+        "with, and resolving a range needs PEP 440. Run it from this repository's\n"
+        "own venv, or install it:\n"
+        "    pip install packaging"
+    )
 
 try:
     import zstandard
@@ -125,6 +137,33 @@ PACKAGE_NAME = re.compile(r"\A[a-z0-9][a-z0-9-]*(?:_[a-z0-9][a-z0-9-]*)?\Z")
 PACKAGE_VALUE = re.compile(
     r"\A(?P<version>[0-9][0-9a-zA-Z.!+_-]*)(?:@sha256:(?P<sha256>[0-9a-f]{64}))?\Z"
 )
+
+#: What tells a constraint from a version at the start of a member value.
+#: A family member may state a **range** instead of a version — which tools
+#: package a workspace is delivered with is not the workspace's to fix — and
+#: a version never begins with a comparison operator, so the first character
+#: decides.
+COMPARISON_START = "=!~<>"
+
+
+@dataclass(frozen=True)
+class Wanted:
+    """What the declaration asks of one package: a version, or a range."""
+
+    version: str = ""
+    sha256: str | None = None
+    constraint: str = ""
+
+    def admits(self, version: object) -> bool:
+        """Is *version* the one this member names, or inside the range it names?"""
+        if not isinstance(version, str):
+            return False
+        if self.constraint:
+            return SpecifierSet(self.constraint).contains(version)
+        return self.version == version
+
+    def described(self) -> str:
+        return self.constraint or self.version
 
 
 def _archive_members(archive: Path, wanted: set[str]) -> dict[str, bytes]:
@@ -217,14 +256,18 @@ def declaration(workspace: Path) -> dict[str, str]:
     return document
 
 
-def package_members(declared: dict[str, str]) -> dict[str, tuple[str, str | None]]:
-    """§5.1's package members as ``{package name: (version, sha256 or None)}``.
+def package_members(declared: dict[str, str]) -> dict[str, Wanted]:
+    """§5.1's package members as ``{package name: what the declaration asks}``.
 
     One member per package, ``packages.<name>``, so reading the set is a
     prefix filter over the declaration rather than a parser — which is the
     whole reason the specification stopped packing it into one value.
+
+    A member states a version, optionally with that archive's hash, or — on
+    a **family** — a PEP 440 range. A range on one platform's package is
+    refused: a delivery of exact bytes cannot be a range.
     """
-    parsed: dict[str, tuple[str, str | None]] = {}
+    parsed: dict[str, Wanted] = {}
     for member, value in declared.items():
         if not member.startswith(PACKAGE_MEMBER_PREFIX):
             continue
@@ -234,19 +277,40 @@ def package_members(declared: dict[str, str]) -> dict[str, tuple[str, str | None
                 f"the declaration states {member!r}, and {name!r} is not a package name — "
                 "lowercase alphanumerics and '-', with an optional '_<os>-<arch>' suffix"
             )
+        if value[:1] in tuple(COMPARISON_START):
+            parsed[name] = _ranged(member=member, name=name, value=value)
+            continue
         match = PACKAGE_VALUE.match(value)
         if match is None:
             raise SystemExit(
                 f"the declaration states {member} as {value!r}, which is not "
-                "<version>[@sha256:<64 hex digits>]"
+                "<version>[@sha256:<64 hex digits>] or a PEP 440 constraint"
             )
-        parsed[name] = (match["version"], match["sha256"])
+        parsed[name] = Wanted(version=match["version"], sha256=match["sha256"])
     if not parsed:
         raise SystemExit(
             "the declaration names no package — §5 requires one packages.<name> member "
             "per package of the set"
         )
     return parsed
+
+
+def _ranged(*, member: str, name: str, value: str) -> Wanted:
+    """A family member that states a range, checked before it is resolved."""
+    if "_" in name:
+        raise SystemExit(
+            f"the declaration states {member} as {value!r}, and that name is one "
+            "platform's package — a range belongs to a family, and one platform's "
+            "package is delivered at a version"
+        )
+    try:
+        SpecifierSet(value)
+    except InvalidSpecifier as broken:
+        raise SystemExit(
+            f"the declaration states {member} as {value!r}, which is not a PEP 440 "
+            f"constraint: {broken}"
+        ) from None
+    return Wanted(constraint=value)
 
 
 def _digest(path: Path) -> str:
@@ -257,22 +321,28 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _matched(
-    archive: Path, wanted: dict[str, tuple[str, str | None]], *, names: list[str], version: object
-) -> str:
+def _matched(archive: Path, wanted: dict[str, Wanted], *, names: list[str], version: object) -> str:
     """The member of *wanted* one archive answers, or a refusal naming both.
 
     *names* are the member names that archive may legitimately appear under,
     most specific first — the concrete package name, then the family it
-    belongs to. A version that disagrees is as much a mismatch as a name
-    that is absent, and both are the same refusal: this is not the set.
+    belongs to. A version the member does not admit is as much a mismatch as
+    a name that is absent, and both are the same refusal: this is not the
+    set.
+
+    Where the member states a **range**, admitting is what it means: the
+    workspace package declares the tools it accepts, not the tools it was
+    packed beside, and this is the party that resolves the one to the other.
+    Which candidate is chosen is not decided here — an image is assembled
+    from the archives it was handed, and choosing the newest among them is
+    the caller's job.
     """
     for name in dict.fromkeys(names):
         if name in wanted:
-            if wanted[name][0] != version:
+            if not wanted[name].admits(version):
                 raise SystemExit(
                     f"{archive.name} says it is {name} {version}, and the declaration "
-                    f"states {name} {wanted[name][0]}"
+                    f"states {name} {wanted[name].described()}"
                 )
             return name
     named = " or ".join(dict.fromkeys(names))
@@ -294,6 +364,14 @@ def resolve(*, declared: dict[str, str], workspace: Path, tools: Path) -> dict[s
     A hash the abstract declaration already stated is not overwritten but
     *checked* — a package that pinned bytes and got other ones is the case
     the pinning exists for.
+
+    **A range becomes a version here.** The carrier declares the range of
+    build tools it accepts, not one version of them, so an image assembled
+    a year later from a tools patch inside that range is a legitimate image
+    of that workspace package — which is the whole reason the member is a
+    range. What the image then states is never a range: a delivery names
+    the one package it contains, at its version and its hash, and that is
+    what an orchestrator matches.
     """
     wanted = package_members(declared)
     resolved: dict[str, str] = {}
@@ -310,7 +388,7 @@ def resolve(*, declared: dict[str, str], workspace: Path, tools: Path) -> dict[s
         version = manifest.get("version")
         member = _matched(archive, wanted, names=[name, family], version=version)
         measured = _digest(archive)
-        expected = wanted[member][1]
+        expected = wanted[member].sha256
         if expected is not None and measured != expected:
             raise SystemExit(
                 f"{archive.name} hashes to {measured}, and the declaration pins {expected}"

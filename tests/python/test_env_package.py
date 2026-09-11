@@ -182,7 +182,7 @@ def test_the_architecture_suffix_is_separated_by_an_underscore(builder):
 def test_declaration_has_exactly_the_required_members(builder):
     """§5: the three fixed members plus one per package, every value a string."""
     document = builder.declaration(
-        zephyr="4.4.0", workspace_version="0.1.0.dev1", tools_version="0.1.0"
+        zephyr="4.4.0", workspace_version="0.1.0.dev1", tools_constraint="~=0.1.0"
     )
     assert set(document) == {
         "spec-generation",
@@ -197,9 +197,9 @@ def test_declaration_has_exactly_the_required_members(builder):
 
 def test_the_package_set_is_one_member_per_package(builder):
     """§5.1: ``packages.<name>``, and no list packed into one value."""
-    members = builder.package_members("2.4.0", "1.2.0")
+    members = builder.package_members("2.4.0", "~=1.2.0")
     assert members == {
-        "packages.mcuhome-build-tools": "1.2.0",
+        "packages.mcuhome-build-tools": "~=1.2.0",
         "packages.mcuhome-build-workspace": "2.4.0",
     }
     for member, value in members.items():
@@ -209,17 +209,37 @@ def test_the_package_set_is_one_member_per_package(builder):
 
 
 def test_the_declaration_a_package_carries_is_the_abstract_set(builder):
-    """§5.1's first rule, and the two things a package build cannot know.
+    """§5.1's first rule, and the three things a package build cannot know.
 
     The carrier cannot state its own hash — the declaration is inside the
-    archive it would describe — and the tools entry names the *family*,
-    because the sibling platforms' archives may not exist yet and their
-    bytes differ on purpose. Both are the image's job to complete.
+    archive it would describe — the tools entry names the *family*, because
+    the sibling platforms' archives may not exist yet and their bytes
+    differ on purpose, and it names a **range** rather than a version,
+    because which tools version an environment is delivered with is not
+    this package's to fix. All three are the image's job to complete.
     """
-    members = builder.package_members("2.4.0", "1.2.0")
+    members = builder.package_members("2.4.0", "~=1.2.0")
     assert not any("@sha256:" in value for value in members.values())
-    assert f"packages.{builder.TOOLS_FAMILY}" in members
+    assert members[f"packages.{builder.TOOLS_FAMILY}"] == "~=1.2.0"
     assert not any("_" in member for member in members)
+
+
+def test_the_declared_range_is_the_one_the_package_requires(builder):
+    """One number in one place: the declaration and meta.json cannot differ.
+
+    Both read the same member of the definition file, so a workspace that
+    accepts `~=0.1.0` says so in the document a provisioner reads *and* in
+    the document a resolver reads. A host-prefixed key is the same
+    requirement — a package may require something from another host, and
+    the host is not part of the name.
+    """
+    assert builder.tools_constraint({builder.TOOLS_FAMILY: "~=0.1.0"}) == "~=0.1.0"
+    assert (
+        builder.tools_constraint({f"packages.example.test/{builder.TOOLS_FAMILY}": ">=1,<2"})
+        == ">=1,<2"
+    )
+    with pytest.raises(SystemExit, match="declares no requirement"):
+        builder.tools_constraint({"something-else": "~=0.1.0"})
 
 
 def test_the_declaration_travels_inside_the_archive_and_nowhere_else(
@@ -237,7 +257,7 @@ def test_the_declaration_travels_inside_the_archive_and_nowhere_else(
     """
     output = tmp_path / "out"
     document = builder.declaration(
-        zephyr="4.4.0", workspace_version="0.1.0.dev1", tools_version="0.1.0"
+        zephyr="4.4.0", workspace_version="0.1.0.dev1", tools_constraint="~=0.1.0"
     )
     package = builder.publish_workspace(
         sample_tree,
@@ -758,7 +778,9 @@ def test_the_workspace_contents_state_both_the_pin_and_what_it_resolved_to(build
             }
         }
     }
-    document = builder.declaration(zephyr="4.4.0", workspace_version="0.1.0", tools_version="0.1.0")
+    document = builder.declaration(
+        zephyr="4.4.0", workspace_version="0.1.0", tools_constraint="~=0.1.0"
+    )
     contents = builder.workspace_contents(
         record=record, patches=["zephyr-something.patch"], document=document
     )

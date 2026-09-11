@@ -759,39 +759,67 @@ def zephyr_version(repository: Path, commit: str) -> str:
     raise SystemExit(f"{commit} declares no string ZEPHYR_RELEASE in {ZEPHYR_RELEASE_FILE}")
 
 
-def package_members(workspace_version: str, tools_version: str) -> dict[str, str]:
+def package_members(workspace_version: str, tools_constraint: str) -> dict[str, str]:
     """Specification §5.1's package members: one member per package.
 
-    ``packages.<full package name>``, value ``<version>`` or
-    ``<version>@sha256:<digest>``. What this script writes is the
-    **abstract** set §5.1 asks a package's own metadata for, and both of its
-    two rules apply here:
+    ``packages.<full package name>``, value ``<version>``,
+    ``<version>@sha256:<digest>`` or — on a family — a PEP 440 constraint.
+    What this script writes is the **abstract** set §5.1 asks a package's
+    own metadata for, and all three of its rules apply here:
 
     * The carrier states no hash of its own. The declaration is inside the
       archive it would be describing, so the hash would have to cover bytes
       that contain it.
-    * The tools entry names the *family* rather than one platform's package,
-      at version level only — the sibling platforms' archives may not even
-      exist yet when this one is packed, and their bytes differ on purpose.
+    * The tools entry names the *family* rather than one platform's
+      package: the sibling platforms' archives may not even exist yet when
+      this one is packed, and their bytes differ on purpose.
+    * **And it states a range, not a version.** Which tools package this
+      workspace is delivered with is not the workspace's to fix — the three
+      release lines move on their own cadences, and a tools patch the
+      workspace accepts must be able to reach an environment without
+      republishing the workspace. So the member is the same constraint the
+      package's ``meta.json`` requires, and one document cannot contradict
+      the other because both are read from
+      ``packaging/build-environment/environment.json``.
 
     The concrete, fully hashed set is stated by whoever holds the exact
-    bytes: ``scripts/build_env_image.py`` does it for the container profile,
-    completing this document rather than replacing it.
+    bytes: ``scripts/build_env_image.py`` resolves the range to the package
+    it is assembling and labels that one, completing this document rather
+    than replacing it.
     """
     return {
-        f"{PACKAGE_MEMBER_PREFIX}{TOOLS_FAMILY}": tools_version,
+        f"{PACKAGE_MEMBER_PREFIX}{TOOLS_FAMILY}": tools_constraint,
         f"{PACKAGE_MEMBER_PREFIX}{WORKSPACE_PACKAGE}": workspace_version,
     }
 
 
-def declaration(*, zephyr: str, workspace_version: str, tools_version: str) -> dict[str, str]:
+def declaration(*, zephyr: str, workspace_version: str, tools_constraint: str) -> dict[str, str]:
     """The whole §5 declaration. Every member is a string; that is the format."""
     return {
         "spec-generation": SPEC_GENERATION,
         "zephyr.version": zephyr,
         "build-context.generator-constraint": GENERATOR_CONSTRAINT,
-        **package_members(workspace_version, tools_version),
+        **package_members(workspace_version, tools_constraint),
     }
+
+
+def tools_constraint(requires: dict[str, str]) -> str:
+    """The range the workspace accepts of the tools, out of its own requires.
+
+    One number in one place: the declaration and the meta file state the
+    same constraint because both are read from the same member of
+    ``packaging/build-environment/environment.json``. The key may be
+    host-prefixed — a package may require something from another host, and
+    the host is not part of the name.
+    """
+    for key, value in requires.items():
+        if key == TOOLS_FAMILY or key.endswith(f"/{TOOLS_FAMILY}"):
+            return value
+    raise SystemExit(
+        f"the build workspace declares no requirement on {TOOLS_FAMILY}, and its "
+        "declaration has to state which build tools it is delivered with.\n"
+        f"State workspace.requires.{TOOLS_FAMILY} in {release_lines.ENVIRONMENT_FILE}."
+    )
 
 
 def write_json(path: Path, document: dict) -> None:
@@ -1175,19 +1203,18 @@ def build_workspace_package(
     pregenerate_matter(source=source, work=root, image=image)
     prune(root)
 
+    requires = release_lines.requires_of(release_lines.environment(repository, commit), "workspace")
     document = declaration(
         zephyr=zephyr_version(repository, commit),
         workspace_version=version,
-        tools_version=versions["tools"],
+        tools_constraint=tools_constraint(requires),
     )
     meta = release_lines.json_bytes(
         release_lines.meta_document(
             name=WORKSPACE_PACKAGE,
             version=version,
             architecture=None,
-            requires=release_lines.requires_of(
-                release_lines.environment(repository, commit), "workspace"
-            ),
+            requires=requires,
             inputs=release_lines.inputs_sha256("workspace", commit, repository=repository),
             contents=workspace_contents(
                 record=json.loads((root / RECORD_FILE).read_text(encoding="utf-8")),
