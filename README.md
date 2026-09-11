@@ -76,11 +76,19 @@ wrapper in `scripts/test.d/` or `scripts/lint.d/`. The wrappers select
 `.venv` themselves (never activate one by hand) and are exactly what CI
 runs, one job per check.
 
-Needs Python ≥3.13 for `packaging/model` and `packaging/compiler`, and — only
-for `scripts/test twister` — a west workspace (`west init -m
-https://github.com/mcu-home/mcuhome-sdk && west update`) plus a container
-runtime and the pinned build-environment image. C sources follow
-`.clang-format`, checked with a pinned clang-format binary.
+Needs Python ≥3.13 for `packaging/model` and `packaging/compiler`. C sources
+follow `.clang-format`, checked with a pinned clang-format binary.
+
+`scripts/test twister` needs a build environment and a west workspace, and
+takes either of the two ways one is delivered. On a developer machine: your
+own workspace (`west init -m https://github.com/mcu-home/mcuhome-sdk && west
+update`) passed as the first argument or in `MCUHOME_SDK_WEST_WORKSPACE`,
+plus a container runtime and a build-environment image already pulled — the
+wrapper never fetches one. In CI: the workspace and tools packages the
+commit under test produces, unpacked, with `MCUHOME_SDK_BUILD_TOOLS` naming
+the tools tree; then nothing is containerized and the suites compile on the
+host with that package's toolchain. `.github/workflows/ci-build.yml`'s
+`test-twister` job shows the second form end to end.
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install \

@@ -2,46 +2,113 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The Zephyr test suites in tests/, run inside MCUHome's build environment
-# image — mirrors ci-test.yml's test-twister job's container invocation.
-# What that job does BEFORE calling this wrapper is not repeated here:
-# logging in to ghcr.io, pulling the image, restoring the west-workspace
-# cache, and `west init`/`west update` inside the container all need
-# network access this wrapper does not assume. A missing prerequisite is
-# reported as a failure with what to prepare, never done silently and
-# never a pull this wrapper performs itself.
+# The Zephyr test suites in tests/, compiled and run in MCUHome's build
+# environment. The environment is the package set
+# docs/design/build-environment.md names — a build workspace and a build
+# tools package — and it is delivered in one of two ways, so this wrapper
+# runs in one of two modes:
 #
-# The image is the build environment `docs/design/build-environment.md`
-# describes: an assembly of the two environment packages, tagged
-# `<workspace package version>-r<n>`. It is not resolved by tag but taken
-# from what is already on this machine — the highest assembly revision
-# present, this checkout's own version first — because this wrapper never
-# fetches anything and "the newest one you have" is the only question it
-# can answer offline.
+#   PACKAGE MODE, when MCUHOME_SDK_BUILD_TOOLS names an unpacked
+#   mcuhome-build-tools package. The suites are compiled on this host with
+#   that package's tools, in the west workspace the first argument names —
+#   which is the unpacked mcuhome-build-workspace package with this
+#   checkout put where the manifest repository belongs. This is what
+#   ci-build.yml's test-twister job does: it compiles in the environment
+#   the commit under test produces, not in a published one.
 #
-# The tools in that image are not on PATH: the environment's entry point
-# sets PATH, VIRTUAL_ENV and the Zephyr toolchain variables, so that both
-# profiles get the same environment out of one file, and that entry point
-# runs a build step rather than a shell. This wrapper therefore states the
-# same variables itself, from the two the image does export
-# (MCUHOME_BUILD_ENV_TOOLS, MCUHOME_BUILD_ENV_WORKSPACE) — which is the
+#   IMAGE MODE, when it does not. The suites are compiled inside a build
+#   environment image — an assembly of those same two packages, tagged
+#   `<workspace package version>-r<n>` — taken from what is already on this
+#   machine, the highest assembly revision present and this checkout's own
+#   version first. This wrapper never fetches anything, so "the newest one
+#   you have" is the only question it can answer offline.
+#
+# What neither mode does is prepare its input. Unpacking the packages,
+# creating the build's virtual environment from the wheel set they ship,
+# pulling an image, laying a workspace out — all of that needs network or
+# gigabytes of disk and is the caller's, as ci-build.yml's job shows. A
+# missing prerequisite is reported as a failure that says what to prepare,
+# never done silently.
+#
+# The tools are not on PATH in either mode: the environment's entry point
+# sets PATH, VIRTUAL_ENV and the Zephyr toolchain variables so that both
+# build profiles get the same environment out of one file, and that entry
+# point runs a build step rather than a shell. This wrapper therefore
+# states the same variables itself, from the tools root — which is the
 # environment owner's own side of the boundary and stays in this
 # repository.
 #
 # The west workspace top directory — the T2 workspace: `.west/`,
 # `zephyr/`, `modules/`, `bootloader/` beside this repository checked out
-# as `mcuhome-sdk/`, exactly as ci-test.yml's test-twister job lays it
-# out — is passed as this wrapper's first argument or in the
+# as `mcuhome-sdk/` — is passed as this wrapper's first argument or in the
 # MCUHOME_SDK_WEST_WORKSPACE environment variable, mirroring the
-# buildserver's test.d/e2e (MCUHOME_E2E_SDK_DIR) precedent. The test
-# suites are compiled against the *workspace* the manifest of this
-# checkout describes, never against the one baked into the image: a change
-# to west.yml has to be tested against what it pins. Extra arguments are
+# buildserver's test.d/e2e (MCUHOME_E2E_SDK_DIR) precedent. The suites are
+# compiled against the *workspace* the manifest of this checkout
+# describes, never against one somebody baked earlier: a change to
+# west.yml has to be tested against what it pins. Extra arguments are
 # passed through to `west twister`, so `-j` stays overridable (twister
 # keeps the last occurrence of a repeated option).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+workspace="${1:-${MCUHOME_SDK_WEST_WORKSPACE:-}}"
+if [ -z "$workspace" ]; then
+  echo "test.d/twister: no west workspace directory given. Pass it as the first argument or set MCUHOME_SDK_WEST_WORKSPACE (the T2 workspace top directory holding .west/, zephyr/, modules/, bootloader/ and this repository checked out as mcuhome-sdk/ — ci-build.yml's test-twister job prepares one by unpacking the build workspace package)." >&2
+  exit 1
+fi
+[ $# -gt 0 ] && shift
+
+if [ ! -d "$workspace/.west" ]; then
+  echo "test.d/twister: '$workspace' has no .west/ — it is not a west workspace. Unpack a mcuhome-build-workspace package (its 'workspace' directory is one), or run west init -l mcuhome-sdk && west update in it first." >&2
+  exit 1
+fi
+
+if [ ! -e "$workspace/mcuhome-sdk" ]; then
+  echo "test.d/twister: '$workspace/mcuhome-sdk' does not exist — the west workspace has no manifest-repo checkout at the path twister expects." >&2
+  exit 1
+fi
+
+# The command every mode ends in. `-T` is relative to the workspace, which
+# is the working directory in both.
+suite="mcuhome-sdk/tests/twister"
+
+# --------------------------------------------------------------------------
+# Package mode: this host, the tools out of an unpacked package
+# --------------------------------------------------------------------------
+tools="${MCUHOME_SDK_BUILD_TOOLS:-}"
+if [ -n "$tools" ]; then
+  if [ ! -f "$tools/build-tools.json" ]; then
+    echo "test.d/twister: '$tools' carries no build-tools.json, so it is not an unpacked mcuhome-build-tools package. MCUHOME_SDK_BUILD_TOOLS has to name the directory the package's archive unpacks into." >&2
+    exit 1
+  fi
+  if [ ! -x "$tools/venv/bin/python3" ]; then
+    echo "test.d/twister: '$tools' has no build environment at venv/. The package ships wheels rather than a ready environment — create it once with the host's Python 3.13: python3 -m venv '$tools/venv' && '$tools/venv/bin/python' -m pip install --no-index --find-links '$tools/wheels' '$tools'/wheels/*.whl" >&2
+    exit 1
+  fi
+
+  echo "test.d/twister: using the tools package in $tools" >&2
+
+  PATH="$tools/venv/bin:$tools/cmake/bin:$tools/ninja:$tools/gn:$PATH"
+  export PATH
+  VIRTUAL_ENV="$tools/venv"
+  export VIRTUAL_ENV
+  ZEPHYR_TOOLCHAIN_VARIANT=zephyr
+  export ZEPHYR_TOOLCHAIN_VARIANT
+  for candidate in "$tools"/zephyr-sdk-*; do
+    if [ -d "$candidate" ]; then
+      ZEPHYR_SDK_INSTALL_DIR="$candidate"
+      export ZEPHYR_SDK_INSTALL_DIR
+    fi
+  done
+
+  cd "$workspace"
+  exec west twister -T "$suite" --integration --inline-logs -v -j 2 "$@"
+fi
+
+# --------------------------------------------------------------------------
+# Image mode: a build environment image that is already on this machine
+# --------------------------------------------------------------------------
 venv="$root/.venv"
 
 if [ ! -x "$venv/bin/python" ]; then
@@ -50,7 +117,7 @@ if [ ! -x "$venv/bin/python" ]; then
 fi
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-  echo "test.d/twister: no reachable container runtime. Install/start docker first." >&2
+  echo "test.d/twister: no reachable container runtime. Install/start docker first, or set MCUHOME_SDK_BUILD_TOOLS to an unpacked mcuhome-build-tools package to compile on this host instead." >&2
   exit 1
 fi
 
@@ -93,24 +160,7 @@ image="$(
 )"
 
 if [ -z "$image" ]; then
-  echo "test.d/twister: no build environment image of $repository is present locally. Pull the published assembly of this release's environment first (this wrapper never pulls it) — ci-test.yml's test-twister job does this before calling scripts/test twister." >&2
-  exit 1
-fi
-
-workspace="${1:-${MCUHOME_SDK_WEST_WORKSPACE:-}}"
-if [ -z "$workspace" ]; then
-  echo "test.d/twister: no west workspace directory given. Pass it as the first argument or set MCUHOME_SDK_WEST_WORKSPACE (the T2 workspace top directory holding .west/, zephyr/, modules/, bootloader/ and this repository checked out as mcuhome-sdk/ — ci-test.yml's test-twister job prepares it with west init/west update before calling this wrapper)." >&2
-  exit 1
-fi
-[ $# -gt 0 ] && shift
-
-if [ ! -d "$workspace/.west" ]; then
-  echo "test.d/twister: '$workspace' has no .west/ — the west workspace is not initialized. Run west init -l mcuhome-sdk && west update inside it first, as ci-test.yml's test-twister job does." >&2
-  exit 1
-fi
-
-if [ ! -e "$workspace/mcuhome-sdk" ]; then
-  echo "test.d/twister: '$workspace/mcuhome-sdk' does not exist — the west workspace has no manifest-repo checkout at the path twister expects." >&2
+  echo "test.d/twister: no build environment image of $repository is present locally, and MCUHOME_SDK_BUILD_TOOLS names no unpacked tools package either. Pull a published assembly of this release's environment first (this wrapper never pulls it), or point MCUHOME_SDK_BUILD_TOOLS at an unpacked mcuhome-build-tools package as ci-build.yml's test-twister job does." >&2
   exit 1
 fi
 
@@ -120,6 +170,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
   --volume "$workspace:$workspace" --workdir "$workspace" \
   "$image" \
   sh -euc '
+    suite="$1"
+    shift
     tools="${MCUHOME_BUILD_ENV_TOOLS:?the image states no build tools directory}"
     PATH="$tools/venv/bin:$tools/cmake/bin:$tools/ninja:$tools/gn:$PATH"
     export PATH
@@ -133,5 +185,5 @@ docker run --rm --user "$(id -u):$(id -g)" \
         export ZEPHYR_SDK_INSTALL_DIR
       fi
     done
-    exec west twister -T mcuhome-sdk/tests/twister --integration --inline-logs -v -j 2 "$@"
-  ' twister "$@"
+    exec west twister -T "$suite" --integration --inline-logs -v -j 2 "$@"
+  ' twister "$suite" "$@"
