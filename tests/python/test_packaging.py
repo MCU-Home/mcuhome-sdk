@@ -208,6 +208,35 @@ def test_the_model_build_backend_writes_and_removes_the_version_file(version_bac
     assert not version_backend.VERSION_FILE.exists()
 
 
+def test_a_stale_generated_version_is_a_refusal_and_not_a_second_opinion(
+    version_backend,
+) -> None:
+    """A killed build can leave one behind, and it would answer forever.
+
+    Every wheel built from this tree and every import of
+    ``mcuhome.model`` would take the stale number instead of the declared
+    one — the drift the derivation exists to end — so a file that
+    disagrees stops the build and says how to clear it. One that agrees is
+    the right answer and is left exactly where it is.
+    """
+    stale = version_backend.VERSION_FILE
+    assert not stale.exists()
+    stale.write_text("0.0.0.dev0\n", encoding="utf-8")
+    try:
+        with pytest.raises(SystemExit) as refusal, version_backend.generated_version():
+            pass
+        assert "0.0.0.dev0" in str(refusal.value)
+        assert version_backend.declared_version() in str(refusal.value)
+        assert stale.exists(), "a file this backend did not write is not deleted by it"
+
+        stale.write_text(f"{version_backend.declared_version()}\n", encoding="utf-8")
+        with version_backend.generated_version() as kept:
+            assert kept == stale
+        assert stale.exists()
+    finally:
+        stale.unlink(missing_ok=True)
+
+
 def test_an_editable_install_goes_through_the_untouched_backend(version_backend) -> None:
     """``build_editable`` is setuptools' own, so no ``VERSION`` is ever written.
 

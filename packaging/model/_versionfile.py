@@ -84,15 +84,32 @@ def declared_version() -> str:
 def generated_version() -> Iterator[Path]:
     """Write ``mcuhome/model/VERSION`` for the duration of one build.
 
-    A file that is already there is left exactly as it is, written and
-    removed by nobody: it was put there by something else, and a build
-    backend that deleted another party's file would be a surprise nobody
-    could debug.
+    A file that is already there is **not** adopted silently. It is
+    generated, gitignored and removed again by every build that writes it,
+    so the only ways one survives are a killed build and something else
+    having put it there — and in both cases a number that disagrees with
+    the definition file would answer for this working tree from then on:
+    every wheel built from it, and every import of ``mcuhome.model``. That
+    is exactly the drift the derivation exists to end, so it is a refusal
+    that says how to clear it.
+
+    A file that agrees is left as it is and removed by nobody: it is the
+    right answer, and a build backend that deleted another party's file
+    would be a surprise nobody could debug.
     """
+    declared = declared_version()
     if VERSION_FILE.exists():
+        found = VERSION_FILE.read_text(encoding="utf-8").strip()
+        if found != declared:
+            raise SystemExit(
+                f"{VERSION_FILE} says {found!r} and {ENVIRONMENT_FILE} declares "
+                f"{declared!r}.\nThat file is generated and never committed; a stale one "
+                "answers for this\nworking tree until it is removed. Delete it and build "
+                "again."
+            )
         yield VERSION_FILE
         return
-    VERSION_FILE.write_text(f"{declared_version()}\n", encoding="utf-8")
+    VERSION_FILE.write_text(f"{declared}\n", encoding="utf-8")
     try:
         yield VERSION_FILE
     finally:
