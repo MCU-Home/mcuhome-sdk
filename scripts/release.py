@@ -243,15 +243,31 @@ def release_assets(directory: Path, *, stage: str, version: str) -> list[Path]:
 # --------------------------------------------------------------------------
 
 
+#: The stage whose version may never carry a local suffix, even when it is
+#: only standing in for a line nothing has published yet.
+#:
+#: The build workspace package carries the build environment's own
+#: declaration, and that document names the **tools** version the package is
+#: delivered with. A local segment on the workspace would therefore be a
+#: statement about the tools that is not true — the tools of a release run
+#: are the released or the published ones, and they carry no suffix — and
+#: the unpacked environment refuses the pair on the spot. It is also the
+#: version a container image is tagged after, and `+` is not a character a
+#: container tag may hold. Standing in or released, this one is built under
+#: the version the definition file declares; what distinguishes it from a
+#: release is that a release uploads it and a gate does not.
+UNSUFFIXED = "workspace"
+
+
 def gate_packages(combinations: list[dict]) -> list[dict]:
     """Which packages this run builds, read off the combinations it will try.
 
     Every stage a combination takes from this commit is built here: the
-    tagged line at the version the tag names and with **no** local suffix —
-    those are the bytes that get published — and any stand-in for a line
-    that has nothing published, under a local version no package host will
-    accept. The tools stage is always built for both platforms, because the
-    firmware is built on both and each host needs its own.
+    tagged line at the version the tag names — those are the bytes that get
+    published — and any stand-in for a line that has nothing published,
+    under a local version no package host will accept (except
+    :data:`UNSUFFIXED`). The tools stage is always built for both platforms,
+    because the firmware is built on both and each host needs its own.
     """
     wanted: dict[str, str] = {}
     for combination in combinations:
@@ -263,6 +279,7 @@ def gate_packages(combinations: list[dict]) -> list[dict]:
     for stage in release_lines.STAGES:
         if stage not in wanted:
             continue
+        released = wanted[stage] == "release"
         for platform in PLATFORMS if stage == "tools" else (None,):
             matrix.append(
                 {
@@ -270,7 +287,8 @@ def gate_packages(combinations: list[dict]) -> list[dict]:
                     "platform": platform or "",
                     "artifact": artifact_name(stage, platform),
                     "runner": RUNNER_FOR_PLATFORM[platform],
-                    "release": wanted[stage] == "release",
+                    "release": released,
+                    "suffix": not released and stage != UNSUFFIXED,
                 }
             )
     return matrix

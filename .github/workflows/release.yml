@@ -463,16 +463,19 @@ jobs:
 
       # The released line gets the version environment.json declares and
       # nothing appended; a stand-in gets a local segment, which is exactly
-      # the shape a package host will not publish.
+      # the shape a package host will not publish — except the build
+      # workspace, whose own declaration names the tools version it is
+      # delivered with and whose version a container image is tagged after.
+      # `scripts/release.py` decides which is which; this only reads it.
       - name: Build the package
         env:
           STAGE: ${{ matrix.stage }}
           PLATFORM: ${{ matrix.platform }}
-          RELEASED: ${{ matrix.release }}
+          SUFFIXED: ${{ matrix.suffix }}
         run: |
           set -euo pipefail
           suffix=()
-          if [ "$RELEASED" != "true" ]; then
+          if [ "$SUFFIXED" = "true" ]; then
             suffix=(--version-suffix "gate.$(git rev-parse --short HEAD)")
           fi
           case "$STAGE" in

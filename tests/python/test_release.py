@@ -1118,3 +1118,15 @@ def test_a_workspace_no_sdk_accepts_has_no_sdk_to_verify_with(release, readiness
     )
     assert answer["sdk_tag"] == ""
     assert answer["tools_tag"] == "tools-v0.1.0"
+
+
+def test_the_build_workspace_never_carries_a_local_suffix(release):
+    """Its declaration names the tools version, and a tag cannot hold a `+`."""
+    matrix = release.gate_packages([combination("checkout", "checkout", "release")])
+    by_stage = {entry["stage"]: entry for entry in matrix}
+    assert by_stage["sdk"]["suffix"] is True
+    # Standing in for a line nothing has published, and still unsuffixed:
+    # the tools it is delivered with are the released ones, which are not.
+    assert by_stage["workspace"]["release"] is False
+    assert by_stage["workspace"]["suffix"] is False
+    assert by_stage["tools"]["suffix"] is False
