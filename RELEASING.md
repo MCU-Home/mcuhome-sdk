@@ -1,5 +1,18 @@
 # Releasing
 
+> **This procedure is being rewritten and is not current.** The SDK, the
+> build workspace package and the build tools package are now three
+> release lines with versions of their own, declared in
+> `packaging/build-environment/environment.json` and tagged
+> `v<version>`, `workspace-v<version>` and `tools-v<version>`; every
+> package carries a `meta.json` stating what it requires of the next
+> stage and the hash of its inputs. The steps below still describe the
+> single-version release they replace — `mcuhome/model/__init__.py` no
+> longer holds a version, `TOOLS_VERSION` no longer exists, and no
+> package carries `build-environment.lock.json` any more. Do not follow
+> them until this file is rewritten with the release workflow.
+> `packaging/build-environment/README.md` describes what is true today.
+
 A release of this repository is **one number for three artifacts**: the
 `mcuhome-model` and `mcuhome-compiler` distributions and the
 `mcuhome-sdk-<version>.tar.zst` package a build compiles from. They share

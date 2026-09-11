@@ -36,8 +36,9 @@ Per the specification's package-set model, MCUHome's environment is two
 packages, distributed like the SDK package through packagetool
 (hash-pinned, signed index, mirrorable — packages.mcuhome.org):
 
-- **`mcuhome-build-workspace`** (arch-neutral, one per SDK release or
-  `west.yml` change): the materialized west workspace — Zephyr, modules,
+- **`mcuhome-build-workspace`** (arch-neutral, one per change to its own
+  inputs — `west.yml`, the patch set, the Matter data model): the
+  materialized west workspace — Zephyr, modules,
   MCUboot, Matter SDK incl. submodules — with base patches applied,
   binary blobs fetched, west configuration pre-populated
   (`zephyr.base`, so no lazy config write ever happens on read-only
@@ -93,20 +94,52 @@ time. zap is deliberately absent from the tools package.
 build context pins its own SDK package, and the orchestrator delivers it
 at `mcuhome/sdk`.
 
+### Three release lines, and what identifies them
+
+The SDK, the workspace package and the tools package are **versioned
+independently**. `packaging/build-environment/environment.json` declares
+all three — the version each line's next release carries, and the PEP 440
+constraint a line puts on the one below it:
+
+```json
+{
+  "sdk":       { "version": "…", "requires": { "mcuhome-build-workspace": "~=0.1.0" } },
+  "workspace": { "version": "…", "requires": { "mcuhome-build-tools": "~=0.1.0" } },
+  "tools":     { "version": "…" }
+}
+```
+
+A chain, not a matrix: each stage accepts a range of the next, resolution
+takes the newest published version satisfying it and pins that one
+exactly, and the tools end the chain. No artifact takes another one's
+version — which is what stops a toolchain that did not move from being
+republished for every SDK release, and stops an SDK that only changed a
+generator from claiming a new workspace.
+
+Every package states this in its own `meta.json` (inside the archive and,
+byte for byte the same document, beside it): what it is, what it
+requires, **the hash of its inputs**, and what it resolved to. The input
+hash is computed over the repository paths that stage is built from, each
+with the git object the commit gives it, plus the packager image the
+package is produced in and, for the tools, the architecture — so "did
+this stage change" is a question anybody can answer for a commit they
+never built. A cosmetic change to the packaging script moves it, because
+nothing can tell a comment from a behaviour by reading a file; that is the
+safe direction.
+
 ## 3. Release chain
 
 ```
 packager image published from main (containers/build-environment-packager/;
   west, zap, the base interpreter — pinned by digest, changes rarely)
-SDK git tag
-  → SDK release archive (existing release workflow)
-  → build-workspace package build (CI, in the packager; deterministic,
-    records resolved commits; runs the Matter pre-generation)
-  → build-tools package build (CI, in the packager; only when the
-    toolchain generation changes)
+git tag per line — v<version>, workspace-v<version>, tools-v<version>
+  → the tagged line's package(s), built in the packager: deterministic,
+    with the version environment.json declares for that line, the input
+    hash, and meta.json on both sides of the archive
   → packagetool publication (manually dispatched — one deliberate
     publish act; downstream steps may then chain automatically)
-  → container image assembled from the published packages
+  → container image assembled from a published workspace package and the
+    newest published tools its constraint accepts
 ```
 
 The packager is the bootstrap of this chain and deliberately outside it:

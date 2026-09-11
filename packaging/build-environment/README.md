@@ -22,17 +22,95 @@ container profile — is assembled from the archives by
 
 | Entry | Role |
 |---|---|
+| `environment.json` | The definition file of this repository's three release lines — the SDK, the workspace package and the tools package. See below |
 | `build-environment-entry` | The entry point of specification §4/§6. Ships in the tools package; the profile in use puts it at `$MCUHOME_BUILDER_BASE_DIR/mcuhome/bin/build-environment-entry` |
 | `requirements.txt` | The environment's Python dependency set, pinned transitively. Not installed from here: a wheel is built for every line and the wheel set ships in the tools package |
 | `workspace-record.py` | Writes `workspace.json`, the record of what west resolved, into the workspace package. Run once per package build, inside the packager image |
 
+## `environment.json` — the three release lines
+
+The SDK, the workspace package and the tools package are versioned
+**independently**, and this file is where all three are declared: the
+version each line's next release carries, and the PEP 440 constraint a
+line puts on the one below it.
+
+```json
+{
+  "sdk":       { "version": "…", "requires": { "mcuhome-build-workspace": "~=0.1.0" } },
+  "workspace": { "version": "…", "requires": { "mcuhome-build-tools": "~=0.1.0" } },
+  "tools":     { "version": "…" }
+}
+```
+
+A chain and not a matrix: each stage accepts a *range* of the next, a
+build resolves that to the newest published version satisfying it and
+pins it exactly, and the tools end the chain. Independent versions are
+what stop a toolchain that did not move from being republished for every
+SDK release. The recommended constraint shape is `~=X.Y.Z` — patch-level
+float.
+
+Nothing else writes a version down. `mcuhome.model.__version__` is
+derived from `sdk.version`: a checkout reads this file, and a built
+distribution reads the generated `mcuhome/model/VERSION` the build wrote
+beside the module — which is why that file is in `.gitignore` and never
+committed. The tags follow the lines: `v<version>` releases the SDK,
+`workspace-v<version>` the workspace package, `tools-v<version>` the
+tools packages, and a tag must equal the version this file declares for
+its line.
+
+## The meta file
+
+Every package carries `meta.json` at the top of its archive and
+`<archive file name>.meta.json` beside it — the same bytes, written once,
+so the copy a reader happens to take cannot decide what the package is.
+Inside, because an unpacked store entry has to be able to say what it is
+with nothing else present; beside, because whoever resolves a release
+chain reads what a package requires *before* fetching a gigabyte of it.
+
+```json
+{
+  "schema": 1,
+  "package": { "name": "mcuhome-build-workspace", "version": "…", "architecture": null },
+  "requires": { "mcuhome-build-tools": "~=0.1.0" },
+  "inputs_sha256": "…",
+  "contents": { "projects": { … }, "patches": [ … ], "environment": { … } }
+}
+```
+
+`package.architecture` is `null` for an architecture-neutral package and
+`<os>-<arch>` for a per-platform one, whose `package.name` is then the
+*family*: the concrete name is the two joined, and stating it twice would
+let them disagree. `requires` is **absent** for the tools package, which
+ends the chain — "any version" and "this one forgot to say" look
+identical otherwise.
+
+`inputs_sha256` identifies what the package was built from: a SHA-256
+over a canonical listing of the repository paths that stage is built
+from, each with the git object the packaged commit gives it, plus the
+packager image it is produced in and, for the tools, the architecture.
+`scripts/release_lines.py` computes it, needs no build, no container and
+no network, and answers for any commit — which is what lets a push check
+whether a stage changed without a release version being bumped for it.
+
+`contents` is what the package resolved to: for the workspace every west
+project with the revision the manifest pinned and the commit it resolved
+to, the patch files applied, and the §5 declaration it carries; for the
+tools the toolchain, CMake, Ninja, gn, the interpreter and west, with the
+architecture.
+
+The meta file and the §5 **declaration** below are two documents and stay
+two: the declaration is what the *specification* asks a build environment
+for and what an image mirrors into its labels, the meta file is what
+MCUHome's own release chain asks a *package* for.
+
 ## `mcuhome-build-workspace`
 
-Architecture-neutral, one per SDK release or `west.yml` change. It is the
+Architecture-neutral, one per change to its own inputs. It is the
 package that carries the environment's **self-description** (specification
 §5) — a package set that spans architectures needs a carrier that does not.
 
 ```
+meta.json                      what this package is, requires and contains
 build-environment.json         the §5 declaration, for the whole set
 build-workspace.json           what this package is and where its parts are
 workspace.json                 the record of what west resolved
@@ -131,6 +209,7 @@ and the first pre-generated header is simply not found.
 One per platform, per toolchain generation.
 
 ```
+meta.json                      what this package is and contains
 build-tools.json               what this package is, and every pin in it
 bin/build-environment-entry    the entry point
 cmake/bin/cmake                CMake, from the upstream release tarball

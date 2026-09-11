@@ -10,8 +10,9 @@
 # interpreter the environment itself runs on, and packs the wheel set into
 # `mcuhome-build-tools_<os>-<arch>`. Provisioning creates the virtual
 # environment from those wheels, offline. Changing anything here means a
-# new tools package: bump TOOLS_VERSION in scripts/build_env_package.py in
-# the same commit.
+# new tools package: this file is one of the tools line's inputs, so bump
+# `tools.version` in packaging/build-environment/environment.json in the
+# same commit.
 #
 # Fully pinned, including transitive dependencies: a build environment is
 # identified by the packages it delivers, so "the same package set" has to

@@ -101,17 +101,20 @@ accepted, the image is assembled by the script above and pushed as
 pushes it as `<version>-r<n>`, which is the reference a client resolves —
 `amd64` and `arm64` both, because a Home Assistant box is an arm64 machine.
 
-**The tag names the SDK release, not the environment.** Which versions of
-the two packages get assembled is read out of that release's
-`build-environment.lock.json`, which the run takes from the verified SDK
-archive — the tools package is on its own counter and a release that did
-not change the toolchain names an older one, so assuming the tag's version
-for both would ask the index for a tools package that was never built. The
-workspace version the lock states must be the SDK's own (that package is
-built from this tag) and the run refuses when it is not; the tools version
-is then resolved through the family's `meta.arch` map to this
-architecture's package. It is the same document, and the same answer, a
-workbench provisioning that SDK gets.
+**The tag names the workspace package, not the SDK release.** The three
+are release lines of their own — `v<version>` releases the SDK,
+`workspace-v<version>` the build workspace, `tools-v<version>` the build
+tools — and an image delivers one workspace package plus the tools that
+package accepts, so its tag is `<workspace package version>-r<n>`. Which
+tools version that is comes from the workspace package's own `meta.json`:
+it states a PEP 440 constraint, and the run takes the newest published
+tools version satisfying it, resolved through the family's `meta.arch`
+map to this architecture's package. It is the same document, and the same
+answer, a workbench provisioning that workspace package gets.
+
+The release procedure around this is being rewritten (see `RELEASING.md`);
+what an image *is* — an assembly of two packages, matched by its
+`packages.` labels — does not change with it.
 
 **The anchor arrives out of band**, as the organisation variable
 `MCUHOME_REGISTRY_ANCHOR` (the content of `mcuhome-packagetool`'s

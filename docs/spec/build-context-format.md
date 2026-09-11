@@ -200,28 +200,43 @@ reads it: a reader finds three resolved values per entry and needs to
 know nothing about how they were arrived at. It is written down because
 "pinned, not requested" only means something if the pinning has a rule.
 
-The **versions** come from the SDK release. Every release carries a file
-`build-environment.lock.json` — inside the SDK package and, byte for
-byte the same document, beside it — stating the build environment it was
-built and tested with. Its shape is the abstract package set of the
-[build environment specification](build-environment-specification.md)
-§5.1: one `packages.<name>` member per package, value `<version>`, no
-hashes.
+The **versions** come from a chain of constraints, one link per stage.
+Every MCUHome package carries a file `meta.json` — inside the archive
+and, byte for byte the same document, beside it as
+`<archive>.meta.json` — and its `requires` member states which versions
+of the *next* stage that package accepts, as a PEP 440 specifier:
 
 ```json
 {
-  "packages.mcuhome-build-tools": "0.1.10.dev1",
-  "packages.mcuhome-build-workspace": "0.1.10.dev1"
+  "schema": 1,
+  "package": { "name": "mcuhome-sdk", "version": "2.4.0", "architecture": null },
+  "requires": { "mcuhome-build-workspace": "~=2.4.0" },
+  "inputs_sha256": "5f2b…",
+  "contents": {}
 }
 ```
 
-It carries no hashes because at that moment nobody could: the workspace
-package is built *from* the SDK's own tag, and the tools package's bytes
-differ per platform. So the **hashes** come from the package host's
-index, where a version resolves to bytes — a concrete package's archive
-hash, or a meta entry's hash over the members it points at. Whoever
-writes a context resolves the lock's versions against an index it trusts
-and writes the triples out.
+The SDK requires a range of build workspaces, a build workspace requires
+a range of build tools, and the tools require nothing — the member is
+absent there rather than empty. The three are released on lines of their
+own, so a release that changes nothing about the toolchain keeps naming
+the tools it already accepted, and nothing republishes gigabytes for a
+version bump elsewhere.
+
+Whoever writes a context walks that chain: the resolved SDK's `requires`
+against the package host's version list gives the **newest published
+workspace version satisfying it**, that package's `requires` gives the
+tools version the same way, and each step is pinned exactly. A
+constraint that no published version satisfies is a refusal — nothing is
+substituted.
+
+No `meta.json` carries a hash of anything: a package cannot state its
+own (the document is inside the bytes it would describe) and the stage
+below it may not be built yet. So the **hashes** come from the package
+host's index, where a version resolves to bytes — a concrete package's
+archive hash, or a meta entry's hash over the members it points at.
+Whoever writes a context resolves the chain's versions against an index
+it trusts and writes the triples out.
 
 A device may override either entry, and then that entry's version is the
 device's and only the hash is looked up. An override that states a hash
