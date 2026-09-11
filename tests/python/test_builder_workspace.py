@@ -161,3 +161,47 @@ def test_a_layer_west_does_not_know_is_a_failure_not_an_omission(tmp_path, monke
 
     with pytest.raises(SystemExit):
         module.build_record(topdir, "narrow-depth-1", [])
+
+
+def test_every_cloned_project_is_recorded_with_its_pin_and_its_commit(tmp_path, monkeypatch):
+    """Not only the named layers: the package carries a hundred trees.
+
+    The workspace package's meta file publishes this list, so whoever is
+    choosing a build environment can see what is in it without unpacking a
+    gigabyte. Paths are workspace-relative, because the document travels
+    and an absolute path is a property of the machine that built it.
+    """
+    module = _record_module()
+    topdir = tmp_path / "workspace"
+    (topdir / ".west").mkdir(parents=True)
+    (topdir / ".west" / "config").write_text("[manifest]\npath = mcuhome\n", "utf-8")
+    for project in (*module.LAYER_PROJECTS.values(), "hal_espressif"):
+        (topdir / project / ".git").mkdir(parents=True)
+    # The manifest repository is a project to west like any other, and in
+    # this workspace it is the empty directory the SDK is delivered into.
+    (topdir / "mcuhome").mkdir()
+
+    monkeypatch.setattr(
+        module,
+        "_west_projects",
+        lambda _topdir: {
+            project: {
+                "path": str(topdir / project),
+                "relative": project,
+                "url": f"https://example.test/{project}",
+                "revision": "v4.4.0",
+            }
+            for project in (*module.LAYER_PROJECTS.values(), "hal_espressif", "mcuhome")
+        },
+    )
+    monkeypatch.setattr(module, "_git", lambda _repository, *_arguments: "d" * 40)
+
+    projects = module.build_record(topdir, "narrow-depth-1", [])["projects"]
+    assert "hal_espressif" in projects, "an imported module is a project like any other"
+    assert "mcuhome" not in projects, "the SDK mount point carries nothing to record"
+    assert projects["zephyr"] == {
+        "path": "zephyr",
+        "url": "https://example.test/zephyr",
+        "revision": "v4.4.0",
+        "commit": "d" * 40,
+    }

@@ -32,10 +32,9 @@ what reads it, so an uncommitted edit, an untracked file and a stale
 ``__pycache__`` cannot reach a package — the class of accident Block 0
 was created to end ("three build inputs that existed on this machine and
 in no repository"). The version is read out of the *archived* revision
-for the same reason: ``mcuhome/model/__init__.py`` is "the version of
-the whole release, and the only place it is written down", and reading
-the working tree's copy would let the name on the file disagree with the
-content inside it.
+for the same reason: ``packaging/build-environment/environment.json``
+declares the SDK line's version, and reading the working tree's copy
+would let the name on the file disagree with the content inside it.
 
 **What goes in is an explicit allowlist, and nothing else.** Each entry
 below has a consumer that fails without it:
@@ -100,18 +99,29 @@ over as ``trees.sdk``; a ``mcuhome-sdk-<version>/`` wrapper would put
 build. Member names are plain relative paths for the same reason — no
 ``./`` prefix, which the server's extractor refuses outright.
 
-Alongside the archive go two files with no reader in the container path
+Two members are **generated** rather than taken from the commit, and both
+are allowlisted like everything else: ``meta.json``, which says what this
+package is and which build workspace it requires, and
+``mcuhome/model/VERSION``, which is how an unpacked SDK answers
+``mcuhome.model.__version__`` — the file that number is derived from
+(``packaging/build-environment/environment.json``) is not in the archive,
+and must not be: an SDK package is not a checkout.
+
+Alongside the archive go three files with no reader in the container path
 and one reader each outside it: a ``.sha256`` sidecar in ``sha256sum``'s
 own format, so an operator can check a mirrored file with the tool
-already on the machine, and ``index.json``, the static index the
-session protocol asks for. Neither carries a URL or a host name: the source
-list is the operator's configuration, "``package.url`` is a hint" that
-is never fetched, and the workspace rule against naming a domain before
-the service behind it exists applies here too.
+already on the machine; ``<archive>.meta.json``, the same bytes the
+archive carries, so whoever resolves a release chain can read what this
+package requires without fetching it; and ``index.json``, the static
+index the session protocol asks for. None of them carries a URL or a host
+name: the source list is the operator's configuration, "``package.url``
+is a hint" that is never fetched, and the workspace rule against naming a
+domain before the service behind it exists applies here too.
 
 Usage::
 
     build_sdk_archive.py --output-dir <dir> [--revision <rev>] [--repo <dir>]
+                         [--version-suffix ci.<sha>]
 
 Exit status: 0 on success, 2 on a usage error, and a non-zero ``git``
 exit propagates as a ``CalledProcessError`` — a package built from a
@@ -121,7 +131,6 @@ revision git could not read is not a failure worth recovering from.
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import io
 import json
@@ -131,24 +140,13 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    import zstandard
-except ModuleNotFoundError:  # a system python, not the repo's venv
-    sys.exit(
-        "build_sdk_archive.py needs the zstandard module.\n"
-        "Run it from this repository's own venv, which carries it via\n"
-        "mcuhome-compiler:\n"
-        "    python3 -m venv .venv && . .venv/bin/activate\n"
-        "    pip install -e ./packaging/model -e ./packaging/compiler"
-    )
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import release_lines  # noqa: E402 - repo-relative import, needs the path above
 
 #: This repository, seen from ``scripts/``. The default rather than a
 #: constant, so a test can build a package from a checkout somewhere else.
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-#: The one place the release version is written down, read out of the
-#: revision being archived rather than imported.
-VERSION_FILE = "mcuhome/model/__init__.py"
 
 #: The static index, next to the archives it indexes.
 INDEX_FILE = "index.json"
@@ -157,28 +155,12 @@ INDEX_FILE = "index.json"
 #: the file name carries the version, the index key does not.
 PACKAGE_NAME = "mcuhome-sdk"
 
-#: The environment lock: which build-environment packages this release
-#: was built and tested with. Written into the archive *and* beside it —
-#: inside, because whoever resolves the pins has already verified those
-#: bytes against the index, and reading the answer out of the package
-#: itself is the one route that cannot be substituted; beside, so a
-#: mirror and a release page can serve it without unpacking anything.
-#:
-#: Its shape is the abstract package set of the build environment
-#: specification §5.1: one ``packages.<name>`` member per package, value
-#: ``<version>``, no hashes. An SDK release cannot state hashes — the
-#: workspace package is built *from* this tag and the tools package's
-#: bytes differ per platform — so the versions are the statement and the
-#: signed index turns them into bytes.
-LOCK_FILE = "build-environment.lock.json"
-PACKAGE_MEMBER_PREFIX = "packages."
-WORKSPACE_PACKAGE = "mcuhome-build-workspace"
-TOOLS_FAMILY = "mcuhome-build-tools"
-
-#: Where the tools version is written down: the packaging script's own
-#: constant, read out of the archived commit rather than imported, for
-#: the reason :data:`VERSION_FILE` is.
-TOOLS_VERSION_FILE = "scripts/build_env_package.py"
+#: The generated version file, beside the module that reads it. A
+#: checkout derives ``mcuhome.model.__version__`` from
+#: ``packaging/build-environment/environment.json``, and that file ships
+#: in nothing — so the archive carries the answer instead, written here
+#: from the version this package is being cut at.
+VERSION_MEMBER = "mcuhome/model/VERSION"
 
 #: Fixed, and part of what makes two builds of one tag agree. 19 is the
 #: highest level with a bounded memory appetite; the archive is written
@@ -249,7 +231,7 @@ def package_filename(version: str) -> str:
 #: Members this script writes itself rather than taking from the commit.
 #: They are allowlisted like every other member, so the check that the
 #: archive holds nothing outside the allowlist covers them too.
-GENERATED_FILES = frozenset({LOCK_FILE})
+GENERATED_FILES = frozenset({release_lines.META_FILE, VERSION_MEMBER})
 
 
 def included(path: str) -> bool:
@@ -271,79 +253,16 @@ def _git(repository: Path, *arguments: str) -> bytes:
     return completed.stdout
 
 
-def archived_version(repository: Path, commit: str) -> str:
-    """``__version__`` as *commit* carries it.
+def archived_version(repository: Path, commit: str, *, suffix: str | None = None) -> str:
+    """``sdk.version`` as *commit* declares it, optionally suffixed.
 
-    Read out of the commit and parsed rather than imported, because the
-    name on the file has to describe the bytes inside it: an editable
-    install would answer with the working tree, which is precisely the
-    tree this script refuses to package.
+    Read out of the commit rather than imported, because the name on the
+    file has to describe the bytes inside it: an editable install would
+    answer with the working tree, which is precisely the tree this script
+    refuses to package.
     """
-    source = _git(repository, "cat-file", "blob", f"{commit}:{VERSION_FILE}").decode("utf-8")
-    for node in ast.parse(source).body:
-        if not isinstance(node, ast.Assign):
-            continue
-        named = (target.id for target in node.targets if isinstance(target, ast.Name))
-        if "__version__" not in named:
-            continue
-        value = ast.literal_eval(node.value)
-        if isinstance(value, str):
-            return value
-    raise SystemExit(f"{VERSION_FILE} at {commit} declares no string __version__")
-
-
-def _assigned(source: str, name: str, *, where: str) -> str:
-    """The string a module-level ``<name> = "..."`` assigns, or a refusal."""
-    for node in ast.parse(source).body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if name not in (target.id for target in node.targets if isinstance(target, ast.Name)):
-            continue
-        value = ast.literal_eval(node.value)
-        if isinstance(value, str):
-            return value
-    raise SystemExit(f"{where} declares no string {name}")
-
-
-def tools_version(repository: Path, commit: str) -> str:
-    """The tools package version *commit* builds its environment with.
-
-    Read out of ``scripts/build_env_package.py`` at the packaged
-    revision, which is the one place that number is written down. The
-    tools move on their own cadence, so it is not the SDK's version and
-    cannot be derived from it.
-    """
-    source = _git(repository, "cat-file", "blob", f"{commit}:{TOOLS_VERSION_FILE}").decode("utf-8")
-    return _assigned(source, "TOOLS_VERSION", where=f"{TOOLS_VERSION_FILE} at {commit}")
-
-
-def environment_lock(*, version: str, tools: str) -> dict[str, str]:
-    """The lock document: which environment packages this release wants.
-
-    The workspace package is stated at the SDK's **own** version, because
-    it is built from this tag; the tools package is named by its family
-    at version level only, because its bytes differ per platform on
-    purpose and the sibling platforms' archives may not exist yet.
-    Neither carries a hash: nothing has built them at this point, and the
-    signed index is where a version becomes bytes.
-    """
-    return {
-        f"{PACKAGE_MEMBER_PREFIX}{TOOLS_FAMILY}": tools,
-        f"{PACKAGE_MEMBER_PREFIX}{WORKSPACE_PACKAGE}": version,
-    }
-
-
-def lock_bytes(document: dict[str, str]) -> bytes:
-    """*document* as the bytes both copies carry — the same bytes, twice.
-
-    Sorted keys, two-space indent, one trailing newline: the archive
-    member and the sidecar are written from one value and must not differ
-    in a byte, or the copy a reader happened to take would decide what a
-    release means.
-    """
-    return (json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode(
-        "utf-8"
-    )
+    document = release_lines.environment(repository, commit)
+    return release_lines.suffixed(release_lines.version_of(document, "sdk"), suffix)
 
 
 def sdk_entries(archive: bytes) -> dict[str, tuple[bytes, bool]]:
@@ -427,7 +346,24 @@ def compress(tar: bytes) -> bytes:
     checksum is off and the content size is on so that the frame header
     is decided by the parameters and not by which API happened to know
     the length.
+
+    The import is here rather than at the top of the file because this is
+    the only line that needs it: everything else this module states — the
+    allowlist above all — is read by parties that compute an input hash
+    and build nothing (``scripts/release_lines.py``), and a missing
+    compressor must not stop them.
     """
+    try:
+        import zstandard  # noqa: PLC0415 - see above
+    except ModuleNotFoundError:  # a system python, not the repo's venv
+        raise SystemExit(
+            "build_sdk_archive.py needs the zstandard module.\n"
+            "Run it from this repository's own venv, which carries it via\n"
+            "mcuhome-compiler:\n"
+            "    python3 -m venv .venv && . .venv/bin/activate\n"
+            "    pip install -e ./packaging/model -e ./packaging/compiler"
+        ) from None
+
     compressor = zstandard.ZstdCompressor(
         level=ZSTD_LEVEL,
         write_checksum=False,
@@ -437,24 +373,56 @@ def compress(tar: bytes) -> bytes:
     return compressor.compress(tar)
 
 
-def build_archive(*, repository: Path, revision: str, output_dir: Path) -> SdkArchive:
-    """Build the package for *revision* into *output_dir*, sidecar and index included."""
+def meta_bytes(repository: Path, commit: str, *, version: str, architecture: str | None) -> bytes:
+    """What this release says about itself, as the bytes both copies carry.
+
+    ``requires`` is the constraint this SDK release puts on the build
+    workspace package, straight out of the definition file: an SDK is
+    released on its own line and accepts a *range* of workspace packages,
+    so it states a specifier and never a version. Whoever builds resolves
+    that to the newest published workspace package satisfying it and pins
+    that one exactly, hash and all.
+
+    ``contents`` is empty and says so. The SDK package is a source tree
+    with no resolved parts to report — the input hash already identifies
+    the tree it was cut from — and an absent member would be a different
+    statement from an empty one.
+    """
+    document = release_lines.environment(repository, commit)
+    return release_lines.json_bytes(
+        release_lines.meta_document(
+            name=PACKAGE_NAME,
+            version=version,
+            architecture=architecture,
+            requires=release_lines.requires_of(document, "sdk"),
+            inputs=release_lines.inputs_sha256("sdk", commit, repository=repository),
+            contents={},
+        )
+    )
+
+
+def build_archive(
+    *, repository: Path, revision: str, output_dir: Path, version_suffix: str | None = None
+) -> SdkArchive:
+    """Build the package for *revision* into *output_dir*, sidecars and index included."""
     commit = _git(repository, "rev-parse", "--verify", f"{revision}^{{commit}}").decode().strip()
     # The commit's own committer date, so the timestamps in the archive
     # are a property of the revision. `git archive` would stamp the same
     # value; it is read out explicitly because this script writes its own
     # tar and nothing else would then decide it.
     mtime = int(_git(repository, "show", "-s", "--format=%ct", commit).decode().strip())
-    version = archived_version(repository, commit)
+    version = archived_version(repository, commit, suffix=version_suffix)
 
     entries = sdk_entries(_git(repository, "archive", "--format=tar", commit))
     if "mcuhome-sdk.json" not in entries:
         raise SystemExit(f"{commit} carries no mcuhome-sdk.json — that tree is not an SDK")
-    # Generated rather than committed: the workspace version *is* the SDK
-    # version, and a file in the tree restating it would be a second
-    # place for one number to be wrong in.
-    lock = lock_bytes(environment_lock(version=version, tools=tools_version(repository, commit)))
-    entries[LOCK_FILE] = (lock, False)
+    meta = meta_bytes(repository, commit, version=version, architecture=None)
+    entries[release_lines.META_FILE] = (meta, False)
+    # Generated rather than committed: a checkout derives its version from
+    # the definition file, and a file in the tree restating it would be a
+    # second place for one number to be wrong in. The archive needs it
+    # because it does not carry the definition file.
+    entries[VERSION_MEMBER] = (f"{version}\n".encode(), False)
     payload = compress(write_tar(entries, mtime=mtime))
     digest = hashlib.sha256(payload).hexdigest()
 
@@ -468,8 +436,8 @@ def build_archive(*, repository: Path, revision: str, output_dir: Path) -> SdkAr
     )
     # The same bytes the archive carries, beside it — named for the file
     # rather than for the package, the way the .sha256 sidecar is, so a
-    # directory holding two releases keeps two locks.
-    (output_dir / f"{archive.name}.{LOCK_FILE}").write_bytes(lock)
+    # directory holding two releases keeps two meta files.
+    (output_dir / f"{archive.name}{release_lines.META_SUFFIX}").write_bytes(meta)
     write_index(
         output_dir / INDEX_FILE,
         version=version,
@@ -536,12 +504,19 @@ def main(argv: list[str]) -> int:
         default=REPO_ROOT,
         help="the checkout to read the revision from (default: this repository)",
     )
+    parser.add_argument(
+        "--version-suffix",
+        help="append a PEP 440 local segment to the declared version, as in "
+        "ci.<sha> for a per-commit build — a local version is the one shape "
+        "a package host will not publish",
+    )
     arguments = parser.parse_args(argv)
 
     package = build_archive(
         repository=arguments.repo,
         revision=arguments.revision,
         output_dir=arguments.output_dir,
+        version_suffix=arguments.version_suffix,
     )
     print(f"{package.path.name}  {package.sha256}  {package.size} bytes  ({package.commit})")
     return 0

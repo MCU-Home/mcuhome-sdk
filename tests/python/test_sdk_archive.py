@@ -46,12 +46,15 @@ import pytest
 import zstandard
 
 from mcuhome.compiler.abi import sdk_entry_point
-from mcuhome.model.buildenvironment import TOOLS_FAMILY, WORKSPACE_PACKAGE, parse_lock
+from mcuhome.model.buildenvironment import TOOLS_FAMILY, WORKSPACE_PACKAGE
 from mcuhome.model.errors import BuildError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_sdk_archive.py"
-ENV_PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "build_env_package.py"
+
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import release_lines  # noqa: E402 - repo tooling, needs the path above
 
 #: Directories the archive must never carry, each for a reason the
 #: script's docstring records: no consumer reads them out of
@@ -107,22 +110,6 @@ def _member_bytes(archive: Path, name: str) -> bytes:
 @pytest.fixture(scope="module")
 def module_script():
     return _script()
-
-
-@pytest.fixture(scope="module")
-def env_package_script():
-    """``build_env_package.py`` as a module, loaded the same way ``test_env_package.py`` does.
-
-    Read for its ``TOOLS_VERSION`` constant — the tools package's version
-    moves on its own cadence and is written down in exactly one place,
-    which this fixture reads rather than restates.
-    """
-    spec = importlib.util.spec_from_file_location("build_env_package", ENV_PACKAGE_SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 @pytest.fixture(scope="module")
@@ -282,26 +269,45 @@ def test_the_archive_fits_the_ingress_caps_the_server_applies(package) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_file_name_carries_the_version_the_archived_tree_declares(package) -> None:
+def test_the_file_name_carries_the_version_the_archived_tree_answers_with(package) -> None:
     """The lookup key and the content must agree.
 
     ``sdkstore`` finds a candidate by ``mcuhome-sdk-<version>.tar.zst``,
     so a name built from the working tree while the content came from a
     commit would be a package that answers to a version it does not
-    carry. Checked against the ``__version__`` *inside* the archive, which
-    is the only copy that can be wrong here.
+    carry. Checked against the generated ``VERSION`` *inside* the archive,
+    which is what an unpacked SDK answers ``mcuhome.model.__version__``
+    with: the file the version is derived from does not travel in the
+    package, so this copy is the only one that can be wrong here.
     """
     members = _unpacked(package.path)
+    assert _member_bytes(package.path, "mcuhome/model/VERSION") == f"{package.version}\n".encode()
+    assert package.path.name == f"mcuhome-sdk-{package.version}.tar.zst"
+    assert members  # the archive is not empty, which the line above assumes
+
+
+def test_an_unpacked_archive_answers_its_own_version(package, tmp_path) -> None:
+    """The generated file, read the way an installed copy reads it.
+
+    Proven by importing out of the unpacked tree in a subprocess rather
+    than by inspecting the bytes: ``-S`` leaves site-packages out, so the
+    only ``mcuhome.model`` reachable is the archive's own and the answer
+    can come from nowhere else.
+    """
     raw = zstandard.ZstdDecompressor().decompress(
         package.path.read_bytes(), max_output_size=64 * 1024 * 1024
     )
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tar:
-        handle = tar.extractfile("mcuhome/model/__init__.py")
-        assert handle is not None
-        source = handle.read().decode("utf-8")
-    assert f'__version__ = "{package.version}"' in source
-    assert package.path.name == f"mcuhome-sdk-{package.version}.tar.zst"
-    assert members  # the archive is not empty, which the line above assumes
+        tar.extractall(tmp_path, filter="data")
+    completed = subprocess.run(
+        [sys.executable, "-S", "-c", "import mcuhome.model; print(mcuhome.model.__version__)"],
+        cwd=tmp_path,
+        env={"PYTHONPATH": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert completed.stdout.strip() == package.version
 
 
 def test_the_sidecar_is_what_sha256sum_writes(package) -> None:
@@ -358,71 +364,128 @@ def test_an_unreadable_index_is_a_refusal_and_never_an_overwrite(module_script, 
 
 
 # --------------------------------------------------------------------------
-# The environment lock
+# The meta file
 # --------------------------------------------------------------------------
 
 
-def test_the_archive_carries_the_lock_at_its_top_level_and_it_parses(package) -> None:
-    """The one file a workbench reads to derive the workspace and tools pins.
+def test_the_archive_carries_its_meta_file_at_the_top_level(package) -> None:
+    """What a workbench reads to learn which build workspace this release takes.
 
     Read out of the archive rather than assumed present: a member the
     packer forgot would leave every device without ``sources.*`` overrides
     unable to resolve its build environment, and the failure would only
     show up on the consuming side.
     """
-    content = _member_bytes(package.path, "build-environment.lock.json")
-    lock = parse_lock(json.loads(content))
-    assert set(lock.packages) == {WORKSPACE_PACKAGE, TOOLS_FAMILY}
+    meta = json.loads(_member_bytes(package.path, "meta.json"))
+    assert meta["schema"] == 1
+    assert meta["package"] == {
+        "name": "mcuhome-sdk",
+        "version": package.version,
+        "architecture": None,
+    }
 
 
-def test_the_lock_names_the_workspace_at_the_sdks_own_version(package) -> None:
-    """The workspace package is built *from* this tag, so it shares the tag's version."""
-    lock = parse_lock(json.loads(_member_bytes(package.path, "build-environment.lock.json")))
-    assert lock.version_of(WORKSPACE_PACKAGE) == package.version
+def test_the_meta_file_requires_a_range_of_workspace_packages(package) -> None:
+    """A release line states a constraint, never a version.
+
+    The SDK and the build workspace are released on lines of their own, so
+    what one says about the other is "which of them do I accept" — a PEP
+    440 specifier the reader resolves to the newest published version
+    satisfying it. A version here would freeze the pair and republish
+    gigabytes for every SDK release that changed nothing about them.
+    """
+    from packaging.specifiers import SpecifierSet
+
+    meta = json.loads(_member_bytes(package.path, "meta.json"))
+    assert set(meta["requires"]) == {WORKSPACE_PACKAGE}
+    specifier = SpecifierSet(meta["requires"][WORKSPACE_PACKAGE])
+    assert list(specifier.filter(["0.1.0", "0.1.7", "0.2.0"])) == ["0.1.0", "0.1.7"]
 
 
-def test_the_lock_names_the_tools_family_at_the_scripts_own_version(
-    package, env_package_script
-) -> None:
-    """The tools move on their own cadence, so their number is not derived from the SDK's."""
-    lock = parse_lock(json.loads(_member_bytes(package.path, "build-environment.lock.json")))
-    assert lock.version_of(TOOLS_FAMILY) == env_package_script.TOOLS_VERSION
+def test_the_meta_file_names_no_tools_package(package) -> None:
+    """The chain has one link per stage: SDK → workspace → tools.
+
+    The SDK does not constrain the tools — the workspace package it
+    resolves to does, in its own meta file — so a tools entry here would
+    be a second opinion about the same question.
+    """
+    meta = json.loads(_member_bytes(package.path, "meta.json"))
+    assert TOOLS_FAMILY not in meta["requires"]
 
 
-def test_neither_lock_member_carries_a_hash(package) -> None:
-    """An SDK release cannot know these hashes: nothing has built those archives yet."""
-    lock = parse_lock(json.loads(_member_bytes(package.path, "build-environment.lock.json")))
-    assert lock.packages[WORKSPACE_PACKAGE].sha256 is None
-    assert lock.packages[TOOLS_FAMILY].sha256 is None
+def test_the_meta_file_states_the_input_hash_of_the_archived_tree(package) -> None:
+    """The identity of what went in, computed without building anything.
+
+    It is what the push check and the release gate compare, so it has to
+    be the same number when computed from the commit alone.
+    """
+    meta = json.loads(_member_bytes(package.path, "meta.json"))
+    assert meta["inputs_sha256"] == release_lines.inputs_sha256(
+        "sdk", package.commit, repository=REPO_ROOT
+    )
+    assert meta["contents"] == {}
 
 
-def test_the_sidecar_lock_is_byte_identical_to_the_archive_member(package) -> None:
+def test_the_sidecar_meta_file_is_byte_identical_to_the_archive_member(package) -> None:
     """One value written twice, not two independent renderings of the same document.
 
     A mirror or a release page serves the sidecar without unpacking
     anything; if it ever disagreed with the copy inside the archive, which
     one a reader saw would depend on which route they took.
     """
-    sidecar = package.path.parent / f"{package.path.name}.build-environment.lock.json"
-    assert sidecar.read_bytes() == _member_bytes(package.path, "build-environment.lock.json")
+    sidecar = package.path.parent / f"{package.path.name}.meta.json"
+    assert sidecar.read_bytes() == _member_bytes(package.path, "meta.json")
 
 
-def test_a_second_build_writes_a_byte_identical_sidecar_lock_too(
+def test_a_second_build_writes_a_byte_identical_sidecar_meta_file(
     module_script, package, tmp_path
 ) -> None:
     """The determinism proof extended to the file that lives beside the archive.
 
     ``test_two_builds_of_one_revision_are_byte_identical`` already compares
-    the archive itself byte for byte, which covers the lock member inside
+    the archive itself byte for byte, which covers the meta member inside
     it; the sidecar is a second file this script writes and needs its own
     check.
     """
     again = module_script.build_archive(
         repository=REPO_ROOT, revision="HEAD", output_dir=tmp_path / "second"
     )
-    first_sidecar = package.path.parent / f"{package.path.name}.build-environment.lock.json"
-    second_sidecar = again.path.parent / f"{again.path.name}.build-environment.lock.json"
+    first_sidecar = package.path.parent / f"{package.path.name}.meta.json"
+    second_sidecar = again.path.parent / f"{again.path.name}.meta.json"
     assert second_sidecar.read_bytes() == first_sidecar.read_bytes()
+
+
+def test_a_version_suffix_makes_a_local_version_and_nothing_else(module_script, tmp_path) -> None:
+    """A per-commit build names itself, and cannot name itself a release.
+
+    CI builds every stage from the checkout to test it, and those bytes
+    must never be mistakable for a published version — so the one shape
+    the suffix may produce is PEP 440's local version, which is exactly
+    the shape a package host refuses to publish.
+    """
+    from packaging.version import Version
+
+    built = module_script.build_archive(
+        repository=REPO_ROOT,
+        revision="HEAD",
+        output_dir=tmp_path / "ci",
+        version_suffix="ci.4f1c2ab",
+    )
+    assert built.version.endswith("+ci.4f1c2ab")
+    assert Version(built.version).local == "ci.4f1c2ab"
+    assert built.path.name == f"mcuhome-sdk-{built.version}.tar.zst"
+    meta = json.loads(_member_bytes(built.path, "meta.json"))
+    assert meta["package"]["version"] == built.version
+
+    # A whole version handed to the flag is the mistake worth catching:
+    # it would read like a release and be one nobody could publish.
+    with pytest.raises(SystemExit):
+        module_script.build_archive(
+            repository=REPO_ROOT,
+            revision="HEAD",
+            output_dir=tmp_path / "refused",
+            version_suffix="0.2.0-rc.1",
+        )
 
 
 # --------------------------------------------------------------------------

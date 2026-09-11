@@ -6,8 +6,11 @@ Runs once per workspace package, inside the packager image
 (``scripts/build_env_package.py``, ``record_workspace``), after ``west
 update`` and after the patch set has been applied. It writes the
 package's ``workspace.json``: what the materialized workspace is, which
-commit each layer actually resolved to, and which patches were applied on
-top.
+commit each layer actually resolved to, which patches were applied on
+top, and — for every project in the workspace, not only the named layers
+— the pin and the commit it resolved to. The package's meta file
+publishes that project list, so whoever is choosing a build environment
+can see what is in it without unpacking a gigabyte.
 
 **Why it exists.** The package hash pins the workspace, which is the
 point of packaging it — but a hash says "the same", not "what". Two of
@@ -68,14 +71,14 @@ def _git(repository: Path, *arguments: str) -> str:
 
 
 def _west_projects(topdir: Path) -> dict[str, dict[str, str]]:
-    """Every manifest project as ``name -> {path, revision}``.
+    """Every manifest project as ``name -> {path, relative, url, revision}``.
 
     Read out of west rather than out of ``west.yml``: most of these
     projects are not in ``west.yml`` at all, they come from the ``import:``
     of the ``zephyr`` project, and their paths are Zephyr's choice.
     """
     completed = subprocess.run(
-        ["west", "list", "-f", "{name}\t{abspath}\t{revision}"],
+        ["west", "list", "-f", "{name}\t{abspath}\t{path}\t{url}\t{revision}"],
         check=True,
         capture_output=True,
         text=True,
@@ -85,9 +88,36 @@ def _west_projects(topdir: Path) -> dict[str, dict[str, str]]:
     for line in completed.stdout.splitlines():
         if not line.strip():
             continue
-        name, path, revision = line.split("\t", 2)
-        projects[name] = {"path": path, "revision": revision}
+        name, path, relative, url, revision = line.split("\t", 4)
+        projects[name] = {"path": path, "relative": relative, "url": url, "revision": revision}
     return projects
+
+
+def _resolved_projects(projects: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """Every *cloned* project with the commit its pin resolved to.
+
+    The whole list and not only the named layers: a package that carries a
+    hundred and some trees should be able to say what is in each of them,
+    and the environment package's meta file publishes exactly this. Paths
+    are workspace-relative here — an absolute path is a property of the
+    machine that built the package, and this document travels.
+
+    Not cloned is not an error: the manifest repository's own directory is
+    a project like any other to west, and in this workspace it is the
+    empty mount point the SDK is delivered into per build.
+    """
+    resolved: dict[str, dict[str, str]] = {}
+    for name, project in sorted(projects.items()):
+        path = Path(project["path"])
+        if not (path / ".git").exists():
+            continue
+        resolved[name] = {
+            "path": project["relative"],
+            "url": project["url"],
+            "revision": project["revision"],
+            "commit": _git(path, "rev-parse", "HEAD"),
+        }
+    return resolved
 
 
 def _manifest_location(topdir: Path) -> tuple[str, str]:
@@ -141,6 +171,7 @@ def build_record(topdir: Path, clone: str, patches: list[tuple[str, Path]]) -> d
         "manifest": {"path": manifest_path, "file": manifest_file},
         "clone": clone,
         "layers": layers,
+        "projects": _resolved_projects(projects),
     }
 
 

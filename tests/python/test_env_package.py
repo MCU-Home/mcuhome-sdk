@@ -34,6 +34,7 @@ of this repository's own files.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -47,9 +48,16 @@ from pathlib import Path
 
 import pytest
 import zstandard
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_env_package.py"
+
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import release_lines  # noqa: E402 - repo tooling, needs the path above
+
 PACKAGER_DIR = REPO_ROOT / "containers" / "build-environment-packager"
 PACKAGER_DOCKERFILE = PACKAGER_DIR / "Dockerfile"
 PACKAGER_REQUIREMENTS = PACKAGER_DIR / "requirements.txt"
@@ -229,7 +237,12 @@ def test_declaration_is_written_on_both_sides_of_the_archive(builder, sample_tre
         zephyr="4.4.0", workspace_version="0.1.0.dev1", tools_version="0.1.0"
     )
     package = builder.publish_workspace(
-        sample_tree, output, version="0.1.0.dev1", mtime=1700000000, document=document
+        sample_tree,
+        output,
+        version="0.1.0.dev1",
+        mtime=1700000000,
+        document=document,
+        meta=b"{}\n",
     )
 
     sidecar = builder.declaration_sidecar(output, package.path.name)
@@ -422,6 +435,285 @@ def test_every_architecture_pins_every_tool(builder):
         for tool, pin in downloads.items():
             assert re.fullmatch(r"[0-9a-f]{64}", pin["sha256"]), f"{arch}/{tool}"
             assert pin["url"].startswith("https://"), f"{arch}/{tool}"
+
+
+# --------------------------------------------------------------------------
+# The input hash, and what a package says about itself
+# --------------------------------------------------------------------------
+
+
+#: A repository carrying exactly the tools stage's inputs and nothing else,
+#: with content chosen once and never changed — which is what makes the
+#: hash below a constant rather than a value the test recomputes.
+SAMPLE_INPUTS = {
+    "scripts/build_env_package.py": 'CMAKE_VERSION = "3.31.6"\n',
+    "scripts/packager_image.py": f'DIGEST = "sha256:{"ab" * 32}"\n',
+    "packaging/build-environment/requirements.txt": "west==1.5.0\n",
+    "packaging/build-environment/build-environment-entry": "#!/bin/sh\nexit 0\n",
+    "containers/build-environment-packager/Dockerfile": "ARG PYTHON_VERSION=3.13.5\n",
+    # Not an input of the tools stage: the file that proves a change
+    # outside the list leaves the hash where it was.
+    "README.md": "not an input\n",
+}
+
+
+def _sample_repository(root: Path) -> str:
+    """A git repository holding :data:`SAMPLE_INPUTS`, and its commit."""
+    root.mkdir(parents=True, exist_ok=True)
+    for name, content in SAMPLE_INPUTS.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    return _commit(root, "one")
+
+
+def _head(repository: Path) -> str:
+    """The commit *repository* has checked out."""
+    return subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _commit(root: Path, message: str) -> str:
+    """Everything in *root*, committed with a fixed identity, and the commit.
+
+    The identity is fixed because it must not reach the answer: a blob and
+    a tree are hashes of content, so two machines committing these files
+    produce the same objects and therefore the same input hash — which is
+    the property the test is here to pin.
+    """
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.test",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.test",
+        "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
+        "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+    }
+    if not (root / ".git").exists():
+        subprocess.run(["git", "init", "-q", str(root)], check=True, env=environment)
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True, env=environment)
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "-q", "-m", message], check=True, env=environment
+    )
+    return subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def test_the_input_hash_of_a_known_tree_is_a_known_value(tmp_path):
+    """The listing format is part of the answer, so it is pinned by a constant.
+
+    Every party that decides whether a stage changed computes this hash —
+    the push check, the release gate, the package build — and they compare
+    values across machines and across time. A changed separator, a changed
+    sort order or a changed set of extra lines would silently declare
+    everything changed, which is why the expected value is written down
+    rather than recomputed by the test.
+    """
+    commit = _sample_repository(tmp_path / "repo")
+    listing = release_lines.inputs_listing(
+        "tools", commit, repository=tmp_path / "repo", architecture="linux-amd64"
+    )
+    assert listing.splitlines() == [
+        "architecture\tlinux-amd64",
+        "packager-image\tsha256:" + "ab" * 32,
+        "packaging/build-environment/build-environment-entry\t"
+        "039e4d0069c5c26909f86c505b9de66182e6d1f3",
+        "packaging/build-environment/requirements.txt\tb39ba07994b29e1552e8c0de728d34ed462258b7",
+        "scripts/build_env_package.py\teea37df6f8c824a9cfc4e8b4e732d8c398cc51dd",
+    ]
+    assert (
+        release_lines.inputs_sha256(
+            "tools", commit, repository=tmp_path / "repo", architecture="linux-amd64"
+        )
+        == "77875278c75aa971279c556b7b74abee847821615d534d2853b17fd43b013941"
+        == hashlib.sha256(listing.encode("utf-8")).hexdigest()
+    )
+
+
+def test_a_change_to_a_listed_input_changes_the_hash(tmp_path):
+    """The whole point: the hash answers "are these the same inputs"."""
+    root = tmp_path / "repo"
+    commit = _sample_repository(root)
+    before = release_lines.inputs_sha256(
+        "tools", commit, repository=root, architecture="linux-amd64"
+    )
+    (root / "packaging" / "build-environment" / "requirements.txt").write_text(
+        "west==1.5.1\n", encoding="utf-8"
+    )
+    after = release_lines.inputs_sha256(
+        "tools", _commit(root, "two"), repository=root, architecture="linux-amd64"
+    )
+    assert after != before
+
+
+def test_a_change_outside_the_list_leaves_the_hash_alone(tmp_path):
+    """Otherwise every commit would demand a version bump of every stage."""
+    root = tmp_path / "repo"
+    commit = _sample_repository(root)
+    before = release_lines.inputs_sha256(
+        "tools", commit, repository=root, architecture="linux-amd64"
+    )
+    (root / "README.md").write_text("still not an input\n", encoding="utf-8")
+    after = release_lines.inputs_sha256(
+        "tools", _commit(root, "two"), repository=root, architecture="linux-amd64"
+    )
+    assert after == before
+
+
+def test_the_two_architectures_of_one_commit_are_two_identities(tmp_path):
+    """A tools package is per platform, and its bytes differ on purpose."""
+    root = tmp_path / "repo"
+    commit = _sample_repository(root)
+    assert release_lines.inputs_sha256(
+        "tools", commit, repository=root, architecture="linux-amd64"
+    ) != release_lines.inputs_sha256("tools", commit, repository=root, architecture="linux-arm64")
+
+
+def test_the_packager_is_an_input_of_what_is_built_in_it_and_of_nothing_else(tmp_path):
+    """A refreshed packager changes the packages it produces, and no SDK archive.
+
+    The SDK archive is written out of a git tree by this repository's own
+    interpreter — the packager never touches it — so putting its digest
+    into the SDK's inputs would demand an SDK version bump for a base
+    image refresh that cannot change a byte of it.
+    """
+    assert release_lines.PACKAGED_IN_PACKAGER == ("workspace", "tools")
+    root = tmp_path / "repo"
+    commit = _sample_repository(root)
+    assert release_lines.PACKAGER_KEY in release_lines.inputs_listing(
+        "tools", commit, repository=root, architecture="linux-amd64"
+    )
+    assert release_lines.PACKAGER_KEY not in release_lines.inputs_listing(
+        "sdk", _head(REPO_ROOT), repository=REPO_ROOT
+    )
+
+
+def test_the_tools_inputs_need_an_architecture(tmp_path):
+    """A per-platform package without its platform is not identified at all."""
+    root = tmp_path / "repo"
+    commit = _sample_repository(root)
+    with pytest.raises(SystemExit):
+        release_lines.inputs_sha256("tools", commit, repository=root)
+
+
+def test_every_declared_stage_has_an_input_list():
+    """A release line nothing can hash is a line nothing can gate."""
+    for stage in release_lines.STAGES:
+        assert release_lines.input_paths(stage), stage
+
+
+def test_the_definition_file_declares_a_chain_and_not_a_matrix():
+    """SDK → workspace → tools, one link per stage, and the tools end it."""
+    document = release_lines.environment(REPO_ROOT, _head(REPO_ROOT))
+    assert set(release_lines.requires_of(document, "sdk")) == {"mcuhome-build-workspace"}
+    assert set(release_lines.requires_of(document, "workspace")) == {"mcuhome-build-tools"}
+    assert release_lines.requires_of(document, "tools") == {}
+    for stage in release_lines.STAGES:
+        Version(release_lines.version_of(document, stage))
+    for stage in ("sdk", "workspace"):
+        for constraint in release_lines.requires_of(document, stage).values():
+            SpecifierSet(constraint)
+
+
+def test_a_version_suffix_is_a_local_version_or_a_refusal():
+    """CI names its per-commit builds, and cannot name them a release."""
+    assert release_lines.suffixed("0.1.0", None) == "0.1.0"
+    assert release_lines.suffixed("0.1.0", "ci.4f1c2ab") == "0.1.0+ci.4f1c2ab"
+    assert release_lines.suffixed("0.1.0", "+ci.4f1c2ab") == "0.1.0+ci.4f1c2ab"
+    assert Version(release_lines.suffixed("0.1.0", "ci.4f1c2ab")).local == "ci.4f1c2ab"
+    for refused in ("0.2.0-rc.1", "CI", "ci/4f1c2ab", ""):
+        with pytest.raises(SystemExit):
+            release_lines.suffixed("0.1.0", refused)
+
+
+def test_the_meta_file_omits_requires_where_there_is_nothing_below(builder):
+    """Absent and empty are different answers, so the tools say neither by accident."""
+    tools = release_lines.meta_document(
+        name=builder.TOOLS_FAMILY,
+        version="0.1.0",
+        architecture="linux-amd64",
+        requires=None,
+        inputs="0" * 64,
+        contents={},
+    )
+    assert "requires" not in tools
+    assert tools["package"] == {
+        "name": "mcuhome-build-tools",
+        "version": "0.1.0",
+        "architecture": "linux-amd64",
+    }
+    workspace = release_lines.meta_document(
+        name=builder.WORKSPACE_PACKAGE,
+        version="0.1.0",
+        architecture=None,
+        requires={"mcuhome-build-tools": "~=0.1.0"},
+        inputs="0" * 64,
+        contents={},
+    )
+    assert workspace["requires"] == {"mcuhome-build-tools": "~=0.1.0"}
+    assert workspace["schema"] == 1
+
+
+def test_the_workspace_contents_state_both_the_pin_and_what_it_resolved_to(builder):
+    """A tag is movable, so "which pin" and "which bytes" are two facts."""
+    record = {
+        "projects": {
+            "zephyr": {
+                "path": "zephyr",
+                "url": "https://example.test/zephyr",
+                "revision": "v4.4.0",
+                "commit": "c" * 40,
+            }
+        }
+    }
+    document = builder.declaration(zephyr="4.4.0", workspace_version="0.1.0", tools_version="0.1.0")
+    contents = builder.workspace_contents(
+        record=record, patches=["zephyr-something.patch"], document=document
+    )
+    assert contents["projects"]["zephyr"] == {
+        "path": "zephyr",
+        "pinned": "v4.4.0",
+        "revision": "c" * 40,
+        "url": "https://example.test/zephyr",
+    }
+    assert contents["patches"] == ["zephyr-something.patch"]
+    # The package set an image assembles from this package, repeated where
+    # a reader of the meta file can see it without opening the archive.
+    assert contents["environment"] == document
+
+
+def test_the_tools_contents_name_every_tool_the_package_carries(builder):
+    """One place to compare two tools packages by, without unpacking either."""
+    contents = builder.tools_contents(arch="amd64", os_name="linux", python="3.13.5", west="1.5.0")
+    assert contents["architecture"] == "linux-amd64"
+    assert set(contents["tools"]) == {
+        "cmake",
+        "gn",
+        "ninja",
+        "python",
+        "toolchain",
+        "west",
+        "zephyr-sdk",
+    }
+    assert contents["tools"]["cmake"] == builder.CMAKE_VERSION
+    assert contents["tools"]["zephyr-sdk"] == builder.ZEPHYR_SDK_VERSION
+
+
+def test_the_west_version_is_read_out_of_the_environments_own_pins(builder):
+    """The meta file reports the west the wheel set really carries."""
+    assert (
+        builder.requirement_version(ENVIRONMENT_REQUIREMENTS, "west")
+        == _pins(ENVIRONMENT_REQUIREMENTS)["west"]
+    )
 
 
 def test_pregen_directory_is_the_shadow_workspace_chip_root(builder):

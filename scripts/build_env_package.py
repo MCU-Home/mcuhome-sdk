@@ -21,8 +21,18 @@ build environment as a *package set* rather than as an image, and
     point.
 
 One script for both kinds, because the half that must not drift is shared:
-the deterministic archive writer, the file names, the sidecar and the index.
-Two scripts would be two implementations of one byte-level contract.
+the deterministic archive writer, the file names, the sidecars and the
+index. Two scripts would be two implementations of one byte-level contract.
+
+Each package is published with its **meta file** — ``meta.json`` at the top
+of the archive and ``<archive>.meta.json`` beside it, the same bytes twice.
+It states what the package is, which version of the next stage it requires
+(the workspace requires tools; the tools require nothing), the hash of its
+own inputs, and what it resolved to: the west projects and patches for the
+workspace, the tool versions for the tools. The versions themselves come
+from ``packaging/build-environment/environment.json`` at the packaged
+commit — the workspace and the tools are release lines of their own, and
+neither takes the SDK's version.
 
 **Why the bytes have to be reproducible.** A build context pins packages by
 hash, and every delivery of a package set — an image above all — states a
@@ -55,6 +65,10 @@ Usage::
     build_env_package.py workspace --output-dir <dir> [--revision <rev>]
     build_env_package.py tools     --output-dir <dir> [--arch amd64]
 
+Both take ``--version-suffix ci.<sha>`` to build a per-commit package: the
+declared version plus a PEP 440 local segment, which is the one shape a
+package host will not publish.
+
 Both subcommands do their environment-specific work inside a pinned
 container, because neither can be done correctly on an arbitrary host: the
 workspace is laid out by the exact ``west`` that will later read it and its
@@ -85,6 +99,10 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import release_lines  # noqa: E402 - repo-relative import, needs the path above
+
 try:
     import zstandard
 except ModuleNotFoundError:  # a system python, not the repo's venv
@@ -98,12 +116,6 @@ except ModuleNotFoundError:  # a system python, not the repo's venv
 
 #: This repository, seen from ``scripts/``.
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-#: The one place the release version is written down, read out of the
-#: revision being packaged rather than imported — an editable install would
-#: answer with the working tree, which is the tree this script refuses to
-#: package.
-VERSION_FILE = "mcuhome/model/__init__.py"
 
 #: Where :data:`ZEPHYR_RELEASE` is declared, as a path in the repository:
 #: this file, read out of the packaged revision (:func:`zephyr_version`).
@@ -150,13 +162,6 @@ WORKSPACE_PACKAGE = "mcuhome-build-workspace"
 #: script writes names the family, because the bytes differ per platform on
 #: purpose and the version is what the platforms have in common.
 TOOLS_FAMILY = "mcuhome-build-tools"
-
-#: The tools package's own version counter. The tools move on their own
-#: cadence — a new toolchain generation, a new CMake, a changed wheel set —
-#: so tying them to the SDK release version would republish gigabytes for
-#: every release that did not touch them. Bump the patch part whenever any
-#: pin in :data:`TOOL_DOWNLOADS` or the requirements file changes.
-TOOLS_VERSION = "0.1.10.dev1"
 
 #: Specification §5.1's member prefix. The package set is one member per
 #: package — ``packages.<full package name>`` — and never a list packed into
@@ -441,23 +446,24 @@ def _git(repository: Path, *arguments: str) -> bytes:
     return completed.stdout
 
 
-def archived_version(repository: Path, commit: str) -> str:
-    """``__version__`` as *commit* carries it.
+def declared_versions(
+    repository: Path, commit: str, *, suffix: str | None = None
+) -> dict[str, str]:
+    """The workspace and tools versions *commit* declares, optionally suffixed.
 
-    Parsed out of the commit rather than imported, so the name on the file
-    describes the bytes inside it.
+    Read out of ``packaging/build-environment/environment.json`` at the
+    packaged commit rather than out of the working tree: both packages are
+    built from a commit, so the names on their files have to describe the
+    bytes inside them. The two lines are versioned independently — a new
+    toolchain generation moves the tools and nothing else, a ``west.yml``
+    change moves the workspace and nothing else — which is why this is two
+    numbers and not one.
     """
-    source = _git(repository, "cat-file", "blob", f"{commit}:{VERSION_FILE}").decode("utf-8")
-    for node in ast.parse(source).body:
-        if not isinstance(node, ast.Assign):
-            continue
-        named = (target.id for target in node.targets if isinstance(target, ast.Name))
-        if "__version__" not in named:
-            continue
-        value = ast.literal_eval(node.value)
-        if isinstance(value, str):
-            return value
-    raise SystemExit(f"{VERSION_FILE} at {commit} declares no string __version__")
+    document = release_lines.environment(repository, commit)
+    return {
+        stage: release_lines.suffixed(release_lines.version_of(document, stage), suffix)
+        for stage in ("workspace", "tools")
+    }
 
 
 def extract_revision(repository: Path, commit: str, destination: Path, *paths: str) -> None:
@@ -655,11 +661,24 @@ def write_index(path: Path, *, package: str, version: str, file: str, sha256: st
     )
 
 
-def publish(root: Path, output_dir: Path, *, name: str, version: str, mtime: int) -> Package:
-    """Pack *root*, write the sidecar and the index, and say what came out."""
+def publish(
+    root: Path, output_dir: Path, *, name: str, version: str, mtime: int, meta: bytes
+) -> Package:
+    """Pack *root*, write the sidecars and the index, and say what came out.
+
+    *meta* is written on both sides of the archive from this one value —
+    at the top of the tree before it is packed, and beside the archive
+    afterwards — so the copy a reader happens to take cannot decide what
+    the package is. Inside, because an unpacked store entry has to be able
+    to say what it is with nothing else present; beside, because whoever
+    resolves a release chain reads what a package requires before it
+    fetches a gigabyte of it.
+    """
+    (root / release_lines.META_FILE).write_bytes(meta)
     output_dir.mkdir(parents=True, exist_ok=True)
     archive = output_dir / package_filename(name, version)
     digest, size = write_archive(root, archive, mtime=mtime)
+    (output_dir / f"{archive.name}{release_lines.META_SUFFIX}").write_bytes(meta)
     # sha256sum's own format — bare hex, two spaces, the file name — so
     # `sha256sum -c` checks a mirrored copy with no tooling of ours.
     (output_dir / f"{archive.name}.sha256").write_text(
@@ -1044,12 +1063,70 @@ def prune(root: Path) -> None:
             shutil.rmtree(path)
 
 
+def applied_patches(source: Path) -> list[str]:
+    """The patch files this package build applies, in the order it applies them.
+
+    The names alone, because that is what a reader of the meta file wants
+    to know ("which patches are in here"); the record inside the package
+    identifies each one by its SHA-256 as well, which is the identity
+    ``patches/README.md`` makes necessary — a patch is regenerated in
+    place, keeping its file name.
+    """
+    return [
+        patch.name
+        for project in PROJECTS
+        for patch in sorted((source / "patches").glob(f"{project}-*.patch"))
+    ]
+
+
+def workspace_contents(*, record: dict, patches: list[str], document: dict[str, str]) -> dict:
+    """What the workspace package resolved to, for its meta file.
+
+    Three answers, and each of them is a question somebody has had to ask
+    a package by unpacking it:
+
+    ``projects``
+        Every west project the workspace carries — the manifest's own and
+        every one imported through it — with the revision the manifest
+        pins and the commit that revision resolved to. Two of those pins
+        are *tags*, and a tag is movable at the remote, so "which bytes"
+        and "which pin" are different facts and both are stated.
+    ``patches``
+        Which patch files were applied on top.
+    ``environment``
+        The §5 declaration this package carries, repeated here so that a
+        reader of the meta file sees the package set an image assembles
+        from it without opening the archive.
+    """
+    projects = record.get("projects", {})
+    return {
+        "environment": dict(document),
+        "patches": patches,
+        "projects": {
+            name: {
+                "path": project["path"],
+                "pinned": project["revision"],
+                "revision": project["commit"],
+                "url": project["url"],
+            }
+            for name, project in sorted(projects.items())
+        },
+    }
+
+
 def build_workspace_package(
-    *, repository: Path, revision: str, output_dir: Path, work: Path, image: str
+    *,
+    repository: Path,
+    revision: str,
+    output_dir: Path,
+    work: Path,
+    image: str,
+    version_suffix: str | None = None,
 ):
     """The whole workspace package, from a commit to a file."""
     commit = _git(repository, "rev-parse", "--verify", f"{revision}^{{commit}}").decode().strip()
-    version = archived_version(repository, commit)
+    versions = declared_versions(repository, commit, suffix=version_suffix)
+    version = versions["workspace"]
     mtime = commit_timestamp(repository, commit)
 
     source = work / "source"
@@ -1083,7 +1160,23 @@ def build_workspace_package(
     document = declaration(
         zephyr=zephyr_version(repository, commit),
         workspace_version=version,
-        tools_version=TOOLS_VERSION,
+        tools_version=versions["tools"],
+    )
+    meta = release_lines.json_bytes(
+        release_lines.meta_document(
+            name=WORKSPACE_PACKAGE,
+            version=version,
+            architecture=None,
+            requires=release_lines.requires_of(
+                release_lines.environment(repository, commit), "workspace"
+            ),
+            inputs=release_lines.inputs_sha256("workspace", commit, repository=repository),
+            contents=workspace_contents(
+                record=json.loads((root / RECORD_FILE).read_text(encoding="utf-8")),
+                patches=applied_patches(source),
+                document=document,
+            ),
+        )
     )
     # Where the parts of this package are, said by the package rather than
     # guessed by whoever unpacks it. `matter-pregen-chip-root` is the value
@@ -1102,11 +1195,19 @@ def build_workspace_package(
     )
 
     print("packing", flush=True)
-    return publish_workspace(root, output_dir, version=version, mtime=mtime, document=document)
+    return publish_workspace(
+        root, output_dir, version=version, mtime=mtime, document=document, meta=meta
+    )
 
 
 def publish_workspace(
-    root: Path, output_dir: Path, *, version: str, mtime: int, document: dict[str, str]
+    root: Path,
+    output_dir: Path,
+    *,
+    version: str,
+    mtime: int,
+    document: dict[str, str],
+    meta: bytes,
 ) -> Package:
     """Pack the workspace package with its declaration on both sides of the archive.
 
@@ -1116,9 +1217,17 @@ def publish_workspace(
     beside the archive is the one nothing else would notice the absence of:
     the package works without it, right up to the point where a provisioner
     has to know what it is before unpacking it.
+
+    The declaration and the meta file are two documents and stay two: the
+    declaration is what the *specification* asks a build environment for
+    and what an image mirrors into its labels, the meta file is what
+    MCUHome's own release chain asks a *package* for. Their audiences
+    differ, and so does what they may contain.
     """
     write_json(root / DECLARATION_FILE, document)
-    package = publish(root, output_dir, name=WORKSPACE_PACKAGE, version=version, mtime=mtime)
+    package = publish(
+        root, output_dir, name=WORKSPACE_PACKAGE, version=version, mtime=mtime, meta=meta
+    )
     write_json(declaration_sidecar(output_dir, package.path.name), document)
     return package
 
@@ -1266,6 +1375,44 @@ def build_wheels(*, source: Path, root: Path, mtime: int, image: str) -> None:
             os.environ["SOURCE_DATE_EPOCH"] = previous
 
 
+def requirement_version(requirements: Path, package: str) -> str:
+    """The version *requirements* pins *package* at, or a refusal.
+
+    The environment's own requirement set is the one place its Python
+    dependencies are pinned, and the package build reads it out of the
+    packaged commit — so the version the meta file reports for ``west`` is
+    the version the wheel set actually holds.
+    """
+    for line in requirements.read_text(encoding="utf-8").splitlines():
+        name, separator, version = line.strip().partition("==")
+        if separator and name.lower() == package:
+            return version
+    raise SystemExit(f"{requirements} pins no {package}")
+
+
+def tools_contents(*, arch: str, os_name: str, python: str, west: str) -> dict:
+    """Which tools this package carries, at which versions.
+
+    Everything a build compiles with, in one place a reader can compare
+    two packages by: the toolchain and the three build tools are pinned in
+    this script, the interpreter is the packager's base — it decides the
+    wheel set's ABI and therefore travels with the package — and ``west``
+    comes out of the environment's own requirement set.
+    """
+    return {
+        "architecture": f"{os_name}-{arch}",
+        "tools": {
+            "cmake": CMAKE_VERSION,
+            "gn": GN_REVISION,
+            "ninja": NINJA_VERSION,
+            "python": python,
+            "toolchain": ZEPHYR_TOOLCHAIN,
+            "west": west,
+            "zephyr-sdk": ZEPHYR_SDK_VERSION,
+        },
+    }
+
+
 def build_tools_package(
     *,
     repository: Path,
@@ -1275,11 +1422,13 @@ def build_tools_package(
     arch: str,
     os_name: str,
     image: str,
+    version_suffix: str | None = None,
 ):
     """The whole tools package, from pins and a commit to a file."""
     if arch not in TOOL_DOWNLOADS:
         raise SystemExit(f"no downloads pinned for {arch!r}: {sorted(TOOL_DOWNLOADS)}")
     commit = _git(repository, "rev-parse", "--verify", f"{revision}^{{commit}}").decode().strip()
+    version = declared_versions(repository, commit, suffix=version_suffix)["tools"]
     mtime = commit_timestamp(repository, commit)
     name = tools_package_name(os_name, arch)
 
@@ -1307,7 +1456,7 @@ def build_tools_package(
         root / TOOLS_MANIFEST,
         {
             "package": name,
-            "version": TOOLS_VERSION,
+            "version": version,
             "commit": commit,
             "os": os_name,
             "arch": arch,
@@ -1320,10 +1469,34 @@ def build_tools_package(
         },
     )
 
+    architecture = f"{os_name}-{arch}"
+    # The family, with the platform said once: the concrete package name
+    # is the two of them joined, and stating it twice would let them
+    # disagree. `requires` is absent rather than empty — the tools are the
+    # end of the chain and constrain nothing below them, which is a
+    # different statement from "nothing in particular".
+    meta = release_lines.json_bytes(
+        release_lines.meta_document(
+            name=TOOLS_FAMILY,
+            version=version,
+            architecture=architecture,
+            requires=None,
+            inputs=release_lines.inputs_sha256(
+                "tools", commit, repository=repository, architecture=architecture
+            ),
+            contents=tools_contents(
+                arch=arch,
+                os_name=os_name,
+                python=release_lines.packager_python(repository, commit),
+                west=requirement_version(source / REQUIREMENTS_FILE, "west"),
+            ),
+        )
+    )
+
     print("checking the host baseline", flush=True)
     assert_glibc_floor(root)
     print("packing", flush=True)
-    return publish(root, output_dir, name=name, version=TOOLS_VERSION, mtime=mtime)
+    return publish(root, output_dir, name=name, version=version, mtime=mtime, meta=meta)
 
 
 # --------------------------------------------------------------------------
@@ -1370,6 +1543,12 @@ def main(argv: list[str]) -> int:
             "image the first time and for trying a change to it"
         ),
     )
+    parser.add_argument(
+        "--version-suffix",
+        help="append a PEP 440 local segment to the declared version, as in "
+        "ci.<sha> for a per-commit build — a local version is the one shape "
+        "a package host will not publish",
+    )
     arguments = parser.parse_args(argv)
 
     # Asked for before anything is fetched or cloned: an unpinned packager
@@ -1392,6 +1571,7 @@ def main(argv: list[str]) -> int:
                 output_dir=arguments.output_dir,
                 work=work,
                 image=image,
+                version_suffix=arguments.version_suffix,
             )
         else:
             package = build_tools_package(
@@ -1402,6 +1582,7 @@ def main(argv: list[str]) -> int:
                 arch=arguments.arch,
                 os_name=arguments.os_name,
                 image=image,
+                version_suffix=arguments.version_suffix,
             )
     finally:
         if temporary is not None:
