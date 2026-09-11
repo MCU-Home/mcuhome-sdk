@@ -12,8 +12,8 @@ until a build somewhere else fails:
   different identity to a build in which nothing changed — and a package
   a user built from the same tag can never satisfy a pin somebody else
   resolved. The proof is a second build compared byte for byte.
-* **The allowlist.** What is in the archive is what a build container can
-  reach; what is not is invisible until a CMake configure or a
+* **The allowlist.** What is in the archive is what a build environment
+  can reach; what is not is invisible until a CMake configure or a
   ``chip_configure_data_model()`` fails a quarter of an hour into a
   Matter build. The test is both directions — everything named is there,
   and nothing else is.

@@ -8,10 +8,10 @@ application. This module is everything it takes to compile one with
 running it, and reading what came out of it — the artifact set and the
 memory report.
 
-**One caller, and it is inside a build container.**
+**One caller, and it is inside a build environment.**
 :mod:`mcuhome.compiler.abi` composes a :class:`BuildPlan` from the
-invocation request and runs it in the frozen west workspace the image
-carries. Nothing here goes looking for a workspace or decides where one
+invocation request and runs it in the frozen west workspace the
+environment carries. Nothing here goes looking for a workspace or decides where one
 is: that used to be the host-side ``local-dev`` path, which is gone —
 a development change reaches a build as a *patch* in the build context,
 so the environment it is compiled against is the declared one rather
@@ -429,7 +429,7 @@ class BuildPlan:
     *command* is the ``west build`` invocation, and *image* names the
     build environment it runs in when the plan was composed for one —
     ``None`` means the toolchain of the machine this runs on, which is
-    what the program inside a build container sees.
+    what the builder program sees in the subprocess profile.
     """
 
     topdir: Path

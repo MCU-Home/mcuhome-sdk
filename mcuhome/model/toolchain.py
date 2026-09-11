@@ -108,7 +108,7 @@ _RELEASE = re.compile(r"(?P<numbers>[0-9]+(\.[0-9]+)*)(?P<suffix>-[A-Za-z0-9._+-
 
 
 def satisfies_line(version: str, *, line: str) -> bool:
-    """Does a build container carrying Zephyr *version* serve *line*?
+    """Does a build environment carrying Zephyr *version* serve *line*?
 
     The one implementation of the release-line match every backend must
     perform, in ``mcuhome-model`` because **both** backends perform it —
@@ -150,7 +150,7 @@ def satisfies_line(version: str, *, line: str) -> bool:
 
 
 def line_of(version: str) -> str | None:
-    """Which line a build container carrying Zephyr *version* serves.
+    """Which line a build environment carrying Zephyr *version* serves.
 
     The inverse of :func:`satisfies_line`, for the one job that needs it:
     **telling a client what this host can answer.** A backend that cannot

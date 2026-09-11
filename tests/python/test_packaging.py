@@ -205,7 +205,7 @@ def test_only_the_model_distribution_is_dependency_free() -> None:
     assert f"mcuhome-model=={mcuhome.model.__version__}" in requires["mcuhome.compiler"]
     # And nothing here depends on the workbench, which is the packaging
     # half of the repository split: the compiler ships inside the SDK
-    # package and runs in a build container the workbench never enters.
+    # package and runs in a build environment the workbench never enters.
     assert not [
         requirement
         for requirements in requires.values()
@@ -226,9 +226,9 @@ def test_the_import_edges_follow_the_dependency_arrows() -> None:
     model — and an import
     against the arrow is a wheel that breaks only in the environment of
     whoever installed the smaller set, which is the quietest possible
-    way to break. Here it is smaller than an environment: an import of
-    the workbench is a build container that cannot start, because the
-    workbench is not in the image at all.
+    way to break. Here it is smaller than a virtual environment: an
+    import of the workbench is a build step that cannot start, because
+    the workbench is not in the build environment at all.
     """
     import ast
 

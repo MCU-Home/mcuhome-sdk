@@ -7,9 +7,9 @@ produces an **unsigned** image and states the four
 arguments it was linked for, and the signature happens later, on the
 machine where the private key lives. This is the vocabulary of that
 statement, and it sits with the shared model rather than with either end
-because both ends need it and neither owns it — the build container's
-program writes it into the §7.2.1 build report, and the workbench turns
-it back into a command.
+because both ends need it and neither owns it — the builder program
+writes it into the build report (``docs/spec/build-actions.md`` §2.2),
+and the workbench turns it back into a command.
 
 Keys in the serialized form are imgtool's own option names, so the block
 reads as the command it stands for and a consumer does not have to know

@@ -4,8 +4,8 @@
 
 ``scripts/check_build_artifacts.py`` is the step behind the Matter build
 job that turns "the compiler exited 0" into "the flashable files exist and
-the build's description of itself is well-formed": a build container
-delivers ``build-report.json`` beside the flat ``firmware.*`` /
+the build's description of itself is well-formed": a build delivers
+``build-report.json`` beside the flat ``firmware.*`` /
 ``firmware.signed.*`` / ``*.ota`` set, and that is the one shape there is.
 
 The gate is only worth having if it fails on the very outputs a green-but-

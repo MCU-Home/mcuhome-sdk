@@ -149,9 +149,9 @@ def _no_real_signing_key(monkeypatch, tmp_path):
 
 
 # The autouse fixture that made every docker call an assertion error left
-# with the thing that made docker calls: driving a build container is the
-# workbench's now, and no module in this repository starts one. The guard
-# lives there, over the orchestrator it guards.
+# with the thing that made docker calls: driving a build environment is
+# the workbench's now, and no module in this repository starts one. The
+# guard lives there, over the profile it guards.
 
 
 # --- the example model, without the workbench -------------------------

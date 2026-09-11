@@ -5,7 +5,7 @@
 #
 # The three distributions of this repository are built from ONE source
 # tree, `mcuhome/` at the repository root, because that tree is also the
-# SDK package: a build container puts the SDK root on PYTHONPATH and
+# SDK package: a build environment puts the SDK root on PYTHONPATH and
 # `bin/generate` inserts it into sys.path, so the import package has to
 # sit there and nowhere else. What differs per distribution is which
 # subpackage it ships, which is why the project directories are here and
