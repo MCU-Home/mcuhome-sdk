@@ -76,9 +76,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_lines  # noqa: E402 - repo-relative import, needs the path above
 
 __all__ = [
-    "ARCHITECTURES",
     "FAMILY",
-    "RESULT_NAME",
     "TAG_PREFIX",
     "Combination",
     "Plan",
@@ -110,9 +108,6 @@ FAMILY = {
     "tools": "mcuhome-build-tools",
 }
 
-#: The platforms the tools line publishes, as ``<os>-<arch>``.
-ARCHITECTURES = ("linux-amd64", "linux-arm64")
-
 #: The stage above each one — whose constraint decides whether a new
 #: version of this line reaches anybody without a release above it.
 STAGE_ABOVE = {"workspace": "sdk", "tools": "workspace"}
@@ -121,12 +116,6 @@ STAGE_ABOVE = {"workspace": "sdk", "tools": "workspace"}
 #: package that does not say what it requires cannot be resolved through,
 #: which is the workbench's rule and therefore this module's.
 META_SUFFIX = release_lines.META_SUFFIX
-
-#: The name a firmware build writes its outcome under, per combination and
-#: architecture. One file per build, so a missing one means "not built"
-#: rather than "unknown".
-RESULT_NAME = "result-{identifier}-{architecture}.json"
-
 
 # --------------------------------------------------------------------------
 # The release inventory
@@ -851,7 +840,14 @@ def _combination_for(
 
 
 def read_results(directory: Path | None) -> dict[tuple[str, str], dict]:
-    """Every build outcome under *directory*, by combination and platform."""
+    """Every build outcome under *directory*, by combination and platform.
+
+    One file per build — ``result-<combination>-<architecture>.json``,
+    written by the job that ran it — so a combination with no file was not
+    built, which is a different answer from "built and failed" and has to
+    stay one. Searched recursively because a downloaded artifact set
+    arrives one directory per artifact.
+    """
     found: dict[tuple[str, str], dict] = {}
     if directory is None or not directory.is_dir():
         return found

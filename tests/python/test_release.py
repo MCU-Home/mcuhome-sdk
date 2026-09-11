@@ -466,7 +466,8 @@ def test_the_tools_line_is_checked_per_architecture(readiness, declared, tmp_pat
     import release_lines
 
     tag = f"tools-v{declared['tools']}"
-    for platform in readiness.ARCHITECTURES:
+    platforms = ("linux-amd64", "linux-arm64")
+    for platform in platforms:
         write_meta(
             tmp_path,
             tag,
@@ -488,7 +489,7 @@ def test_the_tools_line_is_checked_per_architecture(readiness, declared, tmp_pat
     )
     assert status == 0
     printed = capsys.readouterr().out
-    for platform in readiness.ARCHITECTURES:
+    for platform in platforms:
         assert platform in printed
 
 
