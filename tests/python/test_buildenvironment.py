@@ -292,11 +292,17 @@ def test_a_constraint_the_package_does_not_state_hints_what_it_does() -> None:
     assert "mcuhome-build-tools" in caught.value.hint
 
 
-def test_a_schema_this_version_does_not_read_is_refused_rather_than_guessed() -> None:
-    """A reader that guessed at an unknown shape would resolve a chain wrongly."""
+@pytest.mark.parametrize("schema", [2, 0, None, "1", 1.0, True])
+def test_a_schema_this_version_does_not_read_is_refused_rather_than_guessed(schema) -> None:
+    """A reader that guessed at an unknown shape would resolve a chain wrongly.
+
+    ``True`` is in the list on purpose: it equals 1 in Python, so a
+    document stating ``true`` would sail past a plain comparison and be
+    read as if it had stated the schema number.
+    """
     with pytest.raises(BuildError) as caught:
-        parse_meta(_meta(schema=2))
-    assert "2" in caught.value.message
+        parse_meta(_meta(schema=schema))
+    assert "schema" in caught.value.message
 
 
 @pytest.mark.parametrize(

@@ -408,7 +408,10 @@ def parse_meta(document: Any, *, what: str = f"A package's {META_FILE}") -> Pack
             hint="a package's meta file is one object describing that package",
         )
     schema = document.get("schema")
-    if schema != META_SCHEMA:
+    # `isinstance(schema, bool)` explicitly, because `True == 1` in Python
+    # and the schema this module reads is 1: a document stating `true`
+    # would otherwise be accepted as if it had stated the number.
+    if not isinstance(schema, int) or isinstance(schema, bool) or schema != META_SCHEMA:
         raise BuildError(
             f"{what} states schema {schema!r}, and this MCUHome reads {META_SCHEMA}.",
             hint="update MCUHome, or use a package this version can read",
@@ -422,7 +425,7 @@ def parse_meta(document: Any, *, what: str = f"A package's {META_FILE}") -> Pack
     name = package.get("name")
     version = package.get("version")
     architecture = package.get("architecture")
-    if _PACKAGE_NAME.fullmatch(name or "") is None:
+    if not isinstance(name, str) or _PACKAGE_NAME.fullmatch(name) is None:
         raise BuildError(
             f'{what} names the package "{name}", which is not a package name.',
             hint="lowercase letters, digits and -, with the platform stated separately",
