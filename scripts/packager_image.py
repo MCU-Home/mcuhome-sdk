@@ -55,7 +55,7 @@ TAG = "0.1.10.dev3-r1"
 #: that build and publish it use :func:`publish_reference` instead. Filling
 #: it in is the step that follows the first successful publish; the
 #: refusal below says how.
-DIGEST = ""
+DIGEST = "sha256:3e8b7924e278b7f964f5618539ee5a1b189fa4d7b72172ca6b1b0cb84a27461b"
 
 #: Where the Dockerfile lives, relative to the repository root — quoted in
 #: messages that have to stay true.
