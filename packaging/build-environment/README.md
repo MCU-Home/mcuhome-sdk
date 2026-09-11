@@ -129,15 +129,14 @@ workspace/                     the west workspace top directory
 matter-pregen/                 the pre-generated Matter data-model code
 ```
 
-The declaration is written **twice, from one document**: at the top of the
-archive as above, and beside the archive in the output directory as
-`<archive file name>.build-environment.json`. Inside, because an unpacked
-store entry has to be able to say what it is with nothing else present;
-beside, because the orchestrator reads the declaration *before* it starts
-anything — and before it starts anything it has an archive and not a tree.
-The sidecar is named for the file rather than for the package, like the
-`.sha256` beside it: a source directory holds more than one version at a
-time.
+The declaration lives **inside the archive only**, because that is where
+the reader who needs it is: an unpacked store entry has to be able to say
+what it is with nothing else present, and the image assembly reads it out
+of the archive it is holding. A copy beside the archive used to exist for
+the reader that has not unpacked anything yet; that reader is
+`<archive>.meta.json` now, which answers the question it actually asks —
+what this package is and what it requires — and answers it for every
+package rather than only for the one that carries the declaration.
 
 It states the **abstract** package set specification §5.1 asks a package's
 own metadata for — one `packages.<name>` member per package, carrying a

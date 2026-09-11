@@ -26,6 +26,8 @@ index. Two scripts would be two implementations of one byte-level contract.
 
 Each package is published with its **meta file** — ``meta.json`` at the top
 of the archive and ``<archive>.meta.json`` beside it, the same bytes twice.
+It is the only document that travels beside an archive besides the
+``.sha256``.
 It states what the package is, which version of the next stage it requires
 (the workspace requires tools; the tools require nothing), the hash of its
 own inputs, and what it resolved to: the west projects and patches for the
@@ -169,12 +171,16 @@ TOOLS_FAMILY = "mcuhome-build-tools"
 #: object and in an image's labels alike.
 PACKAGE_MEMBER_PREFIX = "packages."
 
-#: Where the environment declares itself inside the package that carries it,
-#: and, byte for byte the same document, beside the archive. Inside, because
-#: an unpacked store entry has to be able to say what it is with nothing
-#: else present; beside, because a provisioner reads the declaration before
-#: it unpacks anything (specification §5: "The orchestrator reads the
-#: declaration before it starts anything").
+#: Where the environment declares itself, at the top of the package that
+#: carries it: an unpacked store entry has to be able to say what it is
+#: with nothing else present (specification §5).
+#:
+#: **Inside the archive only.** A copy beside it used to exist for the
+#: reader that has not unpacked anything yet; that reader is
+#: ``<archive>.meta.json`` now, which answers the question it actually
+#: asks — what this package is and what it requires — and answers it for
+#: every package rather than for the one that carries the declaration.
+#: Two sidecars saying overlapping things is one sidecar too many.
 DECLARATION_FILE = "build-environment.json"
 
 #: Specification §9.1's ``build-context.generator-constraint``. An empty
@@ -788,26 +794,6 @@ def declaration(*, zephyr: str, workspace_version: str, tools_version: str) -> d
     }
 
 
-def declaration_sidecar(output_dir: Path, archive: str) -> Path:
-    """Where the declaration goes beside the archive it speaks for.
-
-    ``<archive file name>.build-environment.json``, following the ``.sha256``
-    sidecar's convention rather than sitting in the directory under a bare
-    name: a source directory holds more than one version at a time, and a
-    file named for the package instead of for the file would be overwritten
-    by every build that lands next to it — the mistake ``index.json`` avoids
-    by keying on ``(name, version)``.
-
-    It exists because the orchestrator "reads the declaration before it
-    starts anything" (specification §5), and before it starts anything it
-    has an archive and not an unpacked tree. The copy *inside* the archive
-    is for the other half of that: a store entry that has to say what it is
-    with nothing else present. Both are written from one document, so they
-    cannot disagree.
-    """
-    return output_dir / f"{archive}.{DECLARATION_FILE}"
-
-
 def write_json(path: Path, document: dict) -> None:
     """One JSON document, formatted the one way this script formats them."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1241,27 +1227,25 @@ def publish_workspace(
     document: dict[str, str],
     meta: bytes,
 ) -> Package:
-    """Pack the workspace package with its declaration on both sides of the archive.
+    """Pack the workspace package with the §5 declaration at the top of it.
 
-    One function rather than three calls at the call site, because the two
-    copies of the declaration have to be written from one document to be the
-    identical document specification §5 requires — and because the copy
-    beside the archive is the one nothing else would notice the absence of:
-    the package works without it, right up to the point where a provisioner
-    has to know what it is before unpacking it.
+    One function rather than two calls at the call site, because the
+    declaration has to be written before the archive is packed and only
+    the workspace package carries one: it is the architecture-neutral
+    member of the set, and a set that spans architectures needs a carrier
+    that does not.
 
     The declaration and the meta file are two documents and stay two: the
     declaration is what the *specification* asks a build environment for
     and what an image mirrors into its labels, the meta file is what
     MCUHome's own release chain asks a *package* for. Their audiences
-    differ, and so does what they may contain.
+    differ, and so does what they may contain — which is also why only one
+    of them is published beside the archive.
     """
     write_json(root / DECLARATION_FILE, document)
-    package = publish(
+    return publish(
         root, output_dir, name=WORKSPACE_PACKAGE, version=version, mtime=mtime, meta=meta
     )
-    write_json(declaration_sidecar(output_dir, package.path.name), document)
-    return package
 
 
 # --------------------------------------------------------------------------

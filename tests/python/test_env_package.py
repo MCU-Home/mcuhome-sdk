@@ -222,15 +222,18 @@ def test_the_declaration_a_package_carries_is_the_abstract_set(builder):
     assert not any("_" in member for member in members)
 
 
-def test_declaration_is_written_on_both_sides_of_the_archive(builder, sample_tree, tmp_path):
-    """§5: inside the package *and* beside it, and the same document twice.
+def test_the_declaration_travels_inside_the_archive_and_nowhere_else(
+    builder, sample_tree, tmp_path
+):
+    """§5's self-description, at the top of the package that carries it.
 
-    Inside, because an unpacked store entry has to be able to say what it is
-    with nothing else present. Beside, because "the orchestrator reads the
-    declaration before it starts anything" — and before it starts anything
-    it has an archive, not a tree. The one that is easy to forget is the
-    second: a package without it works perfectly until a provisioner has to
-    decide whether to fetch it.
+    Inside, because an unpacked store entry has to be able to say what it
+    is with nothing else present, and because the image assembly reads it
+    out of the archive it is holding. **Not** beside the archive: the
+    reader that has not unpacked anything asks what the package is and
+    what it requires, and ``<archive>.meta.json`` answers that for every
+    package — a second sidecar would be a second, narrower answer to a
+    question one of them already answers.
     """
     output = tmp_path / "out"
     document = builder.declaration(
@@ -245,10 +248,6 @@ def test_declaration_is_written_on_both_sides_of_the_archive(builder, sample_tre
         meta=b"{}\n",
     )
 
-    sidecar = builder.declaration_sidecar(output, package.path.name)
-    assert sidecar.exists(), f"no declaration beside {package.path.name}"
-    assert sidecar.name == f"{package.path.name}.build-environment.json"
-
     inside = {member.name: member for member in _members(package.path)}
     assert builder.DECLARATION_FILE in inside
 
@@ -257,16 +256,13 @@ def test_declaration_is_written_on_both_sides_of_the_archive(builder, sample_tre
     with tarfile.open(fileobj=io.BytesIO(payload)) as tar:
         extracted = tar.extractfile(builder.DECLARATION_FILE)
         assert extracted is not None
-        assert extracted.read() == sidecar.read_bytes(), "the two declarations disagree"
+        assert json.loads(extracted.read().decode("utf-8")) == document
 
-    assert json.loads(sidecar.read_text(encoding="utf-8")) == document
-
-
-def test_declaration_sidecar_is_named_for_the_file_not_the_package(builder, tmp_path):
-    """Two versions in one source directory must not overwrite each other."""
-    first = builder.declaration_sidecar(tmp_path, "mcuhome-build-workspace-0.1.0.tar.zst")
-    second = builder.declaration_sidecar(tmp_path, "mcuhome-build-workspace-0.1.1.tar.zst")
-    assert first != second
+    beside = sorted(path.name for path in output.iterdir())
+    assert not [name for name in beside if name.endswith(f".{builder.DECLARATION_FILE}")], (
+        f"the declaration is published beside the archive again: {beside}"
+    )
+    assert f"{package.path.name}.meta.json" in beside
 
 
 def test_generator_constraint_names_the_workbench(builder):
