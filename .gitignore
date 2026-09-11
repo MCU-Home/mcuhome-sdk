@@ -7,6 +7,11 @@ twister-out*/
 .cache/
 compile_commands.json
 .deps/
+# Generated from packaging/build-environment/environment.json by the
+# builds that ship this package (the SDK archive, the model wheel). A
+# checkout derives its version from the definition file itself, so a
+# committed copy here could only ever go stale.
+mcuhome/model/VERSION
 
 # ai coding agents, which live in the workspace and never in a repository
 AGENTS.md

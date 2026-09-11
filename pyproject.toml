@@ -35,11 +35,15 @@
 # Pinned to the versions CI installs; bump here, CI follows. zstandard is
 # unpinned, matching what ci-test.yml's test-pytest job installs today:
 # scripts/build_sdk_archive.py needs it and so does the test that
-# exercises the archive.
+# exercises the archive. setuptools is here because it is what builds the
+# two distributions under `packaging/`, and `packaging/model` wraps it in
+# a backend of its own — the test that holds that wrapper to its job has
+# to be able to import it.
 [dependency-groups]
 dev = [
   "pytest>=8.0",
   "zstandard",
+  "setuptools>=77",
   "ruff==0.16.1",
   "clang-format==22.1.8",
   "codespell==2.4.3",

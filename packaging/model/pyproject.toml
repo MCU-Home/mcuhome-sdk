@@ -14,9 +14,15 @@
 # else of the tree ends up in the wheel; `tests/python/test_packaging.py`
 # checks that against the built artifacts rather than trusting it.
 
+# setuptools, wrapped by one in-tree module: a built distribution has to
+# carry `mcuhome/model/VERSION`, because the file the version is derived
+# from (`packaging/build-environment/environment.json`) ships in no wheel.
+# See `_versionfile.py` for why that is a backend and not a `setup.py`
+# step — an editable install must not get the file.
 [build-system]
 requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+build-backend = "_versionfile"
+backend-path = ["."]
 
 [project]
 name = "mcuhome-model"
@@ -56,8 +62,15 @@ packages = ["mcuhome.model"]
 [tool.setuptools.package-dir]
 "" = "../.."
 
-# The one version of the release, read from the module that holds it.
-# All three `pyproject.toml` files
-# here name this same attribute, so there is no second copy to bump.
+# The generated version file, which is package content and not code: an
+# installed distribution answers `mcuhome.model.__version__` out of it,
+# because `packaging/build-environment/environment.json` — where the
+# version is declared — ships in no wheel.
+[tool.setuptools.package-data]
+"mcuhome.model" = ["VERSION"]
+
+# The one version of the release, read from the module that derives it.
+# Both `pyproject.toml` files here name this same attribute, so there is
+# no second copy to bump.
 [tool.setuptools.dynamic]
 version = { attr = "mcuhome.model.__version__" }

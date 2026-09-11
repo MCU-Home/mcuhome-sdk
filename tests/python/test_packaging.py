@@ -31,8 +31,12 @@ What is *not* here is anything that is a claim about
 
 from __future__ import annotations
 
+import importlib.util
+import json
+import sys
 import tomllib
 from importlib import metadata
+from pathlib import Path
 
 import pytest
 from conftest import NAMESPACE, NAMESPACE_DIR, PACKAGES, REPO_ROOT
@@ -40,6 +44,10 @@ from conftest import NAMESPACE, NAMESPACE_DIR, PACKAGES, REPO_ROOT
 import mcuhome.model
 
 PACKAGING_DIR = REPO_ROOT / "packaging"
+
+#: The definition file of the three release lines, and the member that is
+#: the version of everything this repository publishes as a distribution.
+ENVIRONMENT_FILE = PACKAGING_DIR / "build-environment" / "environment.json"
 
 #: ``<import package> -> <distribution>``. Both halves are asserted
 #: against reality below; the mapping itself is what a reader needs.
@@ -96,12 +104,16 @@ def test_the_package_directory_maps_onto_the_shared_tree() -> None:
     for directory, project in _project_files().items():
         package_dir = project["tool"]["setuptools"]["package-dir"]
         assert package_dir == {"": "../.."}, f"packaging/{directory} maps {package_dir}"
-        # `build/` and `*.egg-info/` are what a build backend leaves
-        # behind; they are gitignored and mean nothing here.
+        # `build/`, `__pycache__/` and `*.egg-info/` are what a build
+        # backend leaves behind; they are gitignored and mean nothing here.
+        # `packaging/model` is imported as a backend of its own, so it
+        # grows the second of those.
         sources = [
             path.name
             for path in (PACKAGING_DIR / directory).iterdir()
-            if path.is_dir() and path.name != "build" and not path.name.endswith(".egg-info")
+            if path.is_dir()
+            and path.name not in ("build", "__pycache__")
+            and not path.name.endswith(".egg-info")
         ]
         assert not sources, (
             f"packaging/{directory} has grown {sources} — the one source tree "
@@ -123,6 +135,97 @@ def test_all_three_read_the_one_version_from_the_one_place() -> None:
         )
         source = project["tool"]["setuptools"]["dynamic"]["version"]
         assert source == {"attr": VERSION_ATTR}, f"packaging/{name} reads {source}"
+
+
+def test_a_checkout_answers_with_the_version_the_definition_file_declares() -> None:
+    """No literal anywhere: ``sdk.version`` is the answer, read where it is.
+
+    This is the path every developer, every test run and every editable
+    install takes — there is no generated ``VERSION`` in a checkout, on
+    purpose, because one left behind would answer for the tree long after
+    the definition file moved on.
+    """
+    declared = json.loads(ENVIRONMENT_FILE.read_text(encoding="utf-8"))["sdk"]["version"]
+    assert mcuhome.model.__version__ == declared
+    assert not (NAMESPACE_DIR / "model" / "VERSION").exists(), (
+        "a checkout carries no generated VERSION; this one would shadow the "
+        "definition file for everything that imports mcuhome.model"
+    )
+
+
+def test_a_shipped_copy_answers_with_the_generated_version_file(tmp_path: Path) -> None:
+    """The other path: a wheel and an SDK archive carry ``VERSION`` and no more.
+
+    Neither ships ``packaging/``, so the derivation has nothing to read —
+    which is why the build writes the answer beside the module and the
+    module prefers it.
+    """
+    package = tmp_path / "site" / "mcuhome" / "model"
+    package.mkdir(parents=True)
+    (package / "VERSION").write_text("9.9.9.dev7\n", encoding="utf-8")
+    assert mcuhome.model._declared_version(package) == "9.9.9.dev7"
+
+
+def test_a_copy_with_neither_says_so_rather_than_guessing(tmp_path: Path) -> None:
+    """A version nobody can derive is a refusal that names both places."""
+    package = tmp_path / "mcuhome" / "model"
+    package.mkdir(parents=True)
+    with pytest.raises(RuntimeError) as refusal:
+        mcuhome.model._declared_version(package)
+    assert "VERSION" in str(refusal.value)
+    assert "environment.json" in str(refusal.value)
+
+
+@pytest.fixture(scope="module")
+def version_backend():
+    """``packaging/model/_versionfile.py`` imported as a module.
+
+    Loaded by path: it is a PEP 517 in-tree backend, addressed by
+    ``backend-path`` and by nothing that is importable from here.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_versionfile", PACKAGING_DIR / "model" / "_versionfile.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_model_build_backend_writes_and_removes_the_version_file(version_backend) -> None:
+    """The generated file exists for the build and never outlives it.
+
+    A wheel build has to put ``VERSION`` into the source tree — that is
+    where the distribution's code is read from — and a working tree that
+    kept it afterwards would stop deriving its version. Both halves are
+    the property, so both are asserted.
+    """
+    assert version_backend.declared_version() == mcuhome.model.__version__
+    assert not version_backend.VERSION_FILE.exists()
+    with version_backend.generated_version() as written:
+        assert written.read_text(encoding="utf-8") == f"{mcuhome.model.__version__}\n"
+    assert not version_backend.VERSION_FILE.exists()
+
+
+def test_an_editable_install_goes_through_the_untouched_backend(version_backend) -> None:
+    """``build_editable`` is setuptools' own, so no ``VERSION`` is ever written.
+
+    This is the whole reason the generation is a build backend and not a
+    ``setup.py`` step: PEP 517 names the editable case separately, and it
+    is the one case that must not get the file.
+    """
+    import setuptools.build_meta  # noqa: PLC0415 - only this test needs a backend
+
+    project = tomllib.loads(
+        (PACKAGING_DIR / "model" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert project["build-system"]["build-backend"] == "_versionfile"
+    assert project["build-system"]["backend-path"] == ["."]
+    assert project["tool"]["setuptools"]["package-data"] == {"mcuhome.model": ["VERSION"]}
+
+    assert version_backend.build_editable is setuptools.build_meta.build_editable
+    assert version_backend.build_wheel is not setuptools.build_meta.build_wheel
 
 
 def test_the_installed_distributions_all_carry_that_version() -> None:

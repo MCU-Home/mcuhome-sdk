@@ -35,12 +35,59 @@ same one.
 ===================================  =================================================
 """
 
-#: The version of the whole release, and the only place it is written
-#: down. The release gives ``mcuhome-model``,
-#: ``mcuhome-workbench`` and ``mcuhome-compiler`` one shared version, one
-#: tag and one release; this package is the root of the dependency chain,
-#: so it is where that number lives. The three ``pyproject.toml`` files
-#: under ``packaging/`` all read it from here (``dynamic = ["version"]``),
-#: and no second copy exists to disagree with it — which is why nothing
-#: re-exports it under a name of its own either.
-__version__ = "0.1.10.dev2"
+from pathlib import Path as _Path
+
+#: The generated file this package is shipped with, beside this module.
+#: It holds the bare version string and nothing else. It is **written by
+#: the build, never committed** (``.gitignore``): ``scripts/
+#: build_sdk_archive.py`` writes it into the SDK archive and
+#: ``packaging/model``'s build backend writes it into the wheel, both
+#: from the definition file below — so an artifact states the version it
+#: was cut from even where that definition is not shipped with it.
+_VERSION_FILE = "VERSION"
+
+#: The definition file of the three release lines, relative to the
+#: repository root: ``sdk.version`` is this distribution's. Restated here
+#: as a path rather than imported, because this module is the root of the
+#: import chain and runs before anything else in the package exists.
+_ENVIRONMENT_FILE = ("packaging", "build-environment", "environment.json")
+
+
+def _declared_version(package_dir: _Path) -> str:
+    """The version of this release, for a copy of this package at *package_dir*.
+
+    Two sources, in this order, and never a literal: an installed
+    distribution carries the generated ``VERSION`` beside this module, and
+    a checkout carries none — there the answer is ``sdk.version`` of
+    ``packaging/build-environment/environment.json``, which is where the
+    three release lines of this repository are declared and the only place
+    this number is written down.
+
+    The order is what makes both true at once. A wheel or an SDK archive
+    has no definition file to read, and a working tree must not be able to
+    answer with a stale generated file from an earlier build, which is why
+    the generated one is never committed.
+    """
+    generated = package_dir / _VERSION_FILE
+    if generated.is_file():
+        return generated.read_text(encoding="utf-8").strip()
+    definition = package_dir.parents[1].joinpath(*_ENVIRONMENT_FILE)
+    if definition.is_file():
+        import json  # noqa: PLC0415 - only a checkout gets this far
+
+        return str(json.loads(definition.read_text(encoding="utf-8"))["sdk"]["version"])
+    raise RuntimeError(
+        f"mcuhome.model cannot say which version it is: neither {generated} "
+        f"nor {definition} exists."
+    )
+
+
+#: The version of the whole release, and the only place it is *read* from.
+#: The release gives ``mcuhome-model``, ``mcuhome-workbench`` and
+#: ``mcuhome-compiler`` one shared version, one tag and one release; this
+#: package is the root of the dependency chain, so it is where that number
+#: is answered. The ``pyproject.toml`` files under ``packaging/`` read it
+#: from here (``dynamic = ["version"]``), and it is derived rather than
+#: written down so that no second copy exists to disagree with the
+#: definition file.
+__version__ = _declared_version(_Path(__file__).resolve().parent)
