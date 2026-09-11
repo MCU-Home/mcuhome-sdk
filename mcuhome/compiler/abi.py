@@ -473,39 +473,6 @@ class _BuildFailed(Exception):
 # --------------------------------------------------------------------------
 
 
-class _Events:
-    """The optional NDJSON event stream, or nothing at all.
-
-    Only if the invocation names an ``events`` file: the program appends
-    NDJSON to it — one JSON object per line, UTF-8, flushed after every
-    line, append-only, never truncated. Every object carries
-    ``"event": "<name>"`` and a monotonic ``"seq"`` starting at 1.
-
-    **Nothing here can fail an invocation.** The program must not block on
-    writing an event and must not die if the write fails. Where the two
-    obligations collide — a full pipe, a stalled disk — **not blocking
-    wins**. So every write is guarded, nothing is retried, and the file is
-    flushed rather than ``fsync``ed: a reader tailing it wants the bytes
-    now, and an event nobody read is not worth a build.
-    """
-
-    def __init__(self, path: Any) -> None:
-        self._path = Path(path) if isinstance(path, str) else None
-        self._seq = 0
-
-    def emit(self, name: str, **fields: Any) -> None:
-        if self._path is None:
-            return
-        self._seq += 1
-        try:
-            line = json.dumps({"event": name, "seq": self._seq, **fields})
-            with self._path.open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-                handle.flush()
-        except (OSError, TypeError, ValueError):
-            return
-
-
 def _write_file(path: Path, data: bytes) -> None:
     """Write *data* and make it real before anybody hashes it.
 
@@ -718,7 +685,6 @@ class _Build:
         record_document: dict[str, Any],
         given_trees: dict[str, Any] | None = None,
         ccache: Any = None,
-        events: _Events | None = None,
         env: dict[str, str] | None = None,
         extra_env: dict[str, str] | None = None,
     ) -> None:
@@ -740,7 +706,6 @@ class _Build:
         #: in *extra_env* instead, from the tiers the specification gives
         #: it, so this is always ``None`` on that path.
         self.ccache = ccache
-        self.events = events if events is not None else _Events(None)
         #: The environment the program was *told* it runs in, never read
         #: out of the process — see the module docstring. Empty means the
         #: children get only what this program derives.
@@ -773,8 +738,8 @@ class _Build:
     def execute(self, mode: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Everything from the workspace to the delivered artifacts.
 
-        Returns the artifact declarations and the patched-layer block; both
-        invocations render those into their own result document. Raises
+        Returns the artifact declarations and the patched-layer block, which
+        the step renders into its result document. Raises
         :class:`_BuildFailed` for everything that goes wrong on the way.
         """
         topdir, layer_paths = self._workspace()
@@ -1099,7 +1064,6 @@ class _Build:
                         {"layer": name},
                     )
             _write_json(state, {"layer": name, "patchset": digest, "state": "complete"})
-            self.events.emit("patch.layer.applied", layer=name, count=len(patches))
         return layers
 
     # -- 7. code generation ----------------------------------------------
@@ -1191,8 +1155,7 @@ class _Build:
         if not isinstance(answer, dict) or answer.get("status") != _STATUS_SUCCESS:
             said = answer.get("reason") if isinstance(answer, dict) else answer
             raise self.fail(_REASON_BUILD, f"code generation did not succeed: {said!r}")
-        written = _absorb_tree(child_out, tree)
-        self.events.emit("generate.written", files=written)
+        _absorb_tree(child_out, tree)
         return tree
 
     # -- 8. the compile (stage 5) ------------------------------------------
@@ -1288,9 +1251,6 @@ class _Build:
         destination = self.out_dir / name
         _write_file(destination, source.read_bytes())
         digest = sha256_file(destination)
-        self.events.emit(
-            "artifact.collected", role=role, path=name, size=destination.stat().st_size
-        )
         return {"root": "out", "path": name, "role": role, "hashes": {"sha256": digest}}
 
     def _collect(self, scheme: Any, build_dir: Path, log: str) -> list[dict[str, Any]]:
@@ -1342,8 +1302,6 @@ class _Build:
             for image, found in sorted(memory.items())
             for region in found
         ]
-        for region in regions:
-            self.events.emit("build.memory.region", **region)
         _write_file(
             self.out_dir / REPORT_ARTIFACT,
             (json.dumps(self._report(scheme, build_dir, regions), indent=2) + "\n").encode("utf-8"),
@@ -1355,12 +1313,6 @@ class _Build:
                 "role": "report",
                 "hashes": {"sha256": sha256_file(self.out_dir / REPORT_ARTIFACT)},
             }
-        )
-        self.events.emit(
-            "artifact.collected",
-            role="report",
-            path=REPORT_ARTIFACT,
-            size=(self.out_dir / REPORT_ARTIFACT).stat().st_size,
         )
         return artifacts
 
