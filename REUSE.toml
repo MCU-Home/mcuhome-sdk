@@ -12,6 +12,18 @@ precedence = "closest"
 SPDX-FileCopyrightText = "2026 The MCUHome Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
+# The firmware signing key CI builds with. A PEM file cannot carry an
+# SPDX header that every reader of a private key tolerates, so it is
+# annotated here — and stated on purpose, because a key in a public
+# repository has to be one somebody deliberately published. This one signs
+# nothing that leaves a runner; see the build-firmware job in
+# .github/workflows/ci-build.yml.
+[[annotations]]
+path = ".github/workflows/firmware-signing-key.pem"
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 The MCUHome Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
 # ZAP data-model configuration (JSON) and its generated .matter IDL:
 # neither format carries a comment syntax that survives a ZAP save, so
 # they can never hold an SPDX header of their own. Annotated explicitly

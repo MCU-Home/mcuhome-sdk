@@ -925,8 +925,7 @@ jobs:
 
       # A project of its own, with the device copied into it: a build
       # writes a signing key next to the device it signs, and the checkout
-      # is not a place to write one. The key is generated on first use and
-      # dies with the runner; nothing commissions this firmware.
+      # is not a place to write one.
       - name: Make a project for it
         run: |
           set -euo pipefail
@@ -939,6 +938,15 @@ jobs:
       # The documented invocation, and the whole point of this job. How
       # much of the machine the build may use is left to the workbench's
       # own detection, as it is for a user who configured nothing.
+      #
+      # THE SIGNING KEY IS THE ONE IN THIS REPOSITORY, and that is what
+      # makes the cross-architecture comparison below mean anything:
+      # MCUboot bakes the signing *public* key into bootloader.hex, so two
+      # legs that each generated their own would differ in 64 bytes for a
+      # reason that has nothing to do with the host. It is a throwaway —
+      # published in a public repository, signing nothing that leaves a
+      # runner, never used for a release — and it is committed precisely
+      # so that nobody can mistake it for one that is.
       - name: Build the reference Matter device
         id: build
         continue-on-error: true
@@ -947,6 +955,7 @@ jobs:
           set -euo pipefail
           mcuhome device build devices/00-bmp180-two-endpoints.yaml \
             --build-dir build/bmp180-node \
+            --signing-key "$GITHUB_WORKSPACE/mcuhome-sdk/.github/workflows/firmware-signing-key.pem" \
             --build-target local --build-mode subprocess \
             --sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
             --sdk-sources "$GITHUB_WORKSPACE/sources/workspace" \
@@ -977,14 +986,15 @@ jobs:
           export OUTCOME=failure
           if [ "$BUILD_OUTCOME" = success ] && [ "$ARTIFACT_OUTCOME" = success ]; then
             OUTCOME=success
-            # The firmware only. bootloader.hex carries the signing
-            # public key baked into MCUboot, and each leg generates its
-            # own throwaway key — comparing it across architectures would
-            # compare two random keys and say nothing about the host.
+            # The bootloader travels with the firmware: both legs sign
+            # with the same committed key, so a difference in it is a real
+            # difference between the two hosts' MCUboot builds and worth
+            # seeing.
             cp project/build/bmp180-node/firmware.bin \
-               project/build/bmp180-node/firmware.hex produced/
+               project/build/bmp180-node/firmware.hex \
+               project/build/bmp180-node/bootloader.hex produced/
             (cd produced && sha256sum -- *)
-            (cd project/build/bmp180-node && sha256sum -- bootloader.hex build-report.json)
+            (cd project/build/bmp180-node && sha256sum -- build-report.json)
           fi
           python3 - <<'PY'
           import json
@@ -1014,14 +1024,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # Only the UNSIGNED firmware travels: a signature is not
+      # Only the UNSIGNED artifacts travel: a signature is not
       # reproducible by construction (ECDSA draws a random nonce per
       # signature, which tests/python asserts), so comparing signed images
-      # would compare the randomness — and the bootloader carries the
-      # public half of a key this runner invented. The firmware itself and
-      # not only its hash, because "they differ in one build id" and "they
-      # differ everywhere" are two entirely different facts and only the
-      # comparison job can tell them apart.
+      # would compare the randomness. The bootloader is unsigned and
+      # carries the signing public key, which both legs now share, so it
+      # belongs here. The files themselves and not only their hashes,
+      # because "they differ in one build id" and "they differ everywhere"
+      # are two entirely different facts and only the comparison job can
+      # tell them apart.
       - name: Upload what this architecture produced
         if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1039,19 +1050,35 @@ jobs:
 
       # The outcome is recorded and uploaded before this fires, which is
       # the only reason the build step is allowed to continue on error.
+      #
+      # Only a combination that CLAIMS to work is a failure. A triple whose
+      # chain does not hold together — a published stage paired with one
+      # outside its constraint, because that is the only pairing the
+      # catalogue could form — is built to see what it does and reported;
+      # the plan says which is which in `required`, and the assessment
+      # tables carry the reason.
       - name: The build has to have succeeded
-        if: steps.build.outcome != 'success' || steps.artifacts.outcome != 'success'
+        if: |
+          matrix.combination.required
+          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success')
         run: |
           echo "::error::${{ matrix.combination.label }} did not build on ${ARCH}" >&2
           exit 1
+
+      - name: Say that a combination nobody claims did not build
+        if: |
+          !matrix.combination.required
+          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success')
+        run: |
+          echo "::notice::${{ matrix.combination.label }} did not build on ${ARCH} — ${{ matrix.combination.reason }}"
 
   # ------------------------------------------------------------------
   # Does the host architecture change the firmware? A report, not a gate.
   #
   # The two legs of the `checkout` combination cross-compile the same ARM
   # firmware with the same pinned toolchain, from the same sources, in the
-  # same build environment — only the machine the compiler itself runs on
-  # differs. Byte-identical output is therefore the *expected* answer and
+  # same build environment, signed with the same committed key — only the
+  # machine the compiler itself runs on differs. Byte-identical output is therefore the *expected* answer and
   # a genuinely useful one: it says the environment, and not the host,
   # decides what a device gets.
   #
