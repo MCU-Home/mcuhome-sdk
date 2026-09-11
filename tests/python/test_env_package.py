@@ -474,6 +474,7 @@ def test_every_architecture_pins_every_tool(builder):
 #: hash below a constant rather than a value the test recomputes.
 SAMPLE_INPUTS = {
     "scripts/build_env_package.py": 'CMAKE_VERSION = "3.31.6"\n',
+    "scripts/release_lines.py": "META_SCHEMA = 1\n",
     "scripts/packager_image.py": f'DIGEST = "sha256:{"ab" * 32}"\n',
     "packaging/build-environment/requirements.txt": "west==1.5.0\n",
     "packaging/build-environment/build-environment-entry": "#!/bin/sh\nexit 0\n",
@@ -556,12 +557,13 @@ def test_the_input_hash_of_a_known_tree_is_a_known_value(tmp_path):
         "039e4d0069c5c26909f86c505b9de66182e6d1f3",
         "packaging/build-environment/requirements.txt\tb39ba07994b29e1552e8c0de728d34ed462258b7",
         "scripts/build_env_package.py\teea37df6f8c824a9cfc4e8b4e732d8c398cc51dd",
+        "scripts/release_lines.py\t20aa3eddef806dd8bd874602635080367c710d4a",
     ]
     assert (
         release_lines.inputs_sha256(
             "tools", commit, repository=tmp_path / "repo", architecture="linux-amd64"
         )
-        == "77875278c75aa971279c556b7b74abee847821615d534d2853b17fd43b013941"
+        == "a7b00e453ea1658b872067d71c8218b9445b3df793073f3d6a02151ebac657b9"
         == hashlib.sha256(listing.encode("utf-8")).hexdigest()
     )
 
@@ -634,8 +636,62 @@ def test_the_tools_inputs_need_an_architecture(tmp_path):
 
 def test_every_declared_stage_has_an_input_list():
     """A release line nothing can hash is a line nothing can gate."""
+    head = _head(REPO_ROOT)
     for stage in release_lines.STAGES:
-        assert release_lines.input_paths(stage), stage
+        assert release_lines.input_paths(stage, REPO_ROOT, head), stage
+
+
+def test_the_sdk_inputs_are_its_allowlist_as_the_commit_carries_it(tmp_path):
+    """Read out of the commit, like everything else this module answers.
+
+    A release gate holds a published commit's input hash against the
+    checkout's. If the allowlist came from the working tree, a directory
+    added today would change the answer for the old commit as well — the
+    two sides would be comparing different questions.
+    """
+    head = _head(REPO_ROOT)
+    paths = release_lines.input_paths("sdk", REPO_ROOT, head)
+    assert "mcuhome/model" in paths and "west.yml" in paths
+    # The archiver decides the bytes it writes — the allowlist, the
+    # layout, the compression level — so it is an input of what it
+    # produces, exactly as the environment packages' script is of theirs.
+    assert "scripts/build_sdk_archive.py" in paths
+    assert "scripts/release_lines.py" in paths, "it writes meta.json into every archive"
+    # Generated members have no object in the commit and are not inputs.
+    assert "meta.json" not in paths and "mcuhome/model/VERSION" not in paths
+
+
+def test_a_commit_without_one_of_the_inputs_is_a_legible_refusal(tmp_path):
+    """A commit from before a path was an input cannot be described by this list."""
+    root = tmp_path / "repo"
+    _sample_repository(root)
+    (root / "scripts" / "release_lines.py").unlink()
+    commit = _commit(root, "without")
+    with pytest.raises(SystemExit) as refusal:
+        release_lines.inputs_sha256("tools", commit, repository=root, architecture="linux-amd64")
+    assert "scripts/release_lines.py" in str(refusal.value)
+
+
+def test_a_constraint_that_constrains_nothing_is_refused_before_it_is_published():
+    """An empty PEP 440 specifier matches every version there is.
+
+    Which makes it the one value that looks like a statement and is not:
+    a package declaring it would accept whatever the next stage publishes
+    next, including the release that breaks it. "Requires nothing" is said
+    by leaving the member out, as the tools package does.
+    """
+    from packaging.specifiers import SpecifierSet
+
+    assert SpecifierSet("").contains("99.0.0"), "an empty specifier really does match all"
+    for empty in ("", "   "):
+        with pytest.raises(SystemExit) as refusal:
+            release_lines.requires_of(
+                {"sdk": {"version": "1.0", "requires": {"mcuhome-build-workspace": empty}}}, "sdk"
+            )
+        assert "mcuhome-build-workspace" in str(refusal.value)
+    assert release_lines.requires_of(
+        {"sdk": {"version": "1.0", "requires": {"mcuhome-build-workspace": " ~=0.1.0 "}}}, "sdk"
+    ) == {"mcuhome-build-workspace": "~=0.1.0"}
 
 
 def test_the_definition_file_declares_a_chain_and_not_a_matrix():

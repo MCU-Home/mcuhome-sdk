@@ -104,6 +104,15 @@ STAGES = ("sdk", "workspace", "tools")
 PACKAGER_FILE = "scripts/packager_image.py"
 PACKAGER_DOCKERFILE = "containers/build-environment-packager/Dockerfile"
 
+#: The SDK archive's own script: it holds the allowlist that decides what
+#: the archive contains (:func:`sdk_input_paths`), and it is an input of
+#: that stage in its own right.
+SDK_ARCHIVE_FILE = "scripts/build_sdk_archive.py"
+
+#: This module, as a path in the repository. It writes a member of every
+#: archive — ``meta.json`` — so it is an input of every stage.
+RELEASE_LINES_FILE = "scripts/release_lines.py"
+
 #: The schema of the meta file. One integer, and every consumer refuses a
 #: number it does not implement rather than guessing at the shape.
 META_SCHEMA = 1
@@ -136,14 +145,25 @@ ARCHITECTURE_KEY = "architecture"
 #:     hashes are pinned, so it is the list — the environment's Python
 #:     requirement set, and the entry point that ships in the package.
 #: ``sdk``
-#:     Exactly what the SDK archive contains, taken from the archive's own
-#:     allowlist rather than restated (:func:`sdk_input_paths`).
+#:     The archiver itself, plus exactly what the archive contains — the
+#:     latter taken from the archive's own allowlist rather than restated
+#:     (:func:`sdk_input_paths`).
+#:
+#: Every stage lists the script that produces it, because that script
+#: decides the bytes: the allowlist, the layout, the compression level.
+#: This module is in every list for the same reason — it writes
+#: ``meta.json``, which is a member of every archive.
 INPUT_PATHS: dict[str, tuple[str, ...]] = {
+    "sdk": (
+        RELEASE_LINES_FILE,
+        SDK_ARCHIVE_FILE,
+    ),
     "workspace": (
         "components/matter/zap/mcuhome-root.matter",
         "components/matter/zap/mcuhome-root.zap",
         "packaging/build-environment/workspace-record.py",
         "patches",
+        RELEASE_LINES_FILE,
         "scripts/build_env_package.py",
         "scripts/pyshim",
         "west.yml",
@@ -151,6 +171,7 @@ INPUT_PATHS: dict[str, tuple[str, ...]] = {
     "tools": (
         "packaging/build-environment/build-environment-entry",
         "packaging/build-environment/requirements.txt",
+        RELEASE_LINES_FILE,
         "scripts/build_env_package.py",
     ),
 }
@@ -191,8 +212,22 @@ def blob(repository: Path, commit: str, path: str) -> str:
 
 
 def object_id(repository: Path, commit: str, path: str) -> str:
-    """The git object *commit* gives *path* — a blob id or a tree id."""
-    return _git(repository, "rev-parse", "--verify", f"{commit}:{path}").decode().strip()
+    """The git object *commit* gives *path* — a blob id or a tree id.
+
+    A path the commit does not carry is a refusal that says so. It happens
+    for exactly one reason worth naming: a commit from before that path
+    was an input, which is a commit whose inputs this list cannot describe
+    — and a comparison against it would be a comparison of two different
+    questions.
+    """
+    try:
+        return _git(repository, "rev-parse", "--verify", f"{commit}:{path}").decode().strip()
+    except subprocess.CalledProcessError:
+        raise SystemExit(
+            f"{commit} carries no {path}, which is one of the inputs this release line "
+            "is identified by.\nA commit from before that path existed cannot be "
+            "described by today's input list."
+        ) from None
 
 
 def environment(repository: Path, commit: str) -> dict:
@@ -225,7 +260,16 @@ def version_of(document: dict, stage: str) -> str:
 
 
 def requires_of(document: dict, stage: str) -> dict[str, str]:
-    """What *stage* requires of the stage below it — empty where it requires nothing."""
+    """What *stage* requires of the stage below it — empty where it requires nothing.
+
+    A constraint that constrains nothing is refused here rather than
+    published. An empty string is a *valid* PEP 440 specifier set and it
+    matches every version there is, so a package declaring one would
+    quietly accept anything the next stage ever publishes — including the
+    release that breaks it. "No requirement at all" is stated by leaving
+    the member out, which is what the tools package does; an empty value
+    is a mistake that looks like a statement.
+    """
     requires = _line(document, stage).get("requires", {})
     if not isinstance(requires, dict) or not all(
         isinstance(name, str) and isinstance(value, str) for name, value in requires.items()
@@ -234,7 +278,15 @@ def requires_of(document: dict, stage: str) -> dict[str, str]:
             f"{ENVIRONMENT_FILE} states {stage}.requires as something other than a "
             "map from package name to constraint"
         )
-    return dict(requires)
+    empty = sorted(name for name, value in requires.items() if not value.strip())
+    if empty:
+        raise SystemExit(
+            f"{ENVIRONMENT_FILE} states {stage}.requires for {', '.join(empty)} as an "
+            "empty constraint.\nAn empty PEP 440 specifier matches every version there "
+            "is, which is not a requirement.\nState one, such as ~=0.1.0, or leave the "
+            "entry out where the stage requires nothing."
+        )
+    return {name: value.strip() for name, value in requires.items()}
 
 
 def suffixed(version: str, suffix: str | None) -> str:
@@ -310,26 +362,57 @@ def packager_python(repository: Path, commit: str) -> str:
 # --------------------------------------------------------------------------
 
 
-def sdk_input_paths() -> tuple[str, ...]:
+def _collection(source: str, name: str, *, where: str) -> list[str]:
+    """The strings a module-level ``<name> = <literal collection>`` holds.
+
+    ``frozenset({...})`` is a call around a literal rather than a literal,
+    so the call is unwrapped and its one argument evaluated — which is the
+    shape the allowlist happens to take and the only shape accepted here.
+    """
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if name not in (target.id for target in node.targets if isinstance(target, ast.Name)):
+            continue
+        value = node.value
+        if isinstance(value, ast.Call) and len(value.args) == 1:
+            value = value.args[0]
+        found = ast.literal_eval(value)
+        if isinstance(found, (list, tuple, set, frozenset)) and all(
+            isinstance(entry, str) for entry in found
+        ):
+            return sorted(found)
+    raise SystemExit(f"{where} declares no collection of strings named {name}")
+
+
+def sdk_input_paths(repository: Path, commit: str) -> tuple[str, ...]:
     """What the SDK archive is built from, from the archive's own allowlist.
 
-    Imported rather than restated: the question "did the SDK's inputs
-    change" is exactly "did anything the archive contains change", and two
-    lists would answer it two ways the day somebody adds a directory to one
-    of them. The generated members are not here — they are written by the
+    Read rather than restated: the question "did the SDK's inputs change"
+    is exactly "did anything the archive contains change", and two lists
+    would answer it two ways the day somebody adds a directory to one of
+    them. The generated members are not here — they are written by the
     build out of what is, and a file the commit does not carry has no
     object to name.
+
+    Read **out of the commit**, like everything else in this module and for
+    the same reason: a release gate compares a published commit's input
+    hash against the checkout's, so the allowlist that decided the
+    published archive has to be the published one. Taking the working
+    tree's would make an added directory look like a change to the old
+    commit as well.
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import build_sdk_archive  # noqa: PLC0415 - repo-relative import
+    source = blob(repository, commit, SDK_ARCHIVE_FILE)
+    where = f"{SDK_ARCHIVE_FILE} at {commit}"
+    named = _collection(source, "SDK_FILES", where=where)
+    trees = _collection(source, "SDK_TREES", where=where)
+    return tuple(sorted(set(named) | set(trees)))
 
-    return tuple(sorted(build_sdk_archive.SDK_FILES | set(build_sdk_archive.SDK_TREES)))
 
-
-def input_paths(stage: str) -> tuple[str, ...]:
-    """The repository paths *stage* is built from."""
+def input_paths(stage: str, repository: Path, commit: str) -> tuple[str, ...]:
+    """The repository paths *stage* is built from, as *commit* has them."""
     if stage == "sdk":
-        return sdk_input_paths()
+        return tuple(sorted(set(sdk_input_paths(repository, commit)) | set(INPUT_PATHS["sdk"])))
     if stage not in INPUT_PATHS:
         raise SystemExit(f"{stage!r} is not a release line: {', '.join(STAGES)}")
     return INPUT_PATHS[stage]
@@ -349,7 +432,9 @@ def inputs_listing(
     Returned as text rather than only hashed, because a check that reports
     "the inputs changed" is worth very little if it cannot show which one.
     """
-    entries = {path: object_id(repository, commit, path) for path in input_paths(stage)}
+    entries = {
+        path: object_id(repository, commit, path) for path in input_paths(stage, repository, commit)
+    }
     if stage in PACKAGED_IN_PACKAGER:
         entries[PACKAGER_KEY] = packager_digest(repository, commit)
     if stage == ARCHITECTURE_STAGE:
