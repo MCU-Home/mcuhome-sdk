@@ -1,18 +1,30 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Python environment of the MCUHome builder image (containers/builder/).
+# The Python environment of a MCUHome build: the dependency set the build
+# virtual environment is created from.
 #
-# Fully pinned, including transitive dependencies: the image is the one
-# build environment, so "same image tag" has to mean "same
-# packages" — a floating dependency would make two builds of the same
-# image tag differ. Regenerate with `pip freeze` inside the image after
-# changing the direct dependencies below, and bump the image revision in
-# mcuhome/container.py in the same commit.
+# It is not installed from here at build time. `scripts/build_env_package.py`
+# builds a wheel for every line below, in the packager image
+# (containers/build-environment-packager/) and therefore with the
+# interpreter the environment itself runs on, and packs the wheel set into
+# `mcuhome-build-tools_<os>-<arch>`. Provisioning creates the virtual
+# environment from those wheels, offline. Changing anything here means a
+# new tools package: bump TOOLS_VERSION in scripts/build_env_package.py in
+# the same commit.
+#
+# Fully pinned, including transitive dependencies: a build environment is
+# identified by the packages it delivers, so "the same package set" has to
+# mean "the same code" — a floating dependency would make two builds of one
+# revision differ. Regenerate with `pip freeze` in a virtual environment
+# created from this file after changing the direct dependencies below.
 #
 # Direct dependencies and why they are here:
 #
-#   west                      the Zephyr build front end, and `west twister`
+#   west                      the Zephyr build front end, and `west twister`.
+#                             The packager image installs the same pin, so one
+#                             west lays the environment's workspace out and the
+#                             same west reads it later.
 #   pyelftools, intelhex      Zephyr image post-processing
 #   anytree                   Zephyr rom/ram_report — the memory report
 #   PyYAML, pykwalify         Zephyr's YAML handling (bindings, twister)
@@ -43,7 +55,8 @@
 #                               image before 2026-08-09 — every signed
 #                               artifact so far came from the host method,
 #                               where the host interpreter supplies it.
-#   ruamel.yaml               the MCUHome builder package itself
+#   ruamel.yaml               the MCUHome compiler package, which the build
+#                             environment runs as the SDK's generator
 #
 # CHIP's build requirements also list `python-path`. It is deliberately
 # absent: scripts/pyshim/ stands in for it and goes first on PYTHONPATH

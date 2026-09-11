@@ -18,10 +18,15 @@ properties that do not:
   the *abstract* set, without its own hash and with the tools family in
   place of one platform's package. A declaration that is merely almost right
   is not findable: the orchestrator matches images by these members.
-* **The pins.** The tools package restates the Zephyr SDK, toolchain and gn
-  pins the baked image already carries, and a restated pin is a drift risk —
-  so it is checked against the Dockerfile, the way
-  ``test_builder_workspace.py`` checks the Dockerfile against ``west.yml``.
+* **The pins.** Two of them are restated in a second file and a restated
+  pin is a drift risk, so both are checked here: the Zephyr release the
+  declaration states against the revision ``west.yml`` pins, and the
+  packager image's Python requirements against the build environment's own
+  — the packager has to lay the workspace out with the west the
+  environment later reads it with.
+* **The packager reference.** One module names the image the packages are
+  produced in, it hands out a digest rather than a tag, and it refuses
+  legibly while no digest exists.
 
 **No docker and no downloads here.** Everything asserted below is a property
 of this repository's own files.
@@ -45,7 +50,10 @@ import zstandard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_env_package.py"
-DOCKERFILE = REPO_ROOT / "containers" / "build-container" / "Dockerfile"
+PACKAGER_DIR = REPO_ROOT / "containers" / "build-environment-packager"
+PACKAGER_DOCKERFILE = PACKAGER_DIR / "Dockerfile"
+PACKAGER_REQUIREMENTS = PACKAGER_DIR / "requirements.txt"
+ENVIRONMENT_REQUIREMENTS = REPO_ROOT / "packaging" / "build-environment" / "requirements.txt"
 
 
 @pytest.fixture(scope="module")
@@ -57,6 +65,19 @@ def builder():
     every script in it one name collision away from a test.
     """
     spec = importlib.util.spec_from_file_location("build_env_package", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="module")
+def packager_pin():
+    """``scripts/packager_image.py`` imported as a module, like the script."""
+    spec = importlib.util.spec_from_file_location(
+        "packager_image", REPO_ROOT / "scripts" / "packager_image.py"
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -273,45 +294,89 @@ def test_index_refuses_a_file_that_is_not_an_index(builder, tmp_path):
         )
 
 
-def _dockerfile_arg(name: str) -> str:
-    """The default of one ``ARG`` in the builder image's Dockerfile."""
-    match = re.search(rf"^ARG {name}=(\S+)$", DOCKERFILE.read_text(encoding="utf-8"), re.M)
-    assert match, f"{DOCKERFILE} declares no ARG {name}"
+def _packager_arg(name: str) -> str:
+    """The default of one ``ARG`` in the packager image's Dockerfile."""
+    text = PACKAGER_DOCKERFILE.read_text(encoding="utf-8")
+    match = re.search(rf"^ARG {name}=(\S+)$", text, re.M)
+    assert match, f"{PACKAGER_DOCKERFILE} declares no ARG {name}"
     return match.group(1)
 
 
-@pytest.mark.parametrize(
-    ("constant", "argument"),
-    [
-        ("ZEPHYR_SDK_VERSION", "ZEPHYR_SDK_VERSION"),
-        ("ZEPHYR_TOOLCHAIN", "ZEPHYR_TOOLCHAIN"),
-        ("GN_REVISION", "GN_REVISION"),
-    ],
-)
-def test_tool_pins_agree_with_the_builder_image(builder, constant, argument):
-    """A restated pin is a drift risk, so it is checked rather than trusted."""
-    assert getattr(builder, constant) == _dockerfile_arg(argument)
+def _pins(path: Path) -> dict[str, str]:
+    """``name -> version`` for every pinned requirement in *path*."""
+    pins = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, separator, version = line.partition("==")
+        assert separator, f"{path} carries an unpinned requirement: {line}"
+        pins[name.lower()] = version
+    return pins
 
 
-@pytest.mark.parametrize(
-    ("arch", "tool", "argument"),
-    [
-        ("amd64", "zephyr-sdk", "ZEPHYR_SDK_SHA256_AMD64"),
-        ("arm64", "zephyr-sdk", "ZEPHYR_SDK_SHA256_ARM64"),
-        ("amd64", "zephyr-toolchain", "ZEPHYR_TOOLCHAIN_SHA256_AMD64"),
-        ("arm64", "zephyr-toolchain", "ZEPHYR_TOOLCHAIN_SHA256_ARM64"),
-        ("amd64", "gn", "GN_SHA256_AMD64"),
-        ("arm64", "gn", "GN_SHA256_ARM64"),
-    ],
-)
-def test_download_hashes_agree_with_the_builder_image(builder, arch, tool, argument):
-    """The same artifact means the same bytes, whichever build fetches it."""
-    assert builder.TOOL_DOWNLOADS[arch][tool]["sha256"] == _dockerfile_arg(argument)
+def test_base_image_agrees_with_the_packager_image(builder):
+    """The wheel set's ABI is decided by the base's Python, in both files."""
+    assert _packager_arg("DEBIAN_IMAGE") == builder.BASE_IMAGE
 
 
-def test_base_image_agrees_with_the_builder_image(builder):
-    """The wheel set's ABI is decided by this image's Python."""
-    assert _dockerfile_arg("DEBIAN_IMAGE") == builder.BASE_IMAGE
+def test_the_zephyr_release_is_the_one_west_yml_pins(builder):
+    """The declaration states a Zephyr version, and the manifest decides it.
+
+    Bumping the manifest without this constant would publish an
+    environment whose declaration names a Zephyr release it does not
+    carry — and nothing downstream could tell.
+    """
+    manifest = (REPO_ROOT / "west.yml").read_text(encoding="utf-8")
+    found = re.search(r"name: zephyr\s+remote: \S+\s+revision: (\S+)", manifest)
+    assert found, "west.yml no longer states the zephyr revision as expected"
+    assert found.group(1) == f"v{builder.ZEPHYR_RELEASE}"
+
+
+def test_the_packager_pins_the_environments_own_python_packages():
+    """One west lays the workspace out; the same west has to read it later.
+
+    The packager installs a small subset of the build environment's
+    dependency set — west and the four packages CHIP's generators import —
+    and every one of them has to be the version the environment itself
+    carries. Two wests would be a difference nobody could see from outside.
+    """
+    packager = _pins(PACKAGER_REQUIREMENTS)
+    environment = _pins(ENVIRONMENT_REQUIREMENTS)
+    assert "west" in packager
+    for name, version in packager.items():
+        assert name in environment, f"{name} is pinned by the packager and not by the environment"
+        assert version == environment[name], name
+
+
+def test_the_packager_label_states_the_west_it_installed():
+    """A label is scheduling data, and the Dockerfile restates west for it."""
+    assert _packager_arg("WEST_VERSION") == _pins(PACKAGER_REQUIREMENTS)["west"]
+
+
+def test_the_packager_is_named_by_its_digest_and_not_by_its_tag(packager_pin):
+    """A tag is a location: an image that moved under it would change a package."""
+    assert packager_pin.publish_reference() == f"{packager_pin.REPOSITORY}:{packager_pin.TAG}"
+    if packager_pin.DIGEST:
+        assert packager_pin.reference() == f"{packager_pin.REPOSITORY}@{packager_pin.DIGEST}"
+        assert packager_pin.DIGEST.startswith("sha256:")
+    else:
+        with pytest.raises(SystemExit) as refusal:
+            packager_pin.reference()
+        assert packager_pin.publish_reference() in str(refusal.value)
+        assert "--packager-image" in str(refusal.value)
+
+
+def test_the_packager_tag_is_a_version_and_a_revision(packager_pin):
+    """``<sdk version>-r<n>``: what it is for, and which rebuild of it."""
+    assert re.fullmatch(r"\S+-r\d+", packager_pin.TAG), packager_pin.TAG
+
+
+def test_the_packaging_script_takes_the_pin_from_that_one_module(builder, packager_pin):
+    """Nothing restates the reference, and an override is never a fallback."""
+    if packager_pin.DIGEST:
+        assert builder.packager_image() == packager_pin.reference()
+    assert builder.packager_image("example.test/an/image:1") == "example.test/an/image:1"
 
 
 def test_every_architecture_pins_every_tool(builder):

@@ -43,7 +43,7 @@ import zstandard
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_env_image.py"
 DOCKERFILE = REPO_ROOT / "containers" / "build-environment" / "Dockerfile"
-BAKED_DOCKERFILE = REPO_ROOT / "containers" / "build-container" / "Dockerfile"
+PACKAGER_DOCKERFILE = REPO_ROOT / "containers" / "build-environment-packager" / "Dockerfile"
 PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "build_env_package.py"
 
 
@@ -96,9 +96,17 @@ def _arg(text: str, name: str) -> str:
 
 
 def test_the_base_image_is_the_one_the_wheel_set_was_built_for(dockerfile, packager):
-    """One base, named in three places, and the wheels only fit that one."""
+    """One base, named in three places, and the wheels only fit that one.
+
+    This image assembles the packages, the packager image builds them, and
+    the packaging script names the base the wheel set was built for. All
+    three have to be the same bytes or the environment cannot create its
+    virtual environment from its own wheels.
+    """
     assert _arg(dockerfile, "DEBIAN_IMAGE") == packager.BASE_IMAGE
-    assert _arg(BAKED_DOCKERFILE.read_text(encoding="utf-8"), "DEBIAN_IMAGE") == packager.BASE_IMAGE
+    assert (
+        _arg(PACKAGER_DOCKERFILE.read_text(encoding="utf-8"), "DEBIAN_IMAGE") == packager.BASE_IMAGE
+    )
 
 
 # --------------------------------------------------------------------------

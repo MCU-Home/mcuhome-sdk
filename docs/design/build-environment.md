@@ -96,16 +96,27 @@ at `mcuhome/sdk`.
 ## 3. Release chain
 
 ```
+packager image published from main (containers/build-environment-packager/;
+  west, zap, the base interpreter — pinned by digest, changes rarely)
 SDK git tag
   → SDK release archive (existing release workflow)
-  → build-workspace package build (CI; deterministic, records resolved
-    commits; runs the Matter pre-generation)
-  → build-tools package build (CI; only when the toolchain generation
-    changes)
+  → build-workspace package build (CI, in the packager; deterministic,
+    records resolved commits; runs the Matter pre-generation)
+  → build-tools package build (CI, in the packager; only when the
+    toolchain generation changes)
   → packagetool publication (manually dispatched — one deliberate
     publish act; downstream steps may then chain automatically)
   → container image assembled from the published packages
 ```
+
+The packager is the bootstrap of this chain and deliberately outside it:
+the packages cannot be produced on an arbitrary host — the workspace has
+to be laid out by the west that later reads it, the Matter pre-generation
+needs a `zap` no build environment carries, and the wheel set has to be
+built by the interpreter the environment runs on. It carries nothing else,
+compiles nothing, and is pinned by digest at one place in the repository
+so that the packages a release publishes name the exact bytes they were
+produced in.
 
 The image is a thin assembly: a base providing the host baseline
 (section 6), the two packages unpacked, provisioning finalization baked
@@ -275,8 +286,11 @@ in every compile invocation, so hit rates follow path stability:
    version, MCUHome carries a simple local patch — plain workaround,
    allowed to hardcode MCUHome's pre-generation usage — until upstream
    fixes it cleanly); the builder program aligned to the specification's
-   invocation (no arguments, fixed request path). The old monolithic
-   image continues in parallel until switchover.
+   invocation (no arguments, fixed request path). Done. The old
+   monolithic image is gone: what it was still needed for — the pinned
+   toolchain the packages are produced in — is the small, digest-pinned
+   packager image (section 3), and the retired contract it implemented
+   went with it.
 3. **Provisioner and subprocess profile** — verified package
    acquisition generalized, the store with finalize/freeze, per-step
    layout, context format v4 in the workbench, image-from-packages

@@ -1,25 +1,26 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Write the builder image's record of the west workspace it carries.
+"""Write the build environment's record of the west workspace it carries.
 
-Runs once, inside the image build (``containers/build-container/Dockerfile``),
-after ``west update`` and after the patch set has been applied. It writes
-``/mcuhome/workspace.json``: what the baked workspace is, which commit
-each layer actually resolved to, and which patches were applied on top.
+Runs once per workspace package, inside the packager image
+(``scripts/build_env_package.py``, ``record_workspace``), after ``west
+update`` and after the patch set has been applied. It writes the
+package's ``workspace.json``: what the materialized workspace is, which
+commit each layer actually resolved to, and which patches were applied on
+top.
 
-**Why it exists.** The image digest pins the workspace, which is the
-point of baking it — but a digest says "the same", not "what". Two of the
-revisions in ``west.yml`` are *tags*, and a tag is movable at the remote,
-so a rebuild of the same Dockerfile can silently produce a different
+**Why it exists.** The package hash pins the workspace, which is the
+point of packaging it — but a hash says "the same", not "what". Two of
+the revisions in ``west.yml`` are *tags*, and a tag is movable at the
+remote, so a second package build can silently produce a different
 workspace. Recording the resolved 40-character commit per layer turns
 that from something to trust into something to check. The same argument
-the SDK pin makes with ``sdk.sha256``, and the reason a build container is
-recorded by digest rather than by tag once a backend has chosen one.
+the SDK pin makes with ``sdk.sha256``.
 
 **Why the layer names are the builder program's.** ``zephyr``, ``sdk``,
 ``chip`` and ``mcuboot`` are the layer names the builder program uses
-(``mcuhome/compiler/abi.py``), so a later ``describe`` fills its
-``trees`` block by lookup rather than by translation.
+(``mcuhome/compiler/abi.py``), so a step that has to name a tree looks it
+up rather than translating it.
 
 **Why patches are identified by digest.** ``patches/README.md`` says to
 regenerate a patch *in place*, keeping its file name — so the name is not
@@ -27,9 +28,9 @@ an identity and a name alone cannot tell two patch sets apart. The
 SHA-256 can.
 
 The ``sdk`` layer is recorded with ``mounted: true`` and no version: it
-is deliberately not in the image (it is a hash-pinned package
-fetched per build), and the contract already models exactly that case as
-a ``trees`` entry without a version.
+is deliberately not in the package (it is a hash-pinned package the
+orchestrator delivers per build), and a tree without a version is exactly
+how that case is modelled.
 """
 
 from __future__ import annotations

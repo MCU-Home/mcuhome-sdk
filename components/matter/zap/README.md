@@ -48,14 +48,19 @@ Regeneration means editing `mcuhome-root.zap` in the ZAP GUI
 re-checking the generated C:
 
 The commands below need `zap`/`zap-cli` and CHIP's codegen dependencies.
-The builder image provides all of them, so the simplest way to run them
-is inside it — from the workspace top directory:
+The build-environment packager
+([`containers/build-environment-packager/`](../../../containers/build-environment-packager/README.md))
+carries exactly those — it is the image the Matter data model is
+pre-generated in for every environment release — so the simplest way to
+run them is inside it, from the workspace top directory:
 
 ```sh
 docker run --rm -it --user "$(id -u):$(id -g)" \
     --volume "$PWD:$PWD" --workdir "$PWD" \
-    ghcr.io/mcu-home/build-container:zephyr-4.4.0-r11 bash
+    ghcr.io/mcu-home/build-environment-packager:<tag> bash
 ```
+
+The tag is the one `scripts/packager_image.py` names.
 
 (The GUI step needs a real `zap` on a desktop, so that one stays a host
 task — the image carries `zap-cli` and the headless codegen it drives,
@@ -63,7 +68,7 @@ not a working `zap` window. Everything below is headless.)
 
 ```sh
 # From the workspace top directory. Prerequisites, if you are NOT in the
-# builder image:
+# packager image:
 #   - zap / zap-cli on PATH (or ZAP_INSTALL_PATH pointing at the zap install)
 #   - CHIP's codegen dependencies (scripts/setup/requirements.build.txt)
 # Needed either way:

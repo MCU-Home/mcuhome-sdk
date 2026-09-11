@@ -105,6 +105,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: package.
 VERSION_FILE = "mcuhome/model/__init__.py"
 
+#: Where :data:`ZEPHYR_RELEASE` is declared, as a path in the repository:
+#: this file, read out of the packaged revision (:func:`zephyr_version`).
+ZEPHYR_RELEASE_FILE = "scripts/build_env_package.py"
+
 #: The static index, next to the archives it indexes. Same format and same
 #: single question as ``scripts/build_sdk_archive.py`` writes it: "which
 #: file, and which bytes, for (name, version)".
@@ -121,6 +125,20 @@ ZSTD_LEVEL = 10
 #: Specification §5's ``spec-generation``: the generation this environment
 #: implements.
 SPEC_GENERATION = "3"
+
+#: The Zephyr release the environment builds against, without the leading
+#: ``v``, for the ``zephyr.version`` member of specification §5's
+#: declaration.
+#:
+#: **Lockstep rule: this is the ``revision:`` of the ``zephyr`` project in
+#: ``west.yml`` without the ``v``** — bumping one without the other is a
+#: bug, and ``tests/python/test_env_package.py`` asserts it. It is restated
+#: here rather than parsed out of the manifest because the declaration is
+#: written from the *packaged* revision, and this script is read out of
+#: that revision for exactly this value (:func:`zephyr_version`) at a point
+#: where no YAML parser is available: the release jobs run it on a plain
+#: interpreter with one pinned dependency.
+ZEPHYR_RELEASE = "4.4.0"
 
 #: The architecture-neutral package. It carries the declaration for the
 #: whole set (specification §5) — a set that spans architectures needs a
@@ -179,7 +197,7 @@ PREGEN_DIR = "matter-pregen"
 
 #: Inside the archive: the record of what was resolved — resolved commit per
 #: layer and the SHA-256 of every patch applied. Written by
-#: ``containers/build-container/workspace-record.py``, which is the one
+#: ``packaging/build-environment/workspace-record.py``, which is the one
 #: implementation of that document.
 RECORD_FILE = "workspace.json"
 
@@ -216,7 +234,7 @@ CHIP_PATH = "modules/lib/connectedhomeip"
 #: shallow workspace and a full one produce identical firmware.
 #:
 #: **Layer names.** ``zephyr``, ``chip`` are what
-#: ``containers/build-container/workspace-record.py`` knows.
+#: ``packaging/build-environment/workspace-record.py`` knows.
 PROJECTS = {
     "zephyr": ("zephyr", "zephyr"),
     "connectedhomeip": (CHIP_PATH, "chip"),
@@ -239,18 +257,21 @@ PRUNED_DIR = "__pycache__"
 # The tools package
 # --------------------------------------------------------------------------
 
-#: The Zephyr SDK bundle and the one target toolchain, the same pins the
-#: baked image uses (``containers/build-container/Dockerfile``). The *minimal*
-#: bundle plus exactly one target toolchain: the full bundle is some twenty
-#: architectures and several gigabytes, and MCUHome targets ARM today.
-#: ``tests/python/test_env_package.py`` asserts these against the Dockerfile,
-#: because a restated pin is a drift risk.
+#: The Zephyr SDK bundle and the one target toolchain. The *minimal* bundle
+#: plus exactly one target toolchain: the full bundle is some twenty
+#: architectures and several gigabytes, and MCUHome targets ARM today. This
+#: file is the only place these are pinned — they belong to the tools
+#: package and to nothing else, and the packager image carries no toolchain
+#: at all.
 ZEPHYR_SDK_VERSION = "1.0.1"
 ZEPHYR_TOOLCHAIN = "arm-zephyr-eabi"
 
 #: gn, which the Matter SDK builds its own libraries with. Taken from the
 #: CIPD package Chromium infrastructure publishes and pinned by the gn git
-#: revision, as the baked image pins it.
+#: revision — ``gn --version`` reports ``2502 (17b0057970fa)``, the version
+#: MCUHome verified. Pigweed's own pin inside the pinned CHIP revision is
+#: older; MCUHome tracks what it tested rather than what a vendored
+#: submodule suggests.
 GN_REVISION = "17b0057970fa2b07a20cbb4289ab78cf93565f35"
 
 #: CMake and Ninja, from their projects' own release binaries.
@@ -292,8 +313,8 @@ GLIBC_SYMBOL = re.compile(r"GLIBC_(\d+)\.(\d+)")
 #: spelling differs three ways across the three publishers, which is why
 #: each entry resolves its own rather than sharing one variable.
 #:
-#: The Zephyr SDK and gn hashes are the baked image's; CMake's and Ninja's
-#: are this file's own, taken from the release artifacts pinned above.
+#: Every hash is this file's own, taken from the release artifacts pinned
+#: above and verified on every download.
 TOOL_DOWNLOADS: dict[str, dict[str, dict[str, str]]] = {
     "amd64": {
         "zephyr-sdk": {
@@ -381,24 +402,28 @@ TOOLS_MANIFEST = "build-tools.json"
 ENTRY_SOURCE = "packaging/build-environment/build-environment-entry"
 
 #: The pinned Debian base of MCUHome's containers, digest-pinned exactly as
-#: ``containers/build-container/Dockerfile`` pins it — ``trixie-slim`` moves
-#: with every point release. It is named here because it decides the wheel
-#: set's ABI: the build virtual environment is created by *this* base's
-#: Python, so that is the interpreter the wheels have to fit.
+#: ``containers/build-environment-packager/Dockerfile`` and
+#: ``containers/build-environment/Dockerfile`` pin it — ``trixie-slim``
+#: moves with every point release. It is named here because it decides the
+#: wheel set's ABI: the build virtual environment is created by *this*
+#: base's Python, so that is the interpreter the wheels have to fit.
 #:
 #: The wheels are not built in it, though. ``debian:trixie-slim`` carries no
 #: interpreter at all (measured: ``python3`` exits 127), and installing one
 #: with ``apt-get`` would put an unpinned package into a package build whose
 #: whole point is that everything in it is pinned. They are built in the
-#: builder image instead, which is this base plus ``python3`` and
+#: packager image instead, which is this base plus ``python3`` and
 #: ``python3-venv`` — pinned as a whole, and the same interpreter.
 BASE_IMAGE = (
     "debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258"
 )
 
 #: The pinned Python dependency set of a build, transitive dependencies
-#: included. Read out of the packaged revision, like everything else.
-REQUIREMENTS_FILE = "containers/build-container/requirements.txt"
+#: included — the environment's own, packed into the tools package as a
+#: wheel set. Read out of the packaged revision, like everything else.
+#: (The much smaller set the *packager* image needs to do the work is a
+#: different file, ``containers/build-environment-packager/requirements.txt``.)
+REQUIREMENTS_FILE = "packaging/build-environment/requirements.txt"
 
 
 # --------------------------------------------------------------------------
@@ -659,11 +684,12 @@ def publish(root: Path, output_dir: Path, *, name: str, version: str, mtime: int
 def zephyr_version(repository: Path, commit: str) -> str:
     """The Zephyr release this environment builds against, without the ``v``.
 
-    Read out of ``mcuhome/model/buildimage.py`` at the packaged revision,
-    which is the one place that number is written down and is already
-    asserted against ``west.yml``.
+    Read out of *this script* at the packaged revision rather than taken
+    from the running process: a package is built from a commit, so the
+    number that goes into its declaration is that commit's
+    :data:`ZEPHYR_RELEASE` and not the working tree's.
     """
-    source = _git(repository, "cat-file", "blob", f"{commit}:mcuhome/model/buildimage.py")
+    source = _git(repository, "cat-file", "blob", f"{commit}:{ZEPHYR_RELEASE_FILE}")
     for node in ast.parse(source.decode("utf-8")).body:
         if not isinstance(node, ast.Assign):
             continue
@@ -673,7 +699,7 @@ def zephyr_version(repository: Path, commit: str) -> str:
         value = ast.literal_eval(node.value)
         if isinstance(value, str):
             return value
-    raise SystemExit(f"{commit} declares no string ZEPHYR_RELEASE in mcuhome/model/buildimage.py")
+    raise SystemExit(f"{commit} declares no string ZEPHYR_RELEASE in {ZEPHYR_RELEASE_FILE}")
 
 
 def package_members(workspace_version: str, tools_version: str) -> dict[str, str]:
@@ -767,12 +793,23 @@ def run_in_container(image: str, mounts: dict[Path, str], script: str, *, networ
     subprocess.run(command, check=True)
 
 
-def builder_image() -> str:
-    """The pinned build-container image, from the one place that names it."""
-    sys.path.insert(0, str(REPO_ROOT))
-    from mcuhome.model.buildimage import IMAGE  # noqa: PLC0415 - repo-relative import
+def packager_image(override: str | None = None) -> str:
+    """The packager image to run in, from the one place that names it.
 
-    return IMAGE
+    *override* is what ``--packager-image`` was given, and exists for the
+    two occasions on which the pinned reference cannot be used: publishing
+    the packager for the first time, when no digest exists yet, and trying
+    a change to ``containers/build-environment-packager/`` before it is
+    published. A package built with an override is not a package anybody
+    else can reproduce, which is why it is a deliberate flag and never a
+    fallback.
+    """
+    if override:
+        return override
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from packager_image import reference  # noqa: PLC0415 - repo-relative import
+
+    return reference()
 
 
 # --------------------------------------------------------------------------
@@ -812,16 +849,15 @@ def fetch(url: str, sha256: str, cache: Path) -> Path:
 def materialize_workspace(*, source: Path, work: Path, image: str) -> None:
     """Lay the west workspace out, patch it, fetch its blobs, record it.
 
-    The order is the one the baked image's workspace stage encodes, and each
-    step is there for a reason stated at its constant: shallow update, tag
-    refs fetched back, patches applied as working-tree changes, blobs
+    Each step is there for a reason stated at its constant: shallow update,
+    tag refs fetched back, patches applied as working-tree changes, blobs
     fetched, the record written, and only then the manifest repository's
     directory emptied — the record needs the manifest to read the workspace,
     and the SDK is mounted per build rather than packaged.
 
-    It runs inside the pinned build-container image because the west that
-    lays a workspace out and the west that reads it later have to be one
-    version, and that image is where the pinned one lives.
+    It runs inside the pinned packager image because the west that lays a
+    workspace out and the west that reads it later have to be one version,
+    and that image is where the pinned one lives.
     """
     workspace = work / WORKSPACE_DIR
     (workspace / MANIFEST_DIR).mkdir(parents=True, exist_ok=True)
@@ -878,10 +914,11 @@ def materialize_workspace(*, source: Path, work: Path, image: str) -> None:
 def record_workspace(*, source: Path, work: Path, image: str) -> None:
     """Write the workspace record, then empty the manifest repository's directory.
 
-    One implementation of that document exists — the image's own
-    ``workspace-record.py`` — and this is a second caller of it, not a second
-    copy. It has to run before the manifest repository's directory is
-    emptied, because it reads the workspace through west.
+    One implementation of that document exists —
+    ``packaging/build-environment/workspace-record.py``, which is packaging
+    material rather than image content. It has to run before the manifest
+    repository's directory is emptied, because it reads the workspace
+    through west.
     """
     patch_arguments: list[str] = []
     for project, (_path, layer) in PROJECTS.items():
@@ -890,7 +927,7 @@ def record_workspace(*, source: Path, work: Path, image: str) -> None:
 
     script = "\n".join(
         [
-            "python3 /src/containers/build-container/workspace-record.py "
+            "python3 /src/packaging/build-environment/workspace-record.py "
             f"--topdir /work/{WORKSPACE_DIR} --output /work/{RECORD_FILE} "
             f"--clone {CLONE_KIND} " + " ".join(patch_arguments),
             # The manifest repository's directory is emptied and left in
@@ -1007,12 +1044,13 @@ def prune(root: Path) -> None:
             shutil.rmtree(path)
 
 
-def build_workspace_package(*, repository: Path, revision: str, output_dir: Path, work: Path):
+def build_workspace_package(
+    *, repository: Path, revision: str, output_dir: Path, work: Path, image: str
+):
     """The whole workspace package, from a commit to a file."""
     commit = _git(repository, "rev-parse", "--verify", f"{revision}^{{commit}}").decode().strip()
     version = archived_version(repository, commit)
     mtime = commit_timestamp(repository, commit)
-    image = builder_image()
 
     source = work / "source"
     if source.exists():
@@ -1024,7 +1062,7 @@ def build_workspace_package(*, repository: Path, revision: str, output_dir: Path
         "west.yml",
         "patches",
         "scripts/pyshim",
-        "containers/build-container/workspace-record.py",
+        "packaging/build-environment/workspace-record.py",
         f"{ZAP_STEM}.zap",
         f"{ZAP_STEM}.matter",
     )
@@ -1186,7 +1224,7 @@ def unpack_tools(*, arch: str, cache: Path, root: Path) -> None:
     (root / "ninja" / "ninja").chmod(0o755)
 
 
-def build_wheels(*, source: Path, root: Path, mtime: int) -> None:
+def build_wheels(*, source: Path, root: Path, mtime: int, image: str) -> None:
     """Build the complete wheel set the build virtual environment is created from.
 
     Wheels rather than a ready virtual environment, because a virtual
@@ -1199,9 +1237,9 @@ def build_wheels(*, source: Path, root: Path, mtime: int) -> None:
 
     Built in a container, because the interpreter that builds the wheels
     decides which interpreter can install them, and the one the environment
-    runs on is :data:`BASE_IMAGE`'s — see there for why the builder image
+    runs on is :data:`BASE_IMAGE`'s — see there for why the packager image
     supplies it rather than the base itself. ``/usr/bin/python3`` explicitly:
-    the builder image puts its own virtual environment first on ``PATH``, and
+    the packager image puts its own virtual environment first on ``PATH``, and
     a virtual environment inside a virtual environment is not what decides an
     ABI. ``SOURCE_DATE_EPOCH`` is what makes a locally built wheel
     reproducible: without it the zip carries the build time, and the two
@@ -1220,7 +1258,7 @@ def build_wheels(*, source: Path, root: Path, mtime: int) -> None:
     previous = os.environ.get("SOURCE_DATE_EPOCH")
     os.environ["SOURCE_DATE_EPOCH"] = str(mtime)
     try:
-        run_in_container(builder_image(), {source: "/src", wheels: "/out"}, script, network=True)
+        run_in_container(image, {source: "/src", wheels: "/out"}, script, network=True)
     finally:
         if previous is None:
             del os.environ["SOURCE_DATE_EPOCH"]
@@ -1229,7 +1267,14 @@ def build_wheels(*, source: Path, root: Path, mtime: int) -> None:
 
 
 def build_tools_package(
-    *, repository: Path, revision: str, output_dir: Path, work: Path, arch: str, os_name: str
+    *,
+    repository: Path,
+    revision: str,
+    output_dir: Path,
+    work: Path,
+    arch: str,
+    os_name: str,
+    image: str,
 ):
     """The whole tools package, from pins and a commit to a file."""
     if arch not in TOOL_DOWNLOADS:
@@ -1251,7 +1296,7 @@ def build_tools_package(
     print("unpacking the pinned tools", flush=True)
     unpack_tools(arch=arch, cache=work / "downloads", root=root)
     print("building the wheel set", flush=True)
-    build_wheels(source=source, root=root, mtime=mtime)
+    build_wheels(source=source, root=root, mtime=mtime, image=image)
 
     entry = root / TOOLS_ENTRY
     entry.parent.mkdir(parents=True, exist_ok=True)
@@ -1317,7 +1362,20 @@ def main(argv: list[str]) -> int:
         help="the tools package's architecture (default: this machine's)",
     )
     parser.add_argument("--os", dest="os_name", default="linux", help="the tools package's OS")
+    parser.add_argument(
+        "--packager-image",
+        help=(
+            "run the environment-specific steps in this image instead of the pinned "
+            "packager (containers/build-environment-packager/); for publishing that "
+            "image the first time and for trying a change to it"
+        ),
+    )
     arguments = parser.parse_args(argv)
+
+    # Asked for before anything is fetched or cloned: an unpinned packager
+    # is a refusal, and a refusal is worth nothing after twenty minutes of
+    # work.
+    image = packager_image(arguments.packager_image)
 
     work = arguments.work_dir
     temporary = None
@@ -1333,6 +1391,7 @@ def main(argv: list[str]) -> int:
                 revision=arguments.revision,
                 output_dir=arguments.output_dir,
                 work=work,
+                image=image,
             )
         else:
             package = build_tools_package(
@@ -1342,6 +1401,7 @@ def main(argv: list[str]) -> int:
                 work=work,
                 arch=arguments.arch,
                 os_name=arguments.os_name,
+                image=image,
             )
     finally:
         if temporary is not None:

@@ -25,14 +25,13 @@
 # straight from this file carries the labels below and none of §5.2's — no
 # orchestrator will ever match it.
 #
-# The image the baked `containers/build-container/` produces is untouched
-# by all of this. No device is built in it any more; it survives as the
-# toolchain `scripts/build_env_package.py` builds the two packages
-# assembled here in.
+# The toolchain the two packages are *produced* in is a different image
+# again, `containers/build-environment-packager/`: it carries west, zap
+# and the base's interpreter, and nothing that is assembled here.
 
 # The pinned Debian base, digest-pinned exactly as
-# `containers/build-container/Dockerfile` pins it — `trixie-slim` moves with
-# every point release. It is this base's Python that decides the image: the
+# `containers/build-environment-packager/Dockerfile` pins it — `trixie-slim`
+# moves with every point release. It is this base's Python that decides the image: the
 # wheel set in the tools package was built by the same interpreter, so the
 # build virtual environment below can only be created by this one.
 # `tests/python/test_env_image.py` holds the three statements of that pin

@@ -18,13 +18,13 @@ a tag cannot name a version the image does not contain.
 > two tags on one package set are the same environment. Never resolve an
 > environment by tag.
 
-This is the only image a MCUHome build runs in. `containers/build-container/`
-builds a different one — a baked workspace and toolchain, published under
-its own name — and no device is built in it any more: it survives as the
-toolchain `scripts/build_env_package.py` lays the environment's west
-workspace out in and pre-generates the Matter data model with, because
-that step needs the exact `west` the workspace is later read by and a
-`zap` no lean build environment carries.
+This is the only image a MCUHome build runs in. The repository builds one
+other, [`containers/build-environment-packager/`](../build-environment-packager/README.md),
+and no device is ever compiled in that one: it is the toolchain
+`scripts/build_env_package.py` *produces* the two packages with, because
+laying the workspace out needs the exact `west` it is later read by and
+pre-generating the Matter data model needs a `zap` no lean build
+environment carries.
 
 ## Building one
 

@@ -201,8 +201,8 @@ jobs:
   # reason: what goes in is sources, patches, fetched blobs and generated
   # code, none of which is a host binary. `scripts/build_env_package.py`
   # does the work; this job supplies what the script cannot bring itself —
-  # a checkout of the tag, a compressor, disk, and the pinned build
-  # container the workspace is laid out inside.
+  # a checkout of the tag, a compressor, disk, and the pinned packager
+  # image the workspace is laid out inside.
   #
   # It runs the full materialization: `west update` over the manifest, the
   # tag refs fetched back, `patches/` applied, `west blobs fetch`, the
@@ -225,7 +225,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      # Pull only — the build container is published by ci-build.yml.
+      # Pull only — the packager image is published by ci-build.yml.
       packages: read
     env:
       # Empty on purpose, and not pointless: `build_env_package.py` takes
@@ -250,7 +250,7 @@ jobs:
       - name: Install the pinned compressor
         run: pip install "zstandard==${ZSTANDARD_VERSION}"
 
-      # The workspace, the build container and the archive are on this
+      # The workspace, the packager image and the archive are on this
       # disk at the same time and each of them is gigabytes. Free what
       # nothing here uses, and print the result — `rm -rf` on an absent
       # path is not an error, so the same list serves any runner image.
@@ -259,16 +259,21 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
 
-      # The builder decides what the image is called, nothing else does.
-      # The checkout is this job's working directory, so the import
-      # resolves against it.
-      - name: Resolve the builder image reference
+      # One module names the packager image, and this is it being asked.
+      # It answers with the digest, never with the tag: a package laid out
+      # by "whatever that tag points at today" is a package nobody can
+      # reproduce. The checkout is this job's working directory, so the
+      # import resolves against it.
+      - name: Resolve the packager image reference
         id: image
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
-          from mcuhome.model.buildimage import IMAGE
+          import sys
 
-          print(f"reference={IMAGE}")
+          sys.path.insert(0, "scripts")
+          from packager_image import reference
+
+          print(f"reference={reference()}")
           PY
 
       - name: Log in to ghcr.io
@@ -281,15 +286,14 @@ jobs:
       # Pulled, never built as a fallback: an image that is not published
       # is one nobody else can reproduce this package with, and a release
       # artifact laid out by it would be a package whose provenance stops
-      # at this runner. A missing image means the image build has not run
-      # for this revision yet, and that is a release blocker, not
-      # something to paper over.
-      - name: Pull the pinned build container
+      # at this runner. A missing packager means it has not been published
+      # yet, and that is a release blocker, not something to paper over.
+      - name: Pull the pinned packager image
         run: |
           set -euo pipefail
           reference='${{ steps.image.outputs.reference }}'
           docker pull --quiet "$reference" || {
-            echo "::error::$reference is not published — run the Build workflow for this revision first" >&2
+            echo "::error::$reference is not published — run the Build workflow on main first" >&2
             exit 1
           }
 
@@ -384,7 +388,7 @@ jobs:
             runner: ubuntu-24.04-arm
     permissions:
       contents: write
-      # Pull only — the build container is published by ci-build.yml.
+      # Pull only — the packager image is published by ci-build.yml.
       packages: read
     env:
       # See the workspace job: the packaged commit decides the mtime, not
@@ -440,13 +444,16 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
 
-      - name: Resolve the builder image reference
+      - name: Resolve the packager image reference
         id: image
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
-          from mcuhome.model.buildimage import IMAGE
+          import sys
 
-          print(f"reference={IMAGE}")
+          sys.path.insert(0, "scripts")
+          from packager_image import reference
+
+          print(f"reference={reference()}")
           PY
 
       - name: Log in to ghcr.io
@@ -459,12 +466,12 @@ jobs:
       # Same rule as the workspace job: pulled, never built here. The
       # wheel set's ABI is the pinned image's interpreter, so an image
       # built on this runner would decide it locally.
-      - name: Pull the pinned build container
+      - name: Pull the pinned packager image
         run: |
           set -euo pipefail
           reference='${{ steps.image.outputs.reference }}'
           docker pull --quiet "$reference" || {
-            echo "::error::$reference is not published — run the Build workflow for this revision first" >&2
+            echo "::error::$reference is not published — run the Build workflow on main first" >&2
             exit 1
           }
 

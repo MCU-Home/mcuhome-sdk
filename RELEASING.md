@@ -15,6 +15,15 @@ build on every release — see step 2.
 The build environment's container image is assembled from those two
 packages once they are published — step 4.
 
+Both environment packages are produced **inside the build-environment
+packager** (`containers/build-environment-packager/`), the pinned
+toolchain that carries the environment's own `west`, the `zap` the pinned
+CHIP revision names and the interpreter the wheel set is built with. It is
+published by the `Build` workflow on `main` and pinned by digest in
+`scripts/packager_image.py`; the package jobs pull it and refuse when it
+is absent. A release therefore needs that pin to be filled in — see
+"When the packager changes" below.
+
 Four steps.
 
 ## 1. Cut it locally
@@ -207,6 +216,27 @@ after one architecture failed publishes only the missing half.
 Publish the image from CI, not from a workstation. A locally assembled
 image pins the hashes of locally built archives, and those are not the
 bytes the index names — the same rule the packages follow.
+
+## When the packager changes
+
+`containers/build-environment-packager/` is not part of a release and has
+no version of its own beyond its tag. It is published from `main` by the
+`Build` workflow (`build-packager`, `publish-packager-index`), and the
+release jobs consume it by digest.
+
+After a change to that directory:
+
+1. bump `-r<n>` — or the SDK-version part, if the change is what makes a
+   new SDK version need a new packager — in `scripts/packager_image.py`,
+   and clear `DIGEST` in the same commit;
+2. push to `main` and let the `Build` workflow publish the new tag; it
+   prints the index digest as a run notice;
+3. write that digest into `scripts/packager_image.py` and push again.
+
+Between steps 1 and 3 no environment package can be built: the package
+jobs refuse rather than run against an unpinned toolchain. That is the
+intended order — the packages a release publishes have to name the exact
+bytes they were produced in.
 
 ## The two rules that have no undo
 

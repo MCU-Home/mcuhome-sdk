@@ -10,14 +10,21 @@ it.
 
 Both packages are built by [`scripts/build_env_package.py`](../../scripts/build_env_package.py),
 deterministically: two builds of one revision produce byte-identical
-archives. The container image that *delivers* them — the specification's
-container profile — is assembled from those archives by
+archives. It runs the steps that cannot be done on an arbitrary host
+inside the **packager image**
+([`containers/build-environment-packager/`](../../containers/build-environment-packager/README.md)),
+which carries the same `west` the environment does, the `zap` the pinned
+CHIP revision names, and the interpreter the wheel set has to fit. The
+container image that *delivers* the packages — the specification's
+container profile — is assembled from the archives by
 [`scripts/build_env_image.py`](../../scripts/build_env_image.py); see
 [`containers/build-environment/README.md`](../../containers/build-environment/README.md).
 
 | Entry | Role |
 |---|---|
 | `build-environment-entry` | The entry point of specification §4/§6. Ships in the tools package; the profile in use puts it at `$MCUHOME_BUILDER_BASE_DIR/mcuhome/bin/build-environment-entry` |
+| `requirements.txt` | The environment's Python dependency set, pinned transitively. Not installed from here: a wheel is built for every line and the wheel set ships in the tools package |
+| `workspace-record.py` | Writes `workspace.json`, the record of what west resolved, into the workspace package. Run once per package build, inside the packager image |
 
 ## `mcuhome-build-workspace`
 

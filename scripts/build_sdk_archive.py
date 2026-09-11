@@ -86,12 +86,12 @@ Everything else is out, and the list is an allowlist rather than a
 denylist precisely so that anything *new* in the repository stays out
 until somebody names it here. The four that are out on purpose, because
 each looks includable: ``patches/`` (the program applies patches from
-the context, never from ``trees.sdk``, and the org patch set is applied
-at image build time), ``packaging/`` (nothing pip-installs this tree —
-the launcher puts the SDK root on ``PYTHONPATH``), ``tests/python/`` and
-``tests/`` (no build-container consumer), and ``containers/`` (the image
-is a separate artifact of the same release, and the SDK is mounted
-*into* it).
+the context, never from ``trees.sdk``, and the environment's own patch
+set is applied when its workspace package is built), ``packaging/``
+(nothing pip-installs this tree — the build environment's entry point
+puts the SDK root on ``PYTHONPATH``), ``tests/python/`` and ``tests/``
+(nothing in a build environment reads them), and ``containers/`` (an
+image is a separate artifact, and the SDK is delivered *into* it).
 
 **The tree is rooted at the SDK, with no wrapper directory.** The build
 server unpacks into a directory it chose and hands that same directory
