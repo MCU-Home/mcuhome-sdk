@@ -977,10 +977,14 @@ jobs:
           export OUTCOME=failure
           if [ "$BUILD_OUTCOME" = success ] && [ "$ARTIFACT_OUTCOME" = success ]; then
             OUTCOME=success
+            # The firmware only. bootloader.hex carries the signing
+            # public key baked into MCUboot, and each leg generates its
+            # own throwaway key — comparing it across architectures would
+            # compare two random keys and say nothing about the host.
             cp project/build/bmp180-node/firmware.bin \
-               project/build/bmp180-node/firmware.hex \
-               project/build/bmp180-node/bootloader.hex produced/
+               project/build/bmp180-node/firmware.hex produced/
             (cd produced && sha256sum -- *)
+            (cd project/build/bmp180-node && sha256sum -- bootloader.hex build-report.json)
           fi
           python3 - <<'PY'
           import json
@@ -1010,12 +1014,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # Only the UNSIGNED artifacts travel: a signature is not
+      # Only the UNSIGNED firmware travels: a signature is not
       # reproducible by construction (ECDSA draws a random nonce per
       # signature, which tests/python asserts), so comparing signed images
-      # would compare the randomness. The firmware itself and not only its
-      # hash, because "they differ in one build id" and "they differ
-      # everywhere" are two entirely different facts and only the
+      # would compare the randomness — and the bootloader carries the
+      # public half of a key this runner invented. The firmware itself and
+      # not only its hash, because "they differ in one build id" and "they
+      # differ everywhere" are two entirely different facts and only the
       # comparison job can tell them apart.
       - name: Upload what this architecture produced
         if: steps.build.outcome == 'success'
