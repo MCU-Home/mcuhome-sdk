@@ -210,29 +210,24 @@ def test_the_main_guard_is_a_boundary_and_nothing_else_is() -> None:
     assert _process_reads(outside) == ["environ"]
 
 
-def test_the_launcher_hands_the_process_environment_to_both_invocations() -> None:
+def test_the_launcher_hands_the_process_environment_to_the_step() -> None:
     """``abi.py``'s main guard states ``os.environ`` — the build's PATH.
 
-    The gap this pins was predicted in ``main``'s own docstring and then
-    hit for real: a launcher that states nothing gives a build's children
-    an environment without ``PATH``, west is not found, and the account of
-    it is an ENOENT with no file name in it. The guard is the only caller
-    inside the environment, so the handover has to happen there — and a
-    refactor that drops it would fail no other test until the next real
-    in-container compile.
+    The gap this pins was hit for real: a launcher that states nothing
+    gives a build's children an environment without ``PATH``, west is not
+    found, and the account of it is an ENOENT with no file name in it.
+    The guard is the only caller inside the environment, so the handover
+    has to happen there — and a refactor that drops it would fail no
+    other test until the next real in-container compile.
 
-    Both invocations are pinned, because the v3 one needs the environment
-    for more than ``PATH``: ``MCUHOME_BUILDER_BASE_DIR`` is in it, and a
-    step that cannot read that variable cannot resolve a single path.
+    The step needs the environment for more than ``PATH``:
+    ``MCUHOME_BUILDER_BASE_DIR`` is in it, and a step that cannot read
+    that variable cannot resolve a single path.
     """
     source = next(m for m in package_modules() if m.name == "abi.py").read_text(encoding="utf-8")
     guard = next(n for n in ast.parse(source).body if _is_main_guard(n))
     rendered = ast.unparse(guard)
-    assert "env=dict(os.environ)" in rendered, (
-        "the launcher no longer hands the process environment to main(); "
-        "in-container builds lose PATH and cannot start west"
-    )
     assert "step(dict(os.environ))" in rendered, (
         "the launcher no longer hands the process environment to step(); "
-        "a v3 invocation cannot resolve MCUHOME_BUILDER_BASE_DIR without it"
+        "a step cannot resolve MCUHOME_BUILDER_BASE_DIR without it"
     )

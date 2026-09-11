@@ -1,12 +1,9 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The builder program: two invocations, one build.
+"""The builder program: one build step, and the generator it reaches.
 
-This module is what a MCUHome build environment runs when a step starts,
-and it answers two calling conventions.
-
-**The v3 invocation is the primary one**, and the one new work is written
-against. ``docs/spec/build-environment-specification.md`` fixes it: the
+This module is what a MCUHome build environment runs when a step starts.
+``docs/spec/build-environment-specification.md`` fixes the invocation: the
 entry point is run with **no arguments** (§6), everything the step is
 about is in ``mcuhome/invocation-request.json`` below the base directory
 ``MCUHOME_BUILDER_BASE_DIR`` names (§4), the answer is one result document
@@ -15,80 +12,47 @@ is zero exactly when that document says ``success`` (§6.3). Which actions
 exist is deliberately not the specification's business;
 ``docs/spec/build-actions.md`` documents MCUHome's, and ``build`` is the
 one an environment of this kind implements. :func:`step` is that
-invocation, and the section "The v3 invocation" below is all of it.
+invocation.
 
-**The legacy invocation belongs to the baked build container** and is kept
-working, unchanged, until the switchover retires that image. It is the
-two-operand form ``/mcuhome/run <action> <absolute path of the request
-document>``, with a request and a result document of its own and three
-actions — ``describe``, ``verify`` and ``build``. :func:`main` is that
-invocation. The design document it implements, the build container
-contract, has been retired and is no longer in this repository: the ``§``
-references in the legacy half of this module and of its test suite name
-sections of *that* document and resolve nowhere else. They are left as
-they are, because that half is deleted whole at switchover and nothing
-outside it reads them.
+**The build itself** is :class:`_Build`, which applies the context's
+patches, reaches code generation through the SDK entry point, compiles
+with ``west build --sysbuild`` and delivers the artifacts. What it knows
+before it starts is the environment's own: the trees are the packages'
+(:func:`environment_workspace`), ``work`` is empty at the start of every
+step (§3), so every step is a clean build, and the context arrives
+measured — ``docs/spec/build-actions.md`` §3: "there is nothing an
+environment could confirm that the orchestrator does not already know
+from its own bytes". A step therefore checks that the files it needs are
+there and builds.
 
-**Both invocations end in the same builder** — :class:`_Build`, which
-applies the context's patches, reaches code generation through the SDK
-entry point, compiles with ``west build --sysbuild`` and delivers the
-artifacts. What differs is what each invocation knows before the build
-starts:
+``firmware.hex``, ``firmware.bin``, ``bootloader.hex`` (when the build
+produced one) and ``build-report.json`` go into ``out`` under exactly
+those names, and the result document names them relative to it
+(``docs/spec/build-actions.md`` §2.1 and §2.2).
 
-*Where the trees are.* The legacy invocation is told, per invocation, in
-its request document, and checks what it is told against the image's own
-workspace record. The v3 invocation is told nothing: the trees are the
-environment's own, and it reads its packages' record for them
-(:func:`environment_workspace`). Either way the answer is one path per
-layer, and a build against any other path is refused rather than
-attempted — west resolves project paths from ``.west/config`` plus the
-manifest, and nothing here can move them at invocation time. What would
-replace that is a west re-registration step: a manifest rewrite, or
-``west config`` per project. That is a design decision, not a
-translation.
+**The second, much smaller ABI in this file** is the one the generator is
+reached over: two operands, a request document, a result document, and
+:func:`run_invocation` as the outer sequence — argv, parsing, the atomic
+result, the catch-all that turns a crash into a legible failure.
+:mod:`mcuhome.compiler.sdkentry` is the other end of that call and imports
+the same function rather than transcribing it, which is what keeps the
+two sides agreeing.
 
-*What a step may keep.* The legacy contract gives a session a persistent
-``work`` directory, which is what makes its ``incremental`` mode mean
-anything, and the program writes a session marker there so it can tell
-its own state from another session's. The v3 specification is the
-opposite and simpler: ``work`` is empty at the start of every step (§3),
-nothing survives except ``out`` and the cache tiers, so every v3 step is a
-clean build and no marker is worth writing.
-
-*Who measures the context.* The legacy contract makes the program compute
-the effective context ID and report it, which is why ``verify`` exists at
-all. Under the v3 specification the orchestrator creates the context,
-hashes it and delivers it, and ``docs/spec/build-actions.md`` §3 strikes
-the question outright: "there is nothing an environment could confirm
-that the orchestrator does not already know from its own bytes". A v3
-step therefore checks that the files it needs are there and builds.
-
-*Where the artifacts and the report go.* Both put ``firmware.hex``,
-``firmware.bin``, ``bootloader.hex`` (when the build produced one) and
-``build-report.json`` into ``out``, under exactly those names, and the
-build report is the same document — ``docs/spec/build-actions.md`` §2.1
-and §2.2 fix both, and the legacy contract fixed the same ones. The two
-invocations differ only in how they *declare* them: the legacy result
-document carries an object per artifact with its role and its hash, the
-v3 result document carries the file names relative to ``out``.
-
-Decisions this module took that no document made for it, and that both
-invocations inherit:
+Decisions this module took that no document made for it:
 
 *The generated application tree and the CMake tree live in ``work``.*
-They are the two directories a build produces that are worth keeping for
-the next step of a session, and a tree in a per-step scratch directory
-could never make an incremental build mean anything.
+They are the two directories a build produces, and a tree in a per-step
+scratch directory would be thrown away twice over.
 
 *The code generator is a child, and it is handed an empty ``out``.* The
 generator ships in ``mcuhome/sdk``, which the orchestrator delivers per
 build context, so the generated application belongs to the SDK the
-context pinned rather than to the environment's vintage. It is invoked
-over the legacy two-operand ABI (``mcuhome-sdk.json`` declares the entry
-point and its runtime), and what it produced is then absorbed into
-``work/tree`` content-aware: a file whose bytes are already there is left
-alone, mtime and all, because CMake watches the tree and a rewritten
-unchanged ``CMakeLists.txt`` re-runs the whole Matter sub-build.
+context pinned rather than to the environment's vintage
+(``mcuhome-sdk.json`` declares the entry point and its runtime). What it
+produced is then absorbed into ``work/tree`` content-aware: a file whose
+bytes are already there is left alone, mtime and all, because CMake
+watches the tree and a rewritten unchanged ``CMakeLists.txt`` re-runs the
+whole Matter sub-build.
 
 *Sysbuild's combined hex never reaches ``out``.* On a build that never
 signs it is the *unsigned* application under a name that looks flashable,
@@ -125,70 +89,6 @@ one. That is what keeps this module off the exemption list of
 ``tests/python/test_userpaths.py``, and the one place allowed to read the
 process is the ``__main__`` guard at the bottom, which is the process
 boundary itself.
-
-What follows is the legacy half, and only what it decided for itself: the
-document that would justify the rest of it is gone, and the code below is
-the last thing in this repository that implements it.
-
-*Exactly one thing produces no result document*: a request that cannot be
-read at all — the wrong argv arity, a relative request path, a document
-that is not one JSON object, one carrying a duplicate key or a ``null``,
-or one naming no absolute ``result`` path. That is exit 66 with nothing
-written. Everything after it is a result document, including an
-unimplemented request format version, because ``result`` is in the
-preamble that is read first. "Not writable" is found out by writing: the
-result document is the last write action of an invocation, so the whole
-document is built in memory and a failing atomic write is the same exit
-66, with neither a result nor a temporary file left behind.
-
-*The order of the checks is the invocation's bootstrap chain*: argv arity,
-parse, preamble, action, ``required``, the remaining fields.
-
-*``program.actions`` lists what is implemented*, never a constant copied
-out of a document: a backend must not invoke what is absent from the
-list, so a list that ran ahead of the code would be the one lie a backend
-acts on.
-
-*What a request must carry is per action, not per document.* ``describe``
-needs the preamble; ``verify`` needs ``context`` and ``session`` and is
-refused nothing else, because it reads the context and does nothing with
-``out``, ``work``, ``tmp``, ``trees`` or ``limits``; ``build`` needs all
-seven mandatory fields, because it acts on all seven. The same is true of
-the pointers a request may demand in ``required``: promising to honour a
-value nothing reads is the cheapest way to accept a job and quietly
-deliver something else.
-
-*A ``params.mode`` this program does not implement is
-``unsupported.required``*, not ``unsupported.request``: the field is
-present and well-formed, and it is its value that is not implemented.
-Executing ``reproducible`` as ``clean`` stays forbidden.
-
-*A session marker in ``work`` is what makes ``incremental`` decidable.*
-It is optional in the legacy contract, and without one there is no way to
-tell "no prior state of this session" from "somebody else's state". It is
-read on every invocation before anything in ``work`` is touched, and a
-marker this program cannot parse is treated as foreign — a marker it
-wrote is one it can read, and state it cannot claim is state it must not
-use, delete or overwrite.
-
-*A context whose files disagree with its own integrity list does not stop
-a ``build``.* That disagreement is what ``verify`` exists to report; a
-build reports the ID it measured and lets the backend, which has its own,
-decide.
-
-*The ``reason`` values and the keys inside ``error.details`` are the
-legacy contract's registry*, and the values this program puts under them
-are its own: the missing path under ``missing``, the offending pointers
-under ``required``, the layer name under ``layer``, the offending context
-paths under ``paths``, both session IDs under ``session`` and ``found``. A
-failing ``verify`` reports a ``context`` exactly when it measured one:
-what an invocation did not measure it does not report, because the
-backend compares both against its own values.
-
-*``build.image.started``, cancellation and ``limits.deadline_seconds`` are
-not implemented*, all three optional: events are written when the request
-names a file for them, ``/cancel`` is not polled, and enforcing a deadline
-is the backend's job.
 """
 
 from __future__ import annotations
@@ -203,53 +103,40 @@ import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import Any, NamedTuple
 
 from mcuhome.compiler import report, workspace
 from mcuhome.compiler.generate import APP_DIR
-from mcuhome.model import __version__, jobs, registry
-from mcuhome.model.context import MANIFEST_FILE, MODEL_FILE, PATCHES_DIR
+from mcuhome.model import jobs, registry
+from mcuhome.model.context import MODEL_FILE, PATCHES_DIR
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
-from mcuhome.model.invocation import (
-    ACTIONS,
-    CONTRACT_VERSION,
-    REQUEST_VERSIONS,
-    RESULT_VERSION,
-    RESULT_VERSIONS,
-)
 from mcuhome.model.modelfile import read_model
 
-# mcuhome.compiler.contextread is imported inside _open_context, not
-# here: the SDK entry point (§6.1) imports this module for
-# run_invocation, and its runtime is what the SDK package declares — a
-# bare interpreter, no third-party packages. contextdir carries the YAML
-# emitter and pulls ruamel at import, which only the program's own
+# Nothing here imports mcuhome.compiler.contextread, and that is worth
+# stating: the SDK entry point imports this module for
+# :func:`run_invocation`, and its runtime is what the SDK package
+# declares — a bare interpreter, no third-party packages. contextread
+# carries the YAML emitter and pulls ruamel at import, which only a build
 # environment provides. tests/python/test_container_closure.py pins the
 # entry point's closure to stdlib plus mcuhome.
-if TYPE_CHECKING:
-    from mcuhome.compiler.contextread import ContextVerification
 
 __all__ = [
     "BASE_DIR_VAR",
     "BOOTLOADER_ARTIFACT",
     "CACHE_TIERS",
-    "CONTRACT_VERSION",
+    "CarriedWorkspace",
     "EXIT_FAILURE",
     "EXIT_SUCCESS",
     "EXIT_UNUSABLE",
     "FIRMWARE_ARTIFACTS",
-    "IMPLEMENTED_ACTIONS",
     "LAYERS",
-    "MODES",
-    "PROGRAM_ID",
     "REPORT_ARTIFACT",
     "REPORT_VERSION",
     "REQUEST_VERSIONS",
     "RESULT_PREFIX",
     "RESULT_SUFFIX",
     "RESULT_VERSION",
-    "RESULT_VERSIONS",
     "SDK_METADATA_FILE",
     "SDK_METADATA_VERSIONS",
     "SIGNING_KEY_FILE",
@@ -267,85 +154,69 @@ __all__ = [
     "STEP_WORK",
     "WORKSPACE_PACKAGE_MANIFEST",
     "WORKSPACE_PACKAGE_VAR",
-    "WORKSPACE_RECORD",
-    "CarriedWorkspace",
     "environment_workspace",
-    "honoured_required",
-    "main",
-    "run_invocation",
     "patchset",
-    "program",
+    "run_invocation",
     "sdk_entry_point",
     "step",
-    "trees",
 ]
 
 # --------------------------------------------------------------------------
-# What this program is (§7.1.1)
+# The two documents exchanged with the SDK entry point
 # --------------------------------------------------------------------------
 #
-# The numbers and the action names are not this program's to state: they
-# are contract v1's, and the party driving this program has to know them
-# without importing it (:mod:`mcuhome.model.invocation`). What is stated
-# here is what *this* implementation is — its identity, and that it
-# implements all of them.
+# Code generation is a child process with an ABI of its own: two operands,
+# a request document, a result document (:mod:`mcuhome.compiler.sdkentry`
+# is the other end, :func:`run_invocation` the shared outer sequence).
+# These are that ABI's two version numbers, and they live here because
+# this module is the only party that writes either.
 
-#: A stable identifier of the *implementation*, reverse-DNS, opaque to a
-#: backend (§7.1.1). Not of an image, a tag, a version or a vendor.
-PROGRAM_ID = "org.mcuhome.build-container"
+#: Request format versions the generator can be handed. The first is what
+#: :meth:`_Build._generate` writes; the entry point states the same tuple
+#: from its own side and refuses anything outside it.
+REQUEST_VERSIONS = (1,)
 
-#: Every action this program implements, and the whole of ``describe``'s
-#: ``program.actions``. This program implements all of contract v1.
-IMPLEMENTED_ACTIONS = ACTIONS
+#: The result format version :func:`_result_document` writes.
+RESULT_VERSION = 1
 
-#: The layer registry of contract v1 §1.1, in the order ``describe``
-#: reports them. Third-party layers carry an ``x-`` prefix and reach the
-#: block only by way of the image's own record.
+#: The layers a build environment's workspace is made of, in the order
+#: they are reported. Third-party layers carry an ``x-`` prefix and reach
+#: a build only by way of the environment's own record.
 LAYERS = ("zephyr", "sdk", "chip", "mcuboot")
 
-#: What the image says about the west workspace it carries
-#: (``containers/builder/workspace-record.py``). Absent everywhere else,
-#: which the module docstring covers. ``/mcuhome/`` is the namespace §2.2
-#: reserves for this project inside an image, so this is not a promise
-#: about somebody else's filesystem.
-WORKSPACE_RECORD = Path("/mcuhome/workspace.json")
-
 # --------------------------------------------------------------------------
-# What a `build` is made of (§7.2)
+# What a `build` is made of
 # --------------------------------------------------------------------------
 
-#: The two ``params.mode`` values §7.2 defines, and the default §5.2
-#: fixes: "an absent ``params``, a ``params`` object without a ``mode``
-#: key, and ``params: {}`` are the same thing and all three mean
-#: ``mode: "clean"``".
-MODES = ("clean", "incremental")
-DEFAULT_MODE = MODES[0]
+#: A step is a clean build and there is no other kind: ``work`` is empty
+#: at the start of every step (specification §3), so there is no prior
+#: state an incremental build could stand on. The value is still a
+#: parameter of :meth:`_Build.execute` because the builder decides two
+#: things by it — whether it discards its own state and how it configures
+#: west's pristine mode — and naming it beats a bare string in both.
+DEFAULT_MODE = "clean"
 
 #: The bootloader's verification key inside the context. Mandatory for
-#: ``build`` and for ``build`` alone (§7.2), with no fallback: MCUboot's
-#: own default is a demo key whose private half is published.
+#: ``build`` and for ``build`` alone, with no fallback: MCUboot's own
+#: default is a demo key whose private half is published.
 SIGNING_KEY_FILE = "keys/signing.pub"
 
 #: Where the SDK package declares its code-generation entry point, at the
-#: root of ``trees.sdk`` (§6.1, normative). Contract v1 fixes the file
-#: name and three field names — ``sdk``, ``generate.program``,
-#: ``generate.runtime`` — and no values.
+#: root of ``trees.sdk``. This module fixes the file name and three field
+#: names — ``sdk``, ``generate.program``, ``generate.runtime`` — and no
+#: values.
 SDK_METADATA_FILE = "mcuhome-sdk.json"
 
 #: ``sdk`` metadata format versions this program implements. A version
-#: outside it is ``error.build.failed`` and never ``unsupported``: "the
-#: program implements everything this contract asks of it, and no other
-#: container would fare better with this SDK package" (§6.1).
+#: outside it is ``error.build.failed`` and never ``unsupported``: this
+#: program implements everything the format asks of it, and no other
+#: build environment would fare better with this SDK package.
 SDK_METADATA_VERSIONS = (1,)
 
-#: The action the SDK entry point is invoked with (§6.1). Never an action
-#: of *this* program.
+#: The action the SDK entry point is invoked with. Never an action of
+#: *this* program.
 GENERATE_ACTION = "generate"
 
-#: What the program keeps inside ``work`` — the session's persistent area
-#: (§4). Every name is this program's own; the contract fixes none of
-#: them, and nothing outside this module may depend on them.
-WORK_MARKER = "session.json"
 WORK_PATCH_RECORDS = "patches"
 WORK_TREE = "tree"
 WORK_BUILD = "build"
@@ -359,26 +230,28 @@ WORK_WEST_CONFIG = "west-config"
 WORK_XDG_CACHE = "cache"
 
 #: ``<sysbuild artifact> -> <name in out>`` for the unsigned application
-#: image, whose role is ``firmware``. §7.2: "MCUHome's own container
-#: writes ``firmware.hex`` and ``firmware.bin``".
+#: image, whose role is ``firmware``. This module writes ``firmware.hex``
+#: and ``firmware.bin`` under those names.
 FIRMWARE_ARTIFACTS = (("zephyr.hex", "firmware.hex"), ("zephyr.bin", "firmware.bin"))
 
-#: The same for MCUboot, whose role is ``bootloader``. Not required by
-#: §7.2 and declared anyway — see the module docstring.
+#: The same for MCUboot, whose role is ``bootloader``. Declared when the
+#: build produces one — see the module docstring.
 BOOTLOADER_ARTIFACT = ("zephyr.hex", "bootloader.hex")
 
-#: The mandatory ``report`` artifact (§7.2, §7.2.1), and the format
-#: version this module writes. "A consumer that does not implement the
-#: version it finds MUST NOT sign from the document."
+#: The mandatory ``report`` artifact (``docs/spec/build-actions.md``
+#: §2.2), and the format version this module writes. "A consumer that
+#: does not implement the version it finds must not sign from the
+#: document."
 REPORT_ARTIFACT = "build-report.json"
 REPORT_VERSION = 1
 
-#: The prefix of §5.4's ``layers[<name>].patchset`` encoding, stated by
-#: the contract as a literal and therefore never composed here.
+#: The prefix of the ``layers[<name>].patchset`` encoding (see
+#: :func:`patchset`), fixed as a literal and therefore never composed
+#: here.
 _PATCHSET_PREFIX = "mcuhome-patchset-1\n"
 
 # --------------------------------------------------------------------------
-# The frozen exit codes (§5.3)
+# The exit codes
 # --------------------------------------------------------------------------
 
 #: The invocation ran and the work succeeded; result document present.
@@ -395,26 +268,19 @@ _STATUS_SUCCESS = "success"
 _STATUS_FAILURE = "failure"
 _STATUS_UNSUPPORTED = "unsupported"
 
-_REASON_REQUEST = "unsupported.request"
-_REASON_REQUIRED = "unsupported.required"
-_REASON_ACTION = "unsupported.action"
-_REASON_CONTEXT = "unsupported.context"
 _REASON_INCOMPLETE = "error.context.incomplete"
-_REASON_MISMATCH = "error.context.mismatch"
-_REASON_UNREADABLE = "error.context.unreadable"
 _REASON_LAYER = "error.layer.unknown"
 _REASON_PATCH = "error.patch.incomplete"
-_REASON_WORK = "error.work.foreign"
 _REASON_BUILD = "error.build.failed"
 _REASON_INTERNAL = "error.internal"
 
 # --------------------------------------------------------------------------
-# The request document (§5.2)
+# The request document
 # --------------------------------------------------------------------------
 
 
 class _Unusable(Exception):
-    """No result can be addressed: exit 66, nothing written (§5.3).
+    """No result can be addressed: exit 66, nothing written.
 
     Not an error type from :mod:`mcuhome.model.errors`, on purpose. Those render
     themselves for a person reading a terminal; this one is never rendered
@@ -423,212 +289,13 @@ class _Unusable(Exception):
     """
 
 
-#: Top-level fields whose value is a path (§5.2). ``result`` is not among
-#: them: it is checked in the preamble, where a relative one is exit 66
-#: rather than a refusal nobody could read (see the module docstring).
-_PATH_FIELDS = ("out", "work", "tmp", "context", "events", "cancel")
-
-#: Fields carrying one ``{path, …}`` object, and fields carrying a map of
-#: them. ``trees`` is the map (§4.1); ``ccache`` is the single object (§10).
-_PATH_OBJECTS = ("ccache",)
-_PATH_OBJECT_MAPS = ("trees",)
-
-#: "Absent" as distinct from "present and null" — although a request
-#: document can never carry the latter, since a ``null`` anywhere in it is
-#: exit 66 before any pointer is resolved.
-_MISSING = object()
-
-
-def _is_request_version(value: Any) -> bool:
-    """A request format version this program parses.
-
-    ``bool`` is excluded explicitly: it is an ``int`` in Python, and
-    ``"request": true`` would otherwise be read as version 1.
-    """
-    return isinstance(value, int) and not isinstance(value, bool) and value in REQUEST_VERSIONS
-
-
 def _is_absolute_path(value: Any) -> bool:
-    """A path value as §5.2 defines one: a string, and absolute."""
+    """A path value, as this ABI requires one: a string, and absolute."""
     return isinstance(value, str) and Path(value).is_absolute()
 
 
-def _is_present(value: Any) -> bool:
-    """Anything at all, as opposed to :data:`_MISSING`."""
-    return value is not _MISSING
-
-
-def _is_jobs(value: Any) -> bool:
-    """``limits.jobs`` as §5.2 defines it: authoritative, so a real count.
-
-    ``bool`` is excluded for the reason :func:`_is_request_version` gives.
-    """
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
-
-
-def _is_tree_entry(value: Any) -> bool:
-    """One ``trees`` entry: an object with an absolute ``path`` (§4.1).
-
-    ``writable`` is not checked here, and deliberately not: it is
-    "asserted by the backend, never probed by the program", so a value
-    this program cannot verify is not one it can promise to honour by
-    inspecting it. What it promises is to *read* the flag rather than to
-    test it, which is what §6.2 asks for.
-    """
-    return isinstance(value, dict) and _is_absolute_path(value.get("path"))
-
-
-def _is_mode(value: Any) -> bool:
-    """A ``params.mode`` value §7.2 defines. Absent is ``clean`` (§5.2)."""
-    return value is _MISSING or value in MODES
-
-
-#: The JSON Pointers this program honours **per action**, each with the
-#: values it can honour there (§5.2 rule 2: "knowing the path is not
-#: enough").
-#:
-#: Per action, because the same pointer is a promise for one action and a
-#: lie for another: a ``verify`` "reads the context and nothing else"
-#: (§7.3) and does nothing whatever with ``/out``, ``/work``, ``/tmp``,
-#: ``/trees/sdk`` or ``/limits/jobs``, although §5.2 makes all five
-#: mandatory in the request it arrives in — while a ``build`` writes into
-#: three of them and takes its parallelism from the fourth. Promising to
-#: honour a value nothing reads is the cheapest form of the lie §5.2
-#: names: "accept the job and quietly deliver something else".
-#:
-#: The preamble is honoured by every action, and each entry for its own
-#: reason: ``/request`` because a version outside :data:`REQUEST_VERSIONS`
-#: is refused rather than parsed hopefully; ``/result`` because the result
-#: document is written to exactly that path; ``/session`` because it is
-#: echoed, which is the whole of what §5.2 permits anyone to do with it,
-#: and honourable only as the opaque *string* token the contract defines.
-#:
-#: Two pointers a conforming ``build`` request may carry are deliberately
-#: **absent**: ``/cancel``, because cancellation is a SHOULD this program
-#: does not implement (§8), and ``/limits/deadline_seconds``, because it
-#: is advisory and enforcement is the backend's (§5.2). A backend that
-#: demands either is told which pointer failed.
-_PREAMBLE_HONOURED: dict[str, Callable[[Any], bool]] = {
-    "/request": _is_request_version,
-    "/result": _is_absolute_path,
-    "/session": lambda value: isinstance(value, str),
-}
-
-#: The part of the table that is a property of this *program*. What it
-#: honours for ``/trees/<layer>`` is a property of the *image* instead,
-#: and :func:`honoured_required` is where the two are put together.
-_HONOURED_REQUIRED: dict[str, dict[str, Callable[[Any], bool]]] = {
-    "describe": dict(_PREAMBLE_HONOURED),
-    "verify": {**_PREAMBLE_HONOURED, "/context": _is_absolute_path},
-    "build": {
-        **_PREAMBLE_HONOURED,
-        "/context": _is_absolute_path,
-        "/out": _is_absolute_path,
-        "/work": _is_absolute_path,
-        "/tmp": _is_absolute_path,
-        "/events": _is_absolute_path,
-        "/ccache": _is_tree_entry,
-        "/limits/jobs": _is_jobs,
-        "/params/mode": _is_mode,
-    },
-}
-
-
-def _tree_at(expected: Path | None) -> Callable[[Any], bool]:
-    """Honours a ``trees`` entry naming *expected*, and no other path.
-
-    ``None`` honours nothing: a layer this program has no tree for is a
-    layer no value of ``/trees/<layer>`` can be honoured for.
-    """
-
-    def honours(value: Any) -> bool:
-        if expected is None or not _is_tree_entry(value):
-            return False
-        return Path(value["path"]) == expected
-
-    return honours
-
-
-def honoured_required(
-    action: str, record: Path = WORKSPACE_RECORD
-) -> dict[str, Callable[[Any], bool]]:
-    """The pointers *action* honours, with the values it can honour there.
-
-    §5.2 rule 2, per action, because the same pointer is a promise for one
-    action and a lie for another: a ``verify`` "reads the context and
-    nothing else" (§7.3) and does nothing whatever with ``/out``,
-    ``/work``, ``/tmp``, ``/trees/sdk`` or ``/limits/jobs``, although §5.2
-    makes all five mandatory in the request it arrives in — while a
-    ``build`` writes into three of them and takes its parallelism from the
-    fourth. Promising to honour a value nothing reads is the cheapest form
-    of the lie §5.2 names: "accept the job and quietly deliver something
-    else".
-
-    **``/trees/<layer>`` is honoured for exactly one value per layer**,
-    which is why the table needs the image's record and cannot be a
-    constant. "Knowing the path is not enough: it must be able to honour
-    the value it finds there" — and :meth:`_Build._workspace` can honour
-    exactly the path the record already has for that layer, because west
-    resolves project paths from ``.west/config`` plus the manifest and
-    nothing here moves them at invocation time. A backend that names any
-    other path in ``required`` is therefore told ``unsupported.required``,
-    which is what §5.2 rule 2 mandates, rather than being served
-    ``error.build.failed`` from the middle of the build — the same fact,
-    reported in the channel the backend asked in.
-
-    A layer the record does not name is honoured for nothing at all, and
-    that includes every layer when there is no record: a program with no
-    workspace of its own cannot promise to build against any tree.
-    """
-    table = dict(_HONOURED_REQUIRED.get(action, {}))
-    if action == "build":
-        paths = _record_tree_paths(record)
-        for layer in dict.fromkeys([*LAYERS, *sorted(paths)]):
-            table[f"/trees/{layer}"] = _tree_at(paths.get(layer))
-    return table
-
-
-#: What each action needs to find in the request document, as a JSON
-#: Pointer and the values that are usable there. Rule 3 of §5.2: "A field
-#: the program needs for this action and does not find … ⇒ ``status:
-#: "unsupported"``, ``reason: "unsupported.request"``".
-#:
-#: ``describe`` "needs only the preamble" (§5.2) and so is absent here.
-#: ``verify`` needs two of the seven fields §5.2 makes mandatory for a
-#: working action, and the module docstring says why the other five are
-#: not demanded back. ``build`` needs all seven, because it acts on all
-#: seven. ``/session`` is checked for presence and not for type: §5.4's
-#: echo rule says a program echoes what it was given, verbatim, and §5.2
-#: forbids composing a path from it, so its type never has to be believed.
-#: A backend that wants the token's type honoured names it in
-#: ``required``, and :data:`HONOURED_REQUIRED` answers that.
-#:
-#: ``/params/mode`` is here rather than only in the honoured table
-#: ``/params/mode`` is not here: a missing mode is usable (it means
-#: ``clean``), so the only way it could fail this presence check is a
-#: value like ``reproducible`` — and §5.2 ("`required` and value
-#: granularity") already fixes what that is: "A program that knows
-#: ``/params/mode`` but not the value ``reproducible`` MUST refuse with
-#: ``unsupported.required`` rather than accept the job." That is a
-#: present field with an unimplemented value, not a missing one, so
-#: :func:`_unsupported_mode` handles it apart from rule 3's missing
-#: fields.
-_NEEDED_FIELDS: dict[str, dict[str, Callable[[Any], bool]]] = {
-    "verify": {"/context": _is_absolute_path, "/session": _is_present},
-    "build": {
-        "/context": _is_absolute_path,
-        "/session": _is_present,
-        "/out": _is_absolute_path,
-        "/work": _is_absolute_path,
-        "/tmp": _is_absolute_path,
-        "/trees/sdk/path": _is_absolute_path,
-        "/limits/jobs": _is_jobs,
-    },
-}
-
-
 def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """One JSON object, refusing the duplicate keys §5.2 calls invalid."""
+    """One JSON object, refusing duplicate keys, which are invalid here."""
     keys = [key for key, _ in pairs]
     if len(set(keys)) != len(keys):
         raise _Unusable("the request document has a duplicate key")
@@ -638,10 +305,10 @@ def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def _carries_null(value: Any) -> bool:
     """Whether *value* holds a ``null`` anywhere inside it.
 
-    "``null`` never means 'absent'; it is invalid" (§5.2) — at any depth
-    and in any field, including one this program would otherwise ignore.
-    The rule governs the document, not the fields one program happens to
-    read.
+    ``null`` never means "absent" in this document; it is invalid at any
+    depth and in any field, including one this program would otherwise
+    ignore. The rule governs the document, not the fields one program
+    happens to read.
     """
     if value is None:
         return True
@@ -655,10 +322,10 @@ def _carries_null(value: Any) -> bool:
 def _parse_request(path: str) -> dict[str, Any]:
     """The request document at *path*, or :class:`_Unusable`.
 
-    The only program-caused error that cannot produce a result document
-    (§5.1 step 4), and precisely the case in which the program does not
-    know where a result would go. A byte-order mark is refused by the JSON
-    parser itself, which is what §5.2's "UTF-8 without BOM" asks for.
+    The only program-caused error that cannot produce a result document,
+    and precisely the case in which the program does not know where a
+    result would go. A byte-order mark is refused by the JSON parser
+    itself, which is what this format's "UTF-8 without BOM" rule asks for.
     """
     try:
         text = Path(path).read_text(encoding="utf-8")
@@ -678,9 +345,9 @@ def _parse_request(path: str) -> dict[str, Any]:
 def _result_path(document: dict[str, Any]) -> Path:
     """Where the result document goes, from the immortal preamble.
 
-    "From here on **every** error is a result document" (§5.1 step 5) —
-    which is true exactly because this function refused everything that
-    would have made that impossible.
+    From here on every error is a result document — which is true exactly
+    because this function refused everything that would have made that
+    impossible.
     """
     value = document.get("result")
     if not _is_absolute_path(value):
@@ -688,134 +355,8 @@ def _result_path(document: dict[str, Any]) -> Path:
     return Path(value)
 
 
-def _resolve_pointer(document: dict[str, Any], pointer: str) -> Any:
-    """RFC 6901 evaluation of *pointer* against *document*.
-
-    Returns :data:`_MISSING` for anything that does not resolve, an
-    invalid pointer syntax included: §5.2 rule 2 asks whether the program
-    "can honour the value it finds there", and finding nothing is one way
-    of not being able to.
-    """
-    if pointer == "":
-        return document
-    if not pointer.startswith("/"):
-        return _MISSING
-    current: Any = document
-    for escaped in pointer.split("/")[1:]:
-        token = escaped.replace("~1", "/").replace("~0", "~")
-        if isinstance(current, dict):
-            if token not in current:
-                return _MISSING
-            current = current[token]
-        elif isinstance(current, list):
-            if not token.isdigit() or (token != "0" and token.startswith("0")):
-                return _MISSING
-            index = int(token)
-            if index >= len(current):
-                return _MISSING
-            current = current[index]
-        else:
-            return _MISSING
-    return current
-
-
-def _unhonourable(action: str, document: dict[str, Any], record: Path) -> list[str] | None:
-    """The entries of ``required`` *action* cannot honour (§5.2 rule 2).
-
-    ``None`` means ``required`` is not a list of strings at all, which is
-    a document this program cannot read as specified — rule 3, not rule 2,
-    because there is no pointer to name in ``error.details.required``.
-    An absent ``required`` is ``[]`` (§5.2), so it honours vacuously.
-    """
-    required = document.get("required", [])
-    if not isinstance(required, list) or not all(isinstance(entry, str) for entry in required):
-        return None
-    honoured = honoured_required(action, record)
-    offending: list[str] = []
-    for pointer in required:
-        honours = honoured.get(pointer)
-        if honours is None:
-            offending.append(pointer)
-            continue
-        value = _resolve_pointer(document, pointer)
-        if value is _MISSING or not honours(value):
-            offending.append(pointer)
-    return offending
-
-
-def _not_found(action: str, document: dict[str, Any]) -> list[str]:
-    """The fields *action* needs and this document does not supply (rule 3).
-
-    Named as pointers rather than as field names so the refusal reads in
-    the same vocabulary ``required`` does, and so a nested field can be
-    named the day one is needed. The list is :data:`_NEEDED_FIELDS`, which
-    is deliberately *not* §5.2's list of fields mandatory for a working
-    action: rule 3 refuses over what the program needs, and §4.1 forbids
-    requiring what it does not.
-    """
-    needed = _NEEDED_FIELDS.get(action, {})
-    return [
-        pointer
-        for pointer, usable in needed.items()
-        if not usable(_resolve_pointer(document, pointer))
-    ]
-
-
-def _unsupported_mode(action: str, document: dict[str, Any]) -> Any:
-    """A present ``/params/mode`` this program does not implement, or None.
-
-    §7.2 enumerates ``clean`` and ``incremental``. A third value is one
-    the program cannot honour, which §5.2 already scopes to
-    ``unsupported.required`` ("A program that knows ``/params/mode`` but
-    not the value ``reproducible`` MUST refuse with
-    ``unsupported.required``") — distinct from a *missing* mandatory
-    field (``unsupported.request``), because the field is present and
-    well-formed; it is its value the program does not implement. An
-    absent mode is ``clean`` (§5.2) and usable, so it is never one of
-    these.
-    """
-    if action != "build":
-        return None
-    value = _resolve_pointer(document, "/params/mode")
-    if value is _MISSING or value in MODES:
-        return None
-    return value
-
-
-def _relative_paths(document: dict[str, Any]) -> list[str]:
-    """Every known path field of *document* whose value is not absolute.
-
-    "Every path value is absolute" (§5.2) is stated of the document rather
-    than of one action's fields, so every field the contract defines as a
-    path is checked — including the ones ``describe`` has no use for. An
-    unknown field is not checked, because rule 1 says to ignore it, and a
-    known field holding something that is not a string is not checked
-    either: that is not a path value at all, and no action implemented
-    here needs one.
-    """
-    found: list[str] = []
-
-    def check(name: str, value: Any) -> None:
-        if isinstance(value, str) and not _is_absolute_path(value):
-            found.append(name)
-
-    for name in _PATH_FIELDS:
-        check(name, document.get(name))
-    for name in _PATH_OBJECTS:
-        entry = document.get(name)
-        if isinstance(entry, dict):
-            check(f"{name}.path", entry.get("path"))
-    for name in _PATH_OBJECT_MAPS:
-        entries = document.get(name)
-        if isinstance(entries, dict):
-            for key, entry in entries.items():
-                if isinstance(entry, dict):
-                    check(f"{name}.{key}.path", entry.get("path"))
-    return sorted(found)
-
-
 # --------------------------------------------------------------------------
-# The result document (§5.4)
+# The result document
 # --------------------------------------------------------------------------
 
 
@@ -830,24 +371,17 @@ def _result_document(
     layers: dict[str, Any] | None = None,
     program: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """A result document in the field order §5.4 prints it in.
+    """A result document in the field order this format prints it in.
 
     *echo* is what the invocation was given and nothing else: ``action``
     always, because it is ``argv[1]``, and ``session`` iff the request
-    document carried it. "A program MUST NOT invent a value for a field it
-    was never given" (§5.4).
+    document carried it. A program must not invent a value for a field it
+    was never given.
 
     Every optional field below is passed exactly when the invocation
-    *measured* the thing it reports, which is what §5.4's "MUST, on
-    success" rows are about: "An invocation that failed before it got that
-    far reports what it measured and nothing more … Fabricating either
-    would be worse than omitting it, since the backend compares both
-    against its own values." So *context* appears once the effective ID
-    has been computed, and *artifacts* and *layers* only on a successful
-    ``build`` — for ``describe`` and ``verify`` they are the table's "MUST
-    NOT" rows, and a ``verify`` that declared diagnostic output (which it
-    MAY) would still declare no ``layers``, because "it reports work that
-    was actually done, and ``verify`` does not do that work".
+    *measured* the thing it reports, and omitted otherwise: fabricating
+    one would be worse than omitting it, since whoever reads the document
+    compares it against values of its own.
     """
     result: dict[str, Any] = {"result": RESULT_VERSION, "status": status}
     result.update(echo)
@@ -864,75 +398,20 @@ def _result_document(
     return result
 
 
-def _refusal(
-    echo: dict[str, Any],
-    reason: str,
-    message: str,
-    *,
-    details: dict[str, Any] | None = None,
-    program: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """An ``unsupported`` result: exit 1, with a ``reason`` to match on.
-
-    ``error.retryable`` is false for every refusal this program makes, and
-    it is "the program's promise about its own failure, and about nothing
-    else" (§5.4.1): re-running an identical request against an identical
-    program produces the identical refusal. ``error.details`` is ``{}``
-    wherever the contract fixes no contents for it — "Contract v1 fixes
-    its contents only where a ``reason`` says so".
-    """
-    return _result_document(
-        echo,
-        _STATUS_UNSUPPORTED,
-        reason=reason,
-        error={"retryable": False, "message": message, "details": details or {}},
-        program=program,
-    )
-
-
-def _failure(
-    echo: dict[str, Any],
-    reason: str,
-    message: str,
-    *,
-    details: dict[str, Any] | None = None,
-    context: str | None = None,
-) -> dict[str, Any]:
-    """A ``failure`` result: the work ran and did not succeed (§5.3).
-
-    The other half of the "not ``success``" space, and the one §5.4's
-    registry reserves its ``error.*`` reasons for. ``retryable`` is false
-    for every failure this program produces, for the same reason it is
-    false for every refusal: it is "the program's promise about its own
-    failure, and about nothing else" (§5.4.1), and a context that
-    disagrees with its own integrity list disagrees with it just as much
-    on a second reading. Nothing here is a transient condition the program
-    could wait out — the remedy is a different context, which is a
-    different invocation.
-    """
-    return _result_document(
-        echo,
-        _STATUS_FAILURE,
-        reason=reason,
-        error={"retryable": False, "message": message, "details": details or {}},
-        context=context,
-    )
-
-
 def _write_atomically(path: Path, document: dict[str, Any]) -> None:
-    """Write *document* to *path* the way §5.4 prescribes.
+    """Write *document* to *path* atomically.
 
-    "temporary file in the *same* directory, ``fsync``, ``rename``" —
-    same directory so the rename cannot cross a filesystem, ``fsync`` so
-    the bytes are on disk before the name exists, rename because that is
-    the one operation a reader cannot observe half of. A failure anywhere
+    Temporary file in the *same* directory, ``fsync``, ``rename`` — same
+    directory so the rename cannot cross a filesystem, ``fsync`` so the
+    bytes are on disk before the name exists, rename because that is the
+    one operation a reader cannot observe half of. A failure anywhere
     leaves neither a result document nor a temporary file behind, which is
     what makes "exit 66, nothing written" true of the write as well as of
     the parse.
 
-    The file keeps :func:`tempfile.mkstemp`'s own mode. The contract says
-    nothing about the result document's permissions, and the backend
-    either runs the program as itself or outranks it.
+    The file keeps :func:`tempfile.mkstemp`'s own mode. Nothing here
+    states the result document's permissions; whoever invoked this
+    program either runs it as itself or outranks it.
     """
     payload = json.dumps(document, indent=2) + "\n"
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
@@ -948,42 +427,17 @@ def _write_atomically(path: Path, document: dict[str, Any]) -> None:
 
 
 # --------------------------------------------------------------------------
-# describe (§7.1)
+# Layer paths, from a workspace record
 # --------------------------------------------------------------------------
-
-
-def _record_document(record: Path) -> dict[str, Any]:
-    """The image's workspace record, or an empty document.
-
-    Unreadable and malformed are the same answer as absent, on purpose: a
-    ``describe`` that cannot answer is a failed conformance test (§7.1),
-    while a ``describe`` reporting ``"path": null`` asks the backend to
-    supply the trees — which is the safe direction and the one every
-    backend can satisfy. A ``build`` reads the same document and cannot
-    be so relaxed about it (:func:`_workspace`), because a program with no
-    workspace of its own has no build environment to assemble.
-    """
-    try:
-        content = json.loads(record.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return content if isinstance(content, dict) else {}
-
-
-def _record_layers(record: Path) -> dict[str, Any]:
-    """The ``layers`` block of the image's workspace record, or nothing."""
-    layers = _record_document(record).get("layers")
-    return layers if isinstance(layers, dict) else {}
 
 
 def _tree_paths(document: dict[str, Any]) -> dict[str, Path]:
     """``<layer> -> <where this environment builds it>``, from a record.
 
     The one answer to "which path can this program honour for this
-    layer", read by :func:`honoured_required` before a legacy build starts
-    and by :meth:`_Build._workspace` while any build runs. A layer whose
-    entry names no string path is absent from the result rather than
-    present with a guess.
+    layer", read by :meth:`_Build._workspace` while any build runs. A
+    layer whose entry names no string path is absent from the result
+    rather than present with a guess.
     """
     layers = document.get("layers")
     return {
@@ -993,133 +447,18 @@ def _tree_paths(document: dict[str, Any]) -> dict[str, Path]:
     }
 
 
-def _record_tree_paths(record: Path) -> dict[str, Path]:
-    """:func:`_tree_paths` of the record at *record*."""
-    return _tree_paths(_record_document(record))
-
-
-def trees(record: Path = WORKSPACE_RECORD) -> dict[str, dict[str, Any]]:
-    """Where this program keeps each layer it carries (§7.1.1 ``trees``).
-
-    Every layer of the contract's registry is reported, plus anything else
-    the record names — an image that carries an ``x-`` layer says so. A
-    ``path`` of ``null`` is the contract's own way of saying "this tree is
-    not in my image; put it wherever you like and name it in ``trees``",
-    and it is reported only where that is true: no record at all, or a
-    record entry naming no path.
-
-    **A layer the record marks ``mounted`` is reported at the path the
-    record names, not as ``null``.** The record means "not baked, mounted
-    per session" by that flag, and reporting ``null`` for it read as "put
-    it wherever you like" — which :meth:`_Build._workspace` then refuses,
-    because west resolves project paths from ``.west/config`` plus the
-    manifest and this program has no way to move them at invocation time.
-    A backend that arranged itself by such a ``describe`` could never have
-    built. ``describe`` is "**authoritative** about what the program can
-    do" (§7.1), so it says the path the SDK has to be mounted at.
-
-    §4 sanctions this since the D1 erratum: "A ``trees`` entry is the
-    one thing a program may have a fixed path for", because a tree is a
-    property of the *image* rather than of the session — "a declared
-    path is then a requirement the backend MUST satisfy for that image,
-    and not a convention". Declaring it here, in ``describe``, is the
-    mechanism the erratum names: the backend learns the requirement
-    before it starts a session, not from a refusal in the middle of one.
-
-    ``version`` is the revision the record carries, and is omitted rather
-    than guessed where there is none — §7.1.1 makes it optional for
-    exactly that case, and a mounted tree is exactly that case.
-    """
-    layers = _record_layers(record)
-    block: dict[str, dict[str, Any]] = {}
-    for name in dict.fromkeys([*LAYERS, *sorted(layers)]):
-        found = layers.get(name)
-        entry: dict[str, Any] = found if isinstance(found, dict) else {}
-        path = entry.get("path")
-        tree: dict[str, Any] = {"path": path if isinstance(path, str) else None}
-        revision = entry.get("revision")
-        if isinstance(revision, str):
-            tree["version"] = revision
-        block[name] = tree
-    return block
-
-
-def program(record: Path = WORKSPACE_RECORD) -> dict[str, Any]:
-    """The self-description of §7.1.1, every field of it.
-
-    ``version`` is the package's own and is opaque to a backend: "A
-    backend MAY log it … it MUST NOT parse it and MUST NOT make a
-    compatibility decision from it." Compatibility is decided by
-    ``contract``, ``request``, ``result`` and ``actions``, which are
-    declarations rather than inferences — and all four are constants here.
-    """
-    return {
-        "id": PROGRAM_ID,
-        "version": __version__,
-        "contract": CONTRACT_VERSION,
-        "request": list(REQUEST_VERSIONS),
-        "result": list(RESULT_VERSIONS),
-        "actions": list(IMPLEMENTED_ACTIONS),
-        "trees": trees(record),
-    }
-
-
-def _describe(echo: dict[str, Any], record: Path) -> dict[str, Any]:
-    """``describe``: read two fields, write four, plus ``program`` (§7.1).
-
-    It "never touches the context, writes nothing but the result document,
-    and fills the ``program`` block", so there is no context ID to report
-    and nothing measured to declare.
-    """
-    return _result_document(echo, _STATUS_SUCCESS, program=program(record))
-
-
 # --------------------------------------------------------------------------
-# verify (§7.3)
+# A build's own failures
 # --------------------------------------------------------------------------
-
-
-def _reportable(value: Any) -> Any:
-    """*value* as something :func:`json.dumps` can write.
-
-    The declared ``context`` format version reaches ``error.details``
-    straight out of a YAML document, where a scalar can parse as a date,
-    a mapping or anything else. The result document is the last write
-    action of the invocation (§5.4), so a value the JSON encoder chokes on
-    there would cost the whole invocation its answer — nothing written and
-    exit 66, for a context this program diagnosed perfectly well. Carrying
-    the value as text is the smaller loss, and the field exists so a
-    backend can see what it sent.
-    """
-    return value if isinstance(value, bool | int | str) else str(value)
-
-
-class _Refused(Exception):
-    """A typed answer an action already has; carries its result document.
-
-    An action of this contract is a chain of checks that each end the
-    invocation with a *document* rather than with a value, and ``build``
-    (§7.2) is fourteen of them deep. Raising the finished document keeps
-    the chain readable as the sequence §7.2 states it in, instead of as
-    fourteen nested ``if`` statements — and every raise site is a
-    ``reason`` from §5.4's registry, never a Python error class leaking
-    out. It is caught in exactly one place per action.
-    """
-
-    def __init__(self, document: dict[str, Any]) -> None:
-        super().__init__(document.get("reason"))
-        self.document = document
 
 
 class _BuildFailed(Exception):
     """A build that did not succeed, before it is a result document.
 
-    The builder (:class:`_Build`) is shared by two invocations whose result
-    documents have nothing in common, so it raises the *facts* and lets the
-    invocation that asked render them: the legacy shell into a ``failure``
-    with its ``reason`` and ``error.details``, a v3 step into a ``failure``
-    with its ``message``. Everything a build refuses is one of these, and
-    every raise site reads the same either way.
+    The builder (:class:`_Build`) raises the *facts* — a reason, a message
+    and optional details — and lets the invocation that asked render them:
+    a step renders a ``failure`` with the ``message``. Everything a build
+    refuses is one of these, and every raise site reads the same.
     """
 
     def __init__(self, reason: str, message: str, details: dict[str, Any] | None = None) -> None:
@@ -1129,153 +468,25 @@ class _BuildFailed(Exception):
         self.details = details
 
 
-def _open_context(echo: dict[str, Any], root: Path) -> ContextVerification:
-    """The materialized context at *root*, measured, or a typed refusal.
-
-    Shared by ``verify`` and ``build``, which is the point: both compute
-    the effective context ID, and §3.3 is only worth anything while each
-    side of the contract has *one* implementation of it. Every hash and
-    the ID come from :func:`~mcuhome.compiler.contextread.verify_context`.
-
-    The refusals are §3.1's and §3.2's, and neither is action-specific:
-    a context with no ``manifest.yaml`` "is missing a file the action
-    needs" (§5.4), and a ``context`` format version this program does not
-    implement is ``unsupported.context`` — "nothing about this context is
-    broken" (§3.2). The manifest that cannot be read at all lands on
-    ``error.context.mismatch``, which is a gap in contract v1 the module
-    docstring records rather than papers over.
-
-    What the caller does with :attr:`~ContextVerification.ok` differs, and
-    that is why it is not decided here: ``verify`` exists to report a
-    disagreement (§7.3), while for a ``build`` §5.4 makes ``result.context``
-    a value "for comparison only" and never makes a mismatch a build
-    failure.
-    """
-    # Lazy on purpose — see the note at the module's import block: the
-    # SDK entry point imports this module under a bare runtime, and only
-    # the actions that measure a context may pull the YAML machinery.
-    from mcuhome.compiler.contextread import ContextFormatVersionError, verify_context
-
-    if not (root / MANIFEST_FILE).is_file():
-        # "is missing a file the action needs … the missing path in
-        # error.details" (§5.4). §3.1 makes this *the* file: "manifest.yaml
-        # is the program's entry point; a program MUST NOT require any
-        # out-of-band knowledge beyond it and this contract." A context
-        # directory that is not there at all lands here too, which is
-        # right — from the program's side the two are the same absence.
-        raise _Refused(
-            _failure(
-                echo,
-                _REASON_INCOMPLETE,
-                f"the context at {root} carries no {MANIFEST_FILE}",
-                details={"missing": [MANIFEST_FILE]},
-            )
-        )
-    try:
-        return verify_context(root)
-    except ContextFormatVersionError as unimplemented:
-        if unimplemented.found is None:
-            raise _Refused(
-                _failure(
-                    echo,
-                    _REASON_UNREADABLE,
-                    f"the context at {root} states no {MANIFEST_FILE} format version",
-                )
-            ) from unimplemented
-        raise _Refused(
-            _refusal(
-                echo,
-                _REASON_CONTEXT,
-                unimplemented.message,
-                details={"context": _reportable(unimplemented.found)},
-            )
-        ) from unimplemented
-    except (BuildError, OSError) as unreadable:
-        # "found ``manifest.yaml`` and cannot read it as one: broken YAML,
-        # a missing section, or a hash in a spelling §3.3.1 refuses" — the
-        # reason §5.4's registry provides for exactly this case, distinct
-        # from a mismatch so a backend can tell a corrupt manifest from a
-        # tampered context file without parsing untrusted message text.
-        detail = unreadable.message if isinstance(unreadable, BuildError) else str(unreadable)
-        raise _Refused(
-            _failure(
-                echo,
-                _REASON_UNREADABLE,
-                f"the context at {root} cannot be read as one: {detail}",
-            )
-        ) from unreadable
-
-
-def _verify(echo: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
-    """``verify``: the materialized context against its own integrity list.
-
-    §7.3: "Asserts that the materialized context is the context the
-    manifest describes. It checks the **effective** context — the file set
-    as materialized, against the integrity list in ``manifest.yaml`` … —
-    and reports the resulting ``context`` ID in its result. A file that is
-    missing, a file whose bytes hash to something else, and a file present
-    but absent from the list are one outcome and one typed answer:
-    ``status: "failure"``, ``reason: "error.context.mismatch"``, the
-    offending paths in ``error.details``."
-
-    Every hash and the ID itself come from
-    :func:`~mcuhome.compiler.contextread.verify_context`, never from this module —
-    see the module docstring for why a second implementation of §3.3 here
-    would be the defect that rule exists against. Its
-    :attr:`~mcuhome.compiler.contextread.ContextVerification.ok` covers one case
-    §7.3 does not enumerate and §3.3 demands anyway: a manifest whose
-    declared ``id`` is not the ID its own contents yield. "Implementations
-    … MUST NOT trust a declared ``id`` value" — and a declared value
-    nobody checks is one nothing in the system would ever catch, since
-    every other party recomputes and would agree with itself.
-
-    **This invocation writes nothing but its result document.** §9.2 point
-    10 forbids a ``verify`` to "Apply a patch, write into a ``trees``
-    entry, or write into ``work``"; this one needs none of those paths at
-    all. No event is written either: ``events`` is optional in both
-    directions (§8) and "a program that offers fewer names than the table
-    is conforming". ``cancel`` is not polled, which §8 leaves as a SHOULD
-    "so that a fifty-line third-party program stays possible" — this
-    action is one pass over one directory, and the backend's SIGTERM
-    remains the hard path.
-    """
-    root = Path(document["context"])
-    try:
-        verification = _open_context(echo, root)
-    except _Refused as refused:
-        return refused.document
-
-    if not verification.ok:
-        return _failure(
-            echo,
-            _REASON_MISMATCH,
-            "; ".join(verification.problems()),
-            details={"paths": [mismatch.path for mismatch in verification.mismatches]},
-            # Measured, so reported — the module docstring quotes the line.
-            context=verification.actual_id,
-        )
-    return _result_document(echo, _STATUS_SUCCESS, context=verification.actual_id)
-
-
 # --------------------------------------------------------------------------
-# build (§7.2)
+# The build
 # --------------------------------------------------------------------------
 
 
 class _Events:
-    """The optional NDJSON event stream of §8, or nothing at all.
+    """The optional NDJSON event stream, or nothing at all.
 
-    "Only if the request document carries ``events``. The program appends
-    NDJSON to that file — one JSON object per line, UTF-8, flushed after
-    every line, append-only, never truncated. Every object carries
-    ``"event": "<name>"`` and a monotonic ``"seq"`` starting at 1."
+    Only if the invocation names an ``events`` file: the program appends
+    NDJSON to it — one JSON object per line, UTF-8, flushed after every
+    line, append-only, never truncated. Every object carries
+    ``"event": "<name>"`` and a monotonic ``"seq"`` starting at 1.
 
-    **Nothing here can fail an invocation.** "A program MUST NOT block on
-    writing an event and MUST NOT die if the write fails. Where the two
+    **Nothing here can fail an invocation.** The program must not block on
+    writing an event and must not die if the write fails. Where the two
     obligations collide — a full pipe, a stalled disk — **not blocking
-    wins**." So every write is guarded, nothing is retried, and the file
-    is flushed rather than ``fsync``ed: a reader tailing it wants the
-    bytes now, and an event nobody read is not worth a build.
+    wins**. So every write is guarded, nothing is retried, and the file is
+    flushed rather than ``fsync``ed: a reader tailing it wants the bytes
+    now, and an event nobody read is not worth a build.
     """
 
     def __init__(self, path: Any) -> None:
@@ -1298,10 +509,10 @@ class _Events:
 def _write_file(path: Path, data: bytes) -> None:
     """Write *data* and make it real before anybody hashes it.
 
-    The ``fsync`` is the point: §5.4 requires every declared hash to be
-    read back from disk, and reading back a file whose bytes are still in
-    the page cache would satisfy the letter and none of the reason — the
-    backend re-hashes the same file from *its* side of the mount (§9.3).
+    The ``fsync`` is the point: every declared hash has to be read back
+    from disk, and reading back a file whose bytes are still in the page
+    cache would satisfy the letter and none of the reason — the
+    orchestrator re-hashes the same file from its own side of the mount.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as handle:
@@ -1318,18 +529,18 @@ def _write_json(path: Path, document: dict[str, Any]) -> None:
 def patchset(layer_dir: Path) -> str:
     """``layers[<name>].patchset`` for one ``patches/<layer>/`` directory.
 
-    §5.4 defines the value exactly, "otherwise a cross-implementation
-    audit is worthless"::
+    The value is defined exactly, otherwise a cross-implementation audit
+    is worthless::
 
         SHA-256( "mcuhome-patchset-1\\n"
                  + for each file under patches/<layer>/, ascending byte order:
                      <64 hex chars of the file's SHA-256> + " " + <filename> + "\\n" )
 
-    "The value carries its own algorithm, so it is rendered ``sha256:`` +
+    The value carries its own algorithm, so it is rendered ``sha256:`` +
     64 lowercase hex digits, and each ``<64 hex chars>`` inside the input
-    is lowercase (§3.3.1)." The sort is over the filename's **bytes**, not
-    over its code points — the two agree for the ``NNNN-name.patch``
-    grammar :mod:`mcuhome.compiler.contextread` enforces, and stating the byte order
+    is lowercase. The sort is over the filename's **bytes**, not over its
+    code points — the two agree for the ``NNNN-name.patch`` grammar
+    :mod:`mcuhome.compiler.contextread` enforces, and stating the byte order
     is what makes a second implementation agree for a name outside it.
     """
     files = sorted(
@@ -1343,20 +554,18 @@ def patchset(layer_dir: Path) -> str:
 def _absorb_tree(source: Path, target: Path) -> int:
     """Merge the generate child's *source* tree into *target*, content-aware.
 
-    The other half of handing the child an empty ``out`` (§4): what it
-    produced still has to end up in the session's persistent tree, and it
-    must land there the way :func:`mcuhome.compiler.generate.write_tree` would
-    have written it — a file whose bytes are already in *target* is left
-    alone, mtime and all, because CMake watches the tree and a rewritten
-    unchanged ``CMakeLists.txt`` re-runs the Matter sub-build. That is
-    the whole difference between §7.2's ``incremental`` meaning
-    something and meaning "clean, slowly".
+    The other half of handing the child an empty ``out``: what it produced
+    still has to end up in the session's persistent tree, and it must land
+    there the way :func:`mcuhome.compiler.generate.write_tree` would have
+    written it — a file whose bytes are already in *target* is left alone,
+    mtime and all, because CMake watches the tree and a rewritten
+    unchanged ``CMakeLists.txt`` re-runs the Matter sub-build.
 
     Nothing is deleted from *target*: the generator never deletes either
-    (its contract is a mapping of files to write), and a stale file from
-    an earlier model is exactly as stale after a direct
-    ``write_tree(work/tree)`` would have run. Returns how many files the
-    child produced, for the ``generate.written`` event.
+    (it only maps files to write), and a stale file from an earlier model
+    is exactly as stale after a direct ``write_tree(work/tree)`` would
+    have run. Returns how many files the child produced, for the
+    ``generate.written`` event.
     """
     produced = 0
     for path in sorted(source.rglob("*")):
@@ -1376,10 +585,10 @@ def _run_child(command: list[str], *, env: dict[str, str], directory: Path) -> t
     """Run one short-lived child, and return its exit code and its output.
 
     The seam every test replaces. Standard error is merged into standard
-    output because §8 makes the two "one raw, opaque log stream", and the
-    stream is echoed onward as well as captured: a consumer "MUST NOT
-    parse the log stream for machine decisions", and this program does not
-    — it re-emits it so that the backend collecting the container's output
+    output because the two are one raw, opaque log stream, and the stream
+    is echoed onward as well as captured: a consumer must not parse the
+    log stream for machine decisions, and this program does not — it
+    re-emits it so that the orchestrator collecting this program's output
     sees what its children said, and keeps a copy only for the failure
     message.
 
@@ -1404,22 +613,6 @@ def _run_child(command: list[str], *, env: dict[str, str], directory: Path) -> t
     return completed.returncode, completed.stdout
 
 
-def _requested_mode(document: dict[str, Any]) -> str:
-    """``params.mode``, with §5.2's default applied.
-
-    "An absent ``params``, a ``params`` object without a ``mode`` key, and
-    ``params: {}`` are the same thing and all three mean ``mode:
-    "clean"``". A value outside :data:`MODES` never reaches here — rule 3
-    refused it (:data:`_NEEDED_FIELDS`) — so the fallback below is the
-    default and not a guess.
-    """
-    params = document.get("params")
-    if not isinstance(params, dict):
-        return DEFAULT_MODE
-    value = params.get("mode", DEFAULT_MODE)
-    return value if value in MODES else DEFAULT_MODE
-
-
 def _is_sdk_version(value: Any) -> bool:
     """An ``mcuhome-sdk.json`` format version this program implements."""
     return isinstance(value, int) and not isinstance(value, bool) and value in SDK_METADATA_VERSIONS
@@ -1428,29 +621,29 @@ def _is_sdk_version(value: Any) -> bool:
 def sdk_entry_point(sdk_path: Path) -> tuple[Path, str]:
     """The code-generation entry point declared at the root of ``trees.sdk``.
 
-    §6.1, normative: ``mcuhome-sdk.json``, "one JSON object, UTF-8 without
-    BOM, RFC 8259, read with the JSON parser §5.1 already requires and
-    nothing more", fixing three names and no values — ``sdk``,
-    ``generate.program``, ``generate.runtime``. Returns the absolute path
-    of the program and the runtime string, and raises
-    :class:`~mcuhome.model.errors.BuildError` for everything §6.1 calls "code
-    generation cannot be reached".
+    ``mcuhome-sdk.json``: one JSON object, UTF-8 without BOM, RFC 8259,
+    read with the same JSON parser every request document is, fixing
+    three names and no values — ``sdk``, ``generate.program``,
+    ``generate.runtime``. Returns the absolute path of the program and
+    the runtime string, and raises
+    :class:`~mcuhome.model.errors.BuildError` for everything that counts
+    as "code generation cannot be reached".
 
-    "A missing file, a missing field and a ``sdk`` version the program
-    does not implement are all one situation … and all three fail the
+    A missing file, a missing field and a ``sdk`` version the program
+    does not implement are all one situation, and all three fail the
     invocation with ``reason: "error.build.failed"``. They are not
-    ``unsupported``: the program implements everything this contract asks
-    of it, and no other container would fare better with this SDK
-    package." :meth:`_Build._sdk_metadata` is where that becomes a result
+    ``unsupported``: the program implements everything the format asks of
+    it, and no other build environment would fare better with this SDK
+    package. :meth:`_Build._sdk_metadata` is where that becomes a result
     document; here it is an error a caller can also raise while checking
     an SDK package it is *shipping*, which is the second reader this
     function has.
 
-    ``generate.runtime`` is read and not interpreted: it is "an opaque
-    string", and the honest consequence the contract states is that a
-    conforming container must *provide* the runtime, not that it can check
-    the name against anything. It is required to be there because the
-    contract fixes the field.
+    ``generate.runtime`` is read and not interpreted: it is an opaque
+    string, and the honest consequence is that a conforming build
+    environment must *provide* the runtime, not that it can check the
+    name against anything. It is required to be there because this
+    module fixes the field.
     """
     path = sdk_path / SDK_METADATA_FILE
     try:
@@ -1490,7 +683,7 @@ def sdk_entry_point(sdk_path: Path) -> tuple[Path, str]:
 
 
 class _Build:
-    """One build, whichever invocation asked for it.
+    """One build, for the step that asked for it.
 
     The steps, each a method below and each ending either in the next one
     or in a :class:`_BuildFailed`:
@@ -1504,11 +697,8 @@ class _Build:
     6. compile with ``west build --sysbuild``;
     7. deliver the artifacts into ``out`` and write the build report.
 
-    Steps 2 to 7 are :meth:`execute` and are the same under both
-    invocations. What is *not* here is everything only one of them has:
-    the legacy contract's context measurement and its ``work`` claim are
-    the legacy shell's (:func:`_build`), because a v3 step has no context
-    ID to report and an empty ``work`` to start from.
+    Steps 2 to 7 are :meth:`execute`. A step has no context ID to report,
+    and it starts every time from an empty ``work``.
 
     Nothing here writes into the context — it is a read-only input for the
     whole life of a session. The write scope is ``out``, ``work``, ``tmp``
@@ -1544,12 +734,11 @@ class _Build:
         self.record = record
         self.record_document = record_document
         #: The trees the caller named, where the invocation has such a
-        #: field. Empty means "the environment's own", which is the v3
-        #: answer and the one a legacy request without ``trees`` gets too.
+        #: field. Empty means "the environment's own".
         self.given_trees: dict[str, Any] = given_trees if isinstance(given_trees, dict) else {}
-        #: The legacy contract's ``ccache`` object, or ``None``. The v3
-        #: invocation states its cache in *extra_env* instead, from the
-        #: tiers the specification gives it.
+        #: A shared ``ccache`` object, or ``None``. A step states its cache
+        #: in *extra_env* instead, from the tiers the specification gives
+        #: it, so this is always ``None`` on that path.
         self.ccache = ccache
         self.events = events if events is not None else _Events(None)
         #: The environment the program was *told* it runs in, never read
@@ -1561,8 +750,8 @@ class _Build:
         #: before the tools are checked, so a variable that makes a tool
         #: unnecessary counts (:data:`mcuhome.compiler.workspace.TOOLS`).
         self.extra_env = dict(extra_env or {})
-        #: The effective context ID, once some caller measured one. The
-        #: legacy shell sets it; a v3 step never does.
+        #: The effective context ID, once some caller measured one.
+        #: Nothing sets it today.
         self.measured: str | None = None
 
     # -- refusals ----------------------------------------------------------
@@ -1572,10 +761,10 @@ class _Build:
     ) -> _BuildFailed:
         """The build did not succeed, said once and rendered by the caller.
 
-        *reason* and *details* are the legacy contract's vocabulary and are
-        carried through untouched for it; the v3 result document has no
-        field for either and reports *message*, which is what its
-        ``message`` is for — "free text for a human".
+        *reason* and *details* are carried through untouched, even though
+        the step's result document has no field for either and reports
+        only *message* — which is what its ``message`` field is for:
+        "free text for a human".
         """
         return _BuildFailed(reason, message, details)
 
@@ -1603,18 +792,18 @@ class _Build:
     def require_signing_key(self) -> None:
         """No ``keys/signing.pub``, no build — and no fallback.
 
-        "A context submitted to a ``build`` that does not carry it fails
+        A context submitted to a ``build`` that does not carry it fails
         the invocation typed — ``status: "failure"``, ``reason:
         "error.context.incomplete"``, the missing path in
-        ``error.details`` — and the program MUST NOT build anyway. There
+        ``error.details`` — and the program must not build anyway. There
         is no fallback to MCUboot's default key, because that default is
-        MCUboot's demo key and **its private half is published**."
+        MCUboot's demo key and **its private half is published**.
 
         A key that is present but unusable — wrong curve, a private key by
-        mistake — is not typed by contract v1 at all (§7.2 types only the
-        absence), so nothing is checked here beyond existence: the file is
-        handed to sysbuild, and MCUboot's own tooling is the thing that
-        knows what a verification key is.
+        mistake — is not typed at all (only the absence is), so nothing is
+        checked here beyond existence: the file is handed to sysbuild, and
+        MCUboot's own tooling is the thing that knows what a verification
+        key is.
         """
         if not (self.context_root / SIGNING_KEY_FILE).is_file():
             raise self.fail(
@@ -1624,84 +813,36 @@ class _Build:
                 {"missing": [SIGNING_KEY_FILE]},
             )
 
-    # -- work, and only under the legacy contract (§6.3) --------------------
-
-    def claim_work(self) -> bool:
-        """Read the session marker, then own it. Returns "warm".
-
-        Called by the legacy shell alone: under the v3 specification
-        ``work`` is empty at the start of every step, so there is no prior
-        state to tell apart from a stranger's and no marker worth writing.
-
-        §6.3: "A program that records a marker **MUST read it before using
-        anything in ``work``**, on every invocation. A guard that is
-        written and not read is worse than no guard, because it looks like
-        one." So this is the first thing that touches ``work``.
-
-        A marker naming another session "is terminal for the invocation …
-        it MUST NOT use the state it found, MUST NOT delete or overwrite
-        it, and MUST NOT fall back to a private working area of its own
-        choosing. It writes nothing into ``work`` in this case, not even
-        its own marker." A marker that cannot be parsed is treated the
-        same way, for the reason the module docstring gives.
-
-        The return value answers §7.2's ``incremental`` predicate, and
-        only that: "no prior state of this session" is a marker this
-        invocation had to write, and a marker it found is a previous
-        invocation of the same session.
-        """
-        marker = self.work_dir / WORK_MARKER
-        if marker.exists():
-            try:
-                found = json.loads(marker.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                found = None
-            recorded = found.get("session") if isinstance(found, dict) else None
-            if not isinstance(found, dict) or recorded != self.session:
-                raise self.fail(
-                    _REASON_WORK,
-                    f"the work directory {self.work_dir} is marked for another session",
-                    {"session": self.session, "found": recorded},
-                )
-            return True
-        _write_json(marker, {"session": self.session})
-        return False
-
     def _discard_state(self) -> None:
-        """``clean`` — "fresh workspace" (§7.2), concretely.
+        """``clean`` — a fresh workspace, concretely.
 
         The generated application tree and the CMake tree are this
         program's own state in ``work`` (module docstring), so a fresh
         workspace is those two removed. The session marker and the
-        per-layer patch records stay: §6.2 makes patch application "once
-        per session" and explicitly not once per invocation, and a
-        ``clean`` that re-applied patches would either fail on the second
-        build of a session or need a layer reset — "There is no layer
-        reset in this contract".
+        per-layer patch records stay: patch application happens once per
+        session and explicitly not once per invocation, and a ``clean``
+        that re-applied patches would either fail on the second build of a
+        session or need a layer reset — and there is no layer reset.
         """
         for name in (WORK_TREE, WORK_BUILD):
             shutil.rmtree(self.work_dir / name, ignore_errors=True)
 
-    # -- 4. the workspace (§6.1) -------------------------------------------
+    # -- 4. the workspace ---------------------------------------------------
 
     def _workspace(self) -> tuple[Path, dict[str, Path]]:
         """The west workspace this environment carries, checked against ``trees``.
 
-        The workspace record (``containers/build-container/workspace-record.py``
-        writes it, for the baked image and for the workspace package alike)
-        says where each layer is, and a ``trees`` entry the caller named is
-        accepted only where it names that same path — which is exactly what
-        a backend mounting a writable view *over* the tree produces.
-        Anything else fails the build, naming the layer and both paths;
-        the module docstring says why nothing here can move west's idea of
-        where a project lives, and what would replace it.
+        The workspace record (``packaging/build-environment/workspace-record.py``
+        writes it, into the workspace package) says where each layer is,
+        and a ``trees`` entry the caller named is accepted only where it
+        names that same path — which is exactly what mounting a writable
+        view *over* the tree produces. Anything else fails the build,
+        naming the layer and both paths; the module docstring says why
+        nothing here can move west's idea of where a project lives, and
+        what would replace it.
 
         A program with no record has no workspace at all, and says so
-        rather than compiling against nothing. That is consistent with the
-        legacy ``describe`` it would have given: every layer ``"path":
-        null``, which asks the backend to supply trees this program then
-        could not use — and with :func:`honoured_required`, which honours
-        no ``/trees/<layer>`` value at all in that case.
+        rather than compiling against nothing.
         """
         document = self.record_document
         topdir = document.get("topdir")
@@ -1730,7 +871,7 @@ class _Build:
                 )
         return Path(topdir), paths
 
-    # -- 5. the child environment (§6.1, §10) ------------------------------
+    # -- 5. the child environment --------------------------------------
 
     def _environment(self, topdir: Path, sdk_path: Path) -> dict[str, str]:
         """What every child of this invocation runs in.
@@ -1739,58 +880,55 @@ class _Build:
         read out of the process (the module docstring) — by
         :func:`~mcuhome.compiler.workspace.build_environment`, which is the one
         definition of a Matter build environment in this package and is
-        also what a backend reaches
-        for the other direction. It contributes the codegen shim on
-        ``PYTHONPATH``, the two job caps that nothing inherits,
-        ``ZEPHYR_BASE`` so the generated CMakeLists finds Zephyr and the
-        Matter SDK next to it, a writable ``HOME``, and the ``TMPDIR`` §4
-        makes the program point at the request's ``tmp``.
+        also what the orchestrator reaches for the other direction. It
+        contributes the codegen shim on ``PYTHONPATH``, the two job caps
+        that nothing inherits, ``ZEPHYR_BASE`` so the generated
+        CMakeLists finds Zephyr and the Matter SDK next to it, a writable
+        ``HOME``, and the ``TMPDIR`` this program points at the request's
+        ``tmp``.
 
-        **``HOME`` is in ``work``, and it is not decoration.** The backend
-        "runs the program as the calling user where it can" (§2.2), which
-        in a container is a UID that has no ``/etc/passwd`` entry — it
-        comes from the host — and therefore no home directory either;
+        **``HOME`` is in ``work``, and it is not decoration.** Whoever
+        invokes this program runs it as the calling user where it can,
+        which in a container is a UID that has no ``/etc/passwd`` entry —
+        it comes from the host — and therefore no home directory either;
         tools that cache in ``$HOME`` fail obscurely without a writable
-        one.
-        ``work`` rather than ``tmp`` because those caches are worth
-        keeping for the next invocation of the session, and §9.2 point 1
-        makes ``work`` a place this program may write.
+        one. ``work`` rather than ``tmp`` because those caches are worth
+        keeping for the next invocation of the session, and it is a place
+        this program may write.
 
         **What is *not* built here is ``PATH``.** It arrives with the
         environment the caller stated, because it is the one variable
-        naming things this program did not put anywhere: the image's
+        naming things this program did not put anywhere: the environment's
         toolchain, west, ``git``, the runtime ``generate.runtime`` names.
-        A program that composed one would be describing a filesystem the
-        contract does not own (§4). :func:`~mcuhome.compiler.workspace.require_tools`
+        A program that composed one would be describing a filesystem
+        nothing here owns. :func:`~mcuhome.compiler.workspace.require_tools`
         is called on the finished environment before anything is compiled,
         so an environment that cannot start ``west`` is a typed refusal
         naming the tool rather than a child process that fails to exec ten
         minutes in.
 
-        ``limits.jobs`` is taken as given. It is "**authoritative** and
-        mandatory for working actions … An optional field would be
-        worthless here: a foreign program would fall back to ``nproc``,
-        which is exactly the case the field exists against" — so
-        :func:`~mcuhome.model.jobs.resolve_jobs` and its auto-detection stay
-        on the host side of the contract and are never called here.
+        ``limits.jobs`` is taken as given. It is authoritative, so
+        :func:`~mcuhome.model.jobs.resolve_jobs` and its auto-detection
+        stay on the caller's side and are never called here — an optional
+        field would be worthless: a foreign program would fall back to
+        ``nproc``, which is exactly the case the field exists against.
 
-        The cache follows §10 exactly **when the request names one**. A
-        ``writable: true`` shared cache "MAY be used as the primary
-        cache"; a ``writable: false`` one "MUST be treated as a read-only
-        secondary cache, with its own primary cache in ``work`` or
-        ``tmp``", which is what the two variables below say to ccache.
-        ``writable`` is read and never probed (§4.1).
+        The cache follows the tiering below **when a shared cache is
+        named**. A ``writable: true`` shared cache may be used as the
+        primary cache; a ``writable: false`` one is treated as a
+        read-only secondary cache, with its own primary cache in ``work``
+        or ``tmp``, which is what the two variables below say to ccache.
+        ``writable`` is read and never probed.
 
-        When the request names **none** — which is the case for every
-        backend MCUHome ships — this says nothing about ccache at all,
-        and that is deliberate rather than an omission. The build
-        environment configures both of ccache's roles itself (this
-        image's ``/etc/ccache.conf``: a writable cache, and a read-only
-        secondary), an environment variable set here would *override*
-        that file rather than agree with it, and what actually lives at
-        those two paths is the backend's to decide by mounting or not
-        mounting. §10's "any cache is the program's own and dies with the
-        session" describes exactly what happens with nothing mounted.
+        When none is named — which is the case for a step, always —
+        this says nothing about ccache at all, and that is deliberate
+        rather than an omission. The build environment configures both of
+        ccache's roles itself (this environment's ``/etc/ccache.conf``: a
+        writable cache, and a read-only secondary), an environment
+        variable set here would *override* that file rather than agree
+        with it, and what actually lives at those two paths is decided by
+        whoever mounts them or does not. Any cache nothing was named for
+        is the program's own, and dies with the session.
 
         ``CCACHE_BASEDIR`` is set by nobody, here or anywhere. It
         normalizes absolute paths below it into paths relative to the
@@ -1813,10 +951,11 @@ class _Build:
         cache_home.mkdir(parents=True, exist_ok=True)
         # West caches what it derives: the first `west build` writes
         # `zephyr.base` back into the workspace's own `.west/config`. The
-        # baked workspace belongs to whoever built the image, and §2.2
-        # runs this program as the calling user — but the deeper point is
-        # that the workspace is a frozen input this program never writes,
-        # incidental caches included. So the local config is copied into
+        # baked workspace belongs to whoever built the image, and whoever
+        # invokes this program runs it as the calling user — but the
+        # deeper point is that the workspace is a frozen input this
+        # program never writes, incidental caches included. So the local
+        # config is copied into
         # `work` once per session and ``WEST_CONFIG_LOCAL`` points west at
         # the copy: topdir discovery still walks to `.west/`, only the
         # file west reads and writes moves, and any west write invented
@@ -1850,8 +989,8 @@ class _Build:
                 env["CCACHE_DIR"] = str(self.work_dir / WORK_CCACHE)
                 if isinstance(shared, str):
                     # ccache >= 4.8 spells the secondary store this way; the
-                    # `|read-only` attribute is what makes the MUST above true
-                    # rather than merely intended.
+                    # `|read-only` attribute is what makes the read-only rule
+                    # above enforced rather than merely intended.
                     env["CCACHE_REMOTE_STORAGE"] = f"file:{shared}|read-only"
         # Last, so that what the invocation knows beats what was derived —
         # and before the tools are checked, because a pre-generated data
@@ -1868,31 +1007,29 @@ class _Build:
             ) from unusable
         return env
 
-    # -- 6. patched layers (§6.2) ------------------------------------------
+    # -- 6. patched layers ---------------------------------------------
 
     def _apply_patches(self, paths: dict[str, Path], env: dict[str, str]) -> dict[str, Any]:
         """Apply every patched layer's patches, once per session.
 
-        §6.2 fixes the semantics and leaves the tool free: "``git apply``,
+        The semantics are fixed and the tool is free: ``git apply``,
         ``patch -p1``, or a diff implementation the program brings itself
-        are all conforming". This uses ``git apply`` with no ``--3way`` and
+        are all conforming. This uses ``git apply`` with no ``--3way`` and
         no fallback, which is what ``patches/README.md``, CI and the image
         build already do — and it is what "a patch that does not apply is
         a failure of the invocation and not something to search around"
         asks for.
 
         The per-layer record in ``work`` is what "once per session" means:
-        started is written before the first patch, complete only "after
-        the last patch of that layer applied cleanly", and a layer found
+        started is written before the first patch, complete only after
+        the last patch of that layer applied cleanly, and a layer found
         started-but-not-complete is ``error.patch.incomplete`` — terminal,
-        because "restoring the pristine baseline is not possible from
-        inside the merged view at all".
+        because restoring the pristine baseline is not possible from
+        inside the merged view at all.
 
         Every patched layer appears in the returned ``layers`` block,
         including one an earlier invocation of this session already
-        applied: §5.4 makes the block mandatory "for every patched layer"
-        of a successful build, and the patch set of a locked context
-        cannot change.
+        applied — the patch set of a locked context cannot change.
         """
         root = self.context_root / PATCHES_DIR
         names = (
@@ -1903,11 +1040,11 @@ class _Build:
         records = self.work_dir / WORK_PATCH_RECORDS
         layers: dict[str, Any] = {}
         for name in names:
-            # §6.2 types both of its conditions the same way: "If
+            # Both these conditions are typed the same way: if
             # `patches/<layer>/` names a layer for which there is no
-            # `trees` entry, **or** which the program does not know, the
-            # program MUST NOT proceed: `status: "failure"`, `reason:
-            # "error.layer.unknown"`."
+            # `trees` entry, or which the program does not know, the
+            # program must not proceed: `status: "failure"`, `reason:
+            # "error.layer.unknown"`.
             if name not in LAYERS or name not in paths:
                 raise self.fail(
                     _REASON_LAYER,
@@ -1923,10 +1060,10 @@ class _Build:
                     {"layer": name},
                 )
             if entry.get("writable") is not True:
-                # The third case, and the legacy §6.2 does not type it: the
-                # entry is there and does not assert that the tree may be
-                # written. It is not "no entry" and not "a layer this
-                # program does not know", so it is not
+                # The third case, and it is not typed the same way as the
+                # other two: the entry is there and does not assert that
+                # the tree may be written. It is not "no entry" and not "a
+                # layer this program does not know", so it is not
                 # `error.layer.unknown`; it is the ordinary one.
                 raise self.fail(
                     _REASON_BUILD,
@@ -1965,7 +1102,7 @@ class _Build:
             self.events.emit("patch.layer.applied", layer=name, count=len(patches))
         return layers
 
-    # -- 7. code generation (§6.1) -----------------------------------------
+    # -- 7. code generation ----------------------------------------------
 
     def _sdk_metadata(self, sdk_path: Path) -> tuple[Path, str]:
         """:func:`sdk_entry_point`, as a refusal of *this* invocation.
@@ -1973,7 +1110,7 @@ class _Build:
         The reading of ``mcuhome-sdk.json`` is a module-level function so
         that the SDK package's own suite can hold its metadata against the
         rules the program applies to it, rather than against a second
-        transcription of §6.1 in a fixture.
+        transcription of the format in a fixture.
         """
         try:
             return sdk_entry_point(sdk_path)
@@ -1983,34 +1120,33 @@ class _Build:
     def _generate(self, sdk_path: Path, env: dict[str, str]) -> Path:
         """Invoke the SDK entry point as a child, over this same ABI.
 
-        §6.1: ``<trees.sdk.path>/<generate.program> generate <absolute path
-        of a request document>`` — "That is §5.1 unchanged … The program
-        writes that request document into its own ``tmp`` and is the
-        *backend* of that invocation, in exactly the sense §1.1 defines."
+        ``<trees.sdk.path>/<generate.program> generate <absolute path of a
+        request document>`` — the same invocation shape as this program's
+        own: the program writes that request document into its own
+        ``tmp`` and is the caller of that invocation.
 
-        Two things about the invocation are fixed and both are here: "the
+        Two things about the invocation are fixed and both are here: the
         entry point reads the build context from ``context`` and writes
-        the per-device Zephyr application tree into ``out``". Where that
-        ``out`` is, is this program's choice as backend — and as backend
-        it owes the child what §4's table promises every invocation: an
-        ``out`` that is **empty**. So the child writes into a fresh
-        per-invocation directory under ``tmp``, and what it produced is
-        then absorbed into the session's ``work/tree`` content-aware —
+        the per-device Zephyr application tree into ``out``. Where that
+        ``out`` is, is this program's choice as the caller — and it owes
+        the child an ``out`` that is **empty**. So the child writes into a
+        fresh per-invocation directory under ``tmp``, and what it produced
+        is then absorbed into the session's ``work/tree`` content-aware —
         a file whose bytes are already there is left alone, mtime and
         all. Handing the child ``work/tree`` directly would be cheaper
         and wrong twice over: a foreign SDK entry point (the whole
         point is that it need not be MCUHome's) may rely on the emptiness
-        the contract states, and one that lists ``out`` before writing
-        would see another invocation's files. The absorb is what keeps
-        §7.2's ``incremental`` meaningful — CMake watches the tree's
-        mtimes, so an unchanged file must stay untouched.
-        "Everything else in the document is between the SDK package and
-        itself"; the rest of §5.2's working-action fields are sent because
-        the entry point speaks this ABI and they are mandatory in it.
+        of ``out``, and one that lists ``out`` before writing would see
+        another invocation's files. The absorb is what keeps a warm
+        ``work/tree`` meaningful — CMake watches the tree's mtimes, so an
+        unchanged file must stay untouched. Everything else in the
+        document is between the SDK package and itself; the rest of the
+        fields are sent because the entry point speaks this ABI and they
+        are mandatory in it.
 
-        "A non-zero exit, a missing result document or a ``status`` other
+        A non-zero exit, a missing result document or a ``status`` other
         than ``success`` fails the invocation with ``reason:
-        "error.build.failed"``."
+        "error.build.failed"``.
         """
         entry, _runtime = self._sdk_metadata(sdk_path)
         tree = self.work_dir / WORK_TREE
@@ -2068,22 +1204,22 @@ class _Build:
 
         Nothing about the command is decided here:
         :func:`~mcuhome.compiler.workspace.west_build_command` already knows the
-        per-image snippet rule, and its ``detached_signing`` path is
-        exactly what §7.2 requires — "It MUST use ``keys/signing.pub``
-        from the context as the bootloader's verification key" and "The
-        program MUST NOT sign images". With that flag the key handed to
-        sysbuild is the public half and the generated tree clears the
-        application's signing step, so no signed file is produced at all.
+        per-image snippet rule, and its ``detached_signing`` path is what
+        this program requires: it uses ``keys/signing.pub`` from the
+        context as the bootloader's verification key and never signs
+        images. With that flag the key handed to sysbuild is the public
+        half and the generated tree clears the application's signing
+        step, so no signed file is produced at all.
 
-        The device model comes out of the context (§3.1 puts it at
+        The device model comes out of the context (at
         ``model/device-model.json``) through
         :func:`~mcuhome.model.modelfile.read_model`, which is documented as
         exactly this receiving end. A board this builder has no update scheme for
-        is ``error.build.failed``: §7.2.1 makes the ``signing`` block
-        mandatory, and there is nothing to put in it.
+        is ``error.build.failed``: a build report has to carry a
+        ``signing`` block, and there is nothing to put in it.
 
         ``clean`` is ``--pristine always`` regardless of what the build
-        directory looks like; ``incremental`` lets
+        directory looks like; any other mode lets
         :func:`~mcuhome.compiler.workspace.pristine_mode` answer, which is the
         function that already knows the one case ``auto`` cannot cover.
         """
@@ -2122,33 +1258,32 @@ class _Build:
             code, log = workspace.run_build(plan)
         except BuildError as failure:
             # The hint carries what the message cannot — for a build that
-            # never started, the exact command line — and §5.4's details
-            # is the field that exists for it. Dropping it once reduced
-            # "could not start the build: No such file or directory" to a
-            # riddle with no file name in it.
+            # never started, the exact command line — and details is the
+            # field that carries it. Dropping it once reduced "could not
+            # start the build: No such file or directory" to a riddle with
+            # no file name in it.
             details = {"hint": failure.hint} if failure.hint else None
             raise self.fail(_REASON_BUILD, failure.message, details) from failure
         if code != 0:
             raise self.fail(_REASON_BUILD, f"west build exited with {code}")
         return scheme, build_dir, log
 
-    # -- 9. what leaves (§7.2, §7.2.1) -------------------------------------
+    # -- 9. what leaves ------------------------------------------------
 
     def _deliver(self, source: Path, name: str, role: str) -> dict[str, Any]:
         """Copy one file into ``out`` and declare it.
 
-        The four mandatory fields of §5.4 and nothing else: ``root`` is
-        ``"out"``, the only legal value in v1; ``path`` is relative to it
-        with segments matching ``[A-Za-z0-9._-]+``; ``role`` identifies it
-        by function; ``hashes`` is keyed by algorithm and read back from
-        disk. No size — "an artifact entry declares no size".
+        Four fields and nothing else: ``root`` is ``"out"``, the only
+        value this program ever uses; ``path`` is relative to it with
+        segments matching ``[A-Za-z0-9._-]+``; ``role`` identifies it by
+        function; ``hashes`` is keyed by algorithm and read back from
+        disk. No size — an artifact entry declares no size.
 
-        Copied rather than declared where the linker left it, because §7.2
-        states what MCUHome's own container writes and because everything
-        in ``out`` is then something this program put there deliberately:
-        sysbuild's combined hex, which on a never-signed build is the
-        *unsigned* application under a flashable-looking name, simply
-        never arrives.
+        Copied rather than declared where the linker left it, because
+        everything in ``out`` is then something this program put there
+        deliberately: sysbuild's combined hex, which on a never-signed
+        build is the *unsigned* application under a flashable-looking
+        name, simply never arrives.
         """
         destination = self.out_dir / name
         _write_file(destination, source.read_bytes())
@@ -2159,17 +1294,16 @@ class _Build:
         return {"root": "out", "path": name, "role": role, "hashes": {"sha256": digest}}
 
     def _collect(self, scheme: Any, build_dir: Path, log: str) -> list[dict[str, Any]]:
-        """The artifacts a successful build declares (§7.2).
+        """The artifacts a successful build declares.
 
-        "A successful device build MUST declare at least two artifacts:
-        the unsigned image with role ``firmware`` … and **exactly one
-        artifact with role ``report``**". Both firmware files carry the
-        ``firmware`` role and the bootloader is declared as well — the
-        module docstring says why for each.
+        A successful device build declares at least two artifacts: the
+        unsigned image with role ``firmware``, and exactly one artifact
+        with role ``report``. Both firmware files carry the ``firmware``
+        role and the bootloader is declared as well — the module
+        docstring says why for each.
 
-        There is no ``ota`` role and no ``.ota`` file: "The OTA wrapper's
-        payload has to be the **signed** binary and the same contract
-        forbids the program to sign, so the requirement cancelled itself."
+        There is no ``ota`` artifact: the OTA wrapper's payload has to be
+        the **signed** binary, and this program never signs.
         """
         images = workspace.build_images(build_dir, app_image=APP_DIR)
         app_output = build_dir / APP_DIR / "zephyr"
@@ -2233,37 +1367,36 @@ class _Build:
     def _report(
         self, scheme: Any, build_dir: Path, regions: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        """The build report of §7.2.1 — one JSON object, for one consumer.
+        """The build report (``docs/spec/build-actions.md`` §2.2) — one
+        JSON object, for one consumer.
 
-        "It exists for one consumer and one purpose: the client that signs
-        detached, which is the only party holding the private key." So it
+        It exists for one consumer and one purpose: the client that signs
+        detached, which is the only party holding the private key. So it
         carries the ``report`` version, the mandatory ``signing`` block and
-        the optional ``memory`` list, and nothing else: the contract
-        strikes ``signed``, ``signed_by_the_build``, ``inputs`` and
-        ``outputs`` by name,
-        because "a build container never signs, the input is the
-        ``firmware`` artifact, and where the signed output goes is the
-        signer's business".
+        the optional ``memory`` list, and nothing else — this program
+        never signs, the input is the ``firmware`` artifact, and where the
+        signed output goes is the signer's business.
 
         The four arguments are :func:`~mcuhome.compiler.report.signing_parameters`
         unchanged — three of them board data the build already had to know
         and the fourth, imgtool's ``--version``, read out of the built
-        application's own ``.config``, which is the behaviour §7.2.1 cites.
-        A build that left no ``.config`` behind has no version to state,
-        and stating Zephyr's ``0.0.0+0`` default for it would produce a
-        signed image MCUboot compares monotonically against the wrong
-        number — so that is ``error.build.failed`` rather than a report.
+        application's own ``.config`` (``docs/spec/build-actions.md``
+        §2.2). A build that left no ``.config`` behind has no version to
+        state, and stating Zephyr's ``0.0.0+0`` default for it would
+        produce a signed image MCUboot compares monotonically against the
+        wrong number — so that is ``error.build.failed`` rather than a
+        report.
 
-        ``memory`` is omitted when the build relinked nothing: "A build
+        ``memory`` is omitted when the build relinked nothing: a build
         that relinked nothing reports none, which is correct rather than
-        incomplete."
+        incomplete.
         """
         kconfig = build_dir / APP_DIR / "zephyr" / ".config"
         if not kconfig.is_file():
             raise self.fail(
                 _REASON_BUILD,
                 f"the build left no {kconfig.name} for the application image, so the "
-                "signing parameters §7.2.1 makes mandatory cannot be stated",
+                "signing parameters a build report has to carry cannot be stated",
             )
         try:
             parameters = report.signing_parameters(scheme, kconfig=report.read_kconfig(kconfig))
@@ -2281,226 +1414,37 @@ class _Build:
         return document
 
 
-def _build(
-    echo: dict[str, Any], document: dict[str, Any], record: Path, env: dict[str, str] | None
-) -> dict[str, Any]:
-    """``build`` (§7.2) as the legacy contract asks for it.
-
-    The shell around :class:`_Build`: it reads the invocation out of the
-    request document, adds the two steps that are the legacy contract's
-    alone — the effective context ID (§3.3) and the ``work`` claim (§6.3)
-    — and renders whatever comes back into a result document of that
-    contract's shape.
-    """
-    events = _Events(document.get("events"))
-    given = document.get("trees")
-    builder = _Build(
-        context_root=Path(document["context"]),
-        out_dir=Path(document["out"]),
-        work_dir=Path(document["work"]),
-        tmp_dir=Path(document["tmp"]),
-        session=document["session"],
-        jobs=int(document["limits"]["jobs"]),
-        record=record,
-        record_document=_record_document(record),
-        given_trees=given if isinstance(given, dict) else {},
-        ccache=document.get("ccache"),
-        events=events,
-        env=env,
-    )
-    events.emit("invocation.started", action="build")
-    try:
-        verification = _open_context(echo, builder.context_root)
-        builder.measured = verification.actual_id
-        events.emit("context.checked", context=builder.measured)
-        builder.require_signing_key()
-        # §7.2: "An `incremental` for which the program finds no prior
-        # state of *this session* in `work` is executed as `clean`." The
-        # marker is the predicate — see the module docstring for why this
-        # program writes one at all.
-        warm = builder.claim_work()
-        mode = _requested_mode(document) if warm else DEFAULT_MODE
-        artifacts, layers = builder.execute(mode)
-        result = _result_document(
-            echo,
-            _STATUS_SUCCESS,
-            context=builder.measured,
-            artifacts=artifacts,
-            layers=layers,
-        )
-    except _Refused as refused:
-        result = refused.document
-    except _BuildFailed as failed:
-        result = _failure(
-            echo,
-            failed.reason,
-            failed.message,
-            details=failed.details,
-            context=builder.measured,
-        )
-    events.emit("invocation.finished", status=result["status"])
-    return result
-
-
 # --------------------------------------------------------------------------
-# The invocation (§5.1)
+# The generator ABI's invocation
 # --------------------------------------------------------------------------
-
-
-def _invoke(
-    action: str, document: dict[str, Any], record: Path, env: dict[str, str] | None
-) -> dict[str, Any]:
-    """One invocation, in the order of §5.1's bootstrap chain.
-
-    §5.4's table makes ``program`` mandatory in a ``describe`` result and
-    qualifies the row with nothing — "Everything not qualified is
-    mandatory unconditionally" — so a ``describe`` that *refuses* carries
-    the block too. Nothing is fabricated by doing so: the block is static
-    self-description, and a refusal is exactly the moment a backend needs
-    it, since ``program.request`` is what tells it which request format
-    version to send instead. In a ``verify`` or ``build`` result the block
-    is a MAY, and this program omits it there.
-    """
-    echo: dict[str, Any] = {"action": action}
-    if "session" in document:
-        # The echo rule (§5.4): whatever the request carried, verbatim.
-        # ``session`` is an opaque token; nothing here composes a path from
-        # it, so its type never has to be believed.
-        echo["session"] = document["session"]
-    block = program(record) if action == "describe" else None
-
-    def refuse(reason: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
-        return _refusal(echo, reason, message, details=details, program=block)
-
-    if not _is_request_version(document.get("request")):
-        return refuse(
-            _REASON_REQUEST,
-            f"request format version {document.get('request')!r} is not implemented; "
-            f"this program parses {list(REQUEST_VERSIONS)}",
-        )
-
-    if action not in IMPLEMENTED_ACTIONS:
-        return refuse(
-            _REASON_ACTION,
-            f"action {action!r} is not implemented; this program implements "
-            f"{list(IMPLEMENTED_ACTIONS)}",
-        )
-
-    offending = _unhonourable(action, document, record)
-    if offending is None:
-        return refuse(_REASON_REQUEST, "'required' is not an array of JSON Pointers")
-    if offending:
-        return refuse(
-            _REASON_REQUIRED,
-            f"this program does not honour {', '.join(offending)} with the value given",
-            details={"required": offending},
-        )
-
-    relative = _relative_paths(document)
-    if relative:
-        return refuse(
-            _REASON_REQUEST,
-            f"every path value is absolute; these are not: {', '.join(relative)}",
-        )
-
-    unfound = _not_found(action, document)
-    if unfound:
-        return refuse(
-            _REASON_REQUEST,
-            f"{action!r} needs {', '.join(unfound)}, and this request document "
-            f"supplies no usable value there",
-        )
-
-    bad_mode = _unsupported_mode(action, document)
-    if bad_mode is not None:
-        return refuse(
-            _REASON_REQUIRED,
-            f"this program implements the build modes {list(MODES)}, not {bad_mode!r}",
-            details={"required": ["/params/mode"]},
-        )
-
-    if action == "verify":
-        return _verify(echo, document)
-    if action == "build":
-        return _build(echo, document, record, env)
-    return _describe(echo, record)
-
-
-def main(
-    argv: list[str],
-    *,
-    record: Path = WORKSPACE_RECORD,
-    env: dict[str, str] | None = None,
-) -> int:
-    """One invocation of the program; the return value is its exit code.
-
-    *argv* is the whole command line, program name included, exactly as a
-    launcher hands ``sys.argv`` over: ``argv[1]`` is the action and
-    ``argv[2]`` the absolute path of the request document. "Exactly two
-    positional operands, both mandatory, **never a flag**. Any other arity
-    is exit 66" (§5.1) — so there is no option parser here and there never
-    will be one, because the argv is frozen and extensibility runs through
-    the request document alone.
-
-    *record* is where the image's workspace record is looked for, and is a
-    parameter only so a test can point it somewhere. Nothing on the
-    command line moves it: it is a property of the image, not of an
-    invocation.
-
-    *env* is the environment a ``build``'s child processes start from, and
-    it is **stated by whoever started this program, never read out of the
-    process**. That distinction is the invariant
-    ``tests/python/test_userpaths.py`` enforces on every module here: one
-    process serves several sessions, and a call-time ``os.environ`` is
-    what makes two of them answer each other's questions. A caller that
-    states nothing gets children that run in exactly what §6.1 makes the
-    program's own responsibility and nothing else — which is correct and
-    thin, and is why ``containers/build-container/run`` will have to hand its
-    image's environment over before the first real compile happens inside
-    the image (the other half of that, ``mcuhome-sdk.json``, is §6.1's and
-    lives in the SDK package).
-
-    **A relative ``argv[2]`` is exit 66**, alongside the wrong arity.
-    §5.1 states the operand as "<absolute path of the request document>"
-    and then forbids the only thing that could make a relative one
-    meaningful: "the working directory is meaningless: a program MUST NOT
-    rely on any ``cwd``". Reading it anyway is the one failure this
-    module could have that nobody would see — the path resolves against
-    whatever directory the backend happened to leave the process in, so
-    it either finds nothing or, worse, finds a *different* request
-    document and answers that one. Refusing costs a conforming backend
-    nothing, because a conforming backend never sends one.
-    """
-    return run_invocation(argv, lambda action, document: _invoke(action, document, record, env))
 
 
 def run_invocation(
     argv: list[str],
     invoke: Callable[[str, dict[str, Any]], dict[str, Any]],
 ) -> int:
-    """§5.1's outer sequence around *invoke*; the return value is the exit code.
+    """The generator ABI's outer sequence around *invoke*; the return value
+    is the exit code.
 
-    Shared between the program itself (:func:`main`) and the SDK
-    package's entry point (:mod:`mcuhome.compiler.sdkentry`), because §6.1 reuses
-    the invocation ABI on purpose: "A second calling convention would be
-    a second frozen thing … this way the entry point is reached with the
-    parser, the two documents and the four exit values every conforming
-    program has anyway." Sharing the sequence is what keeps that a fact
-    of the code rather than a claim about two transcriptions of it.
+    Shared with the SDK package's entry point
+    (:mod:`mcuhome.compiler.sdkentry`), which reuses this ABI on purpose:
+    a second calling convention would be a second frozen thing to design
+    and to implement twice, and reusing this one means the entry point is
+    reached with the parser, the two documents and the four exit values
+    this program has anyway. Sharing the sequence is what keeps that a
+    fact of the code rather than a claim about two transcriptions of it.
 
     **A crash inside *invoke* becomes a result document, not a
-    traceback.** §5.3's exit 1 "promises a result document", and the
-    table leaves every other exit as "the program died. Undefined
-    forever" — so an unexpected exception after the preamble was read is
-    answered on the channel that was already open: ``status:
+    traceback.** Exit 1 promises a result document, and every other exit
+    is undefined — so an unexpected exception after the preamble was
+    read is answered on the channel that was already open: ``status:
     "failure"``, the exception in ``error.message``, exit 1. The
-    ``reason`` is ``error.internal`` — the registry value §5.4.1's
-    erratum added for exactly this ("the program itself failed, in any
-    action"), so a backend is never told a ``describe`` or ``verify``
-    crash was a build-work failure. Only when even that document cannot
-    be written does the invocation end with exit 66 — the same answer
-    the ordinary write path gives, because a result nobody can address
-    is that case whatever was computed.
+    ``reason`` is ``error.internal``, reserved for exactly this — the
+    program itself failed, inside any action — so a caller is never told
+    a crash was a build-work failure. Only when even that document
+    cannot be written does the invocation end with exit 66 — the same
+    answer the ordinary write path gives, because a result nobody can
+    address is that case whatever was computed.
     """
     if len(argv) != 3:
         return EXIT_UNUSABLE
@@ -2519,7 +1463,7 @@ def run_invocation(
         echo["session"] = document["session"]
     try:
         result = invoke(action, document)
-    except Exception as died:  # noqa: BLE001 - the catch-all IS the contract duty
+    except Exception as died:  # noqa: BLE001 - the catch-all turns a crash into a result document
         result = _result_document(
             echo,
             _STATUS_FAILURE,
@@ -2544,9 +1488,8 @@ def run_invocation(
 # ==========================================================================
 #
 # The primary invocation, and self-contained: nothing above this line
-# reaches into it, so it moves out whole the day the legacy half is
-# deleted. What it shares with that half is the builder (:class:`_Build`)
-# and the atomic write, and nothing else.
+# reaches into it. What it shares with the generator ABI above is the
+# builder (:class:`_Build`) and the atomic write, and nothing else.
 
 #: The generation of the build environment specification this program
 #: implements (§12). A request stating another one is answered
@@ -2756,8 +1699,9 @@ def _delivered_sdk(step: _Step, manifest_dir: Path) -> Path:
     """The SDK this step builds against, wherever the profile put it.
 
     §4 delivers it at ``mcuhome/sdk``, which is where this looks first. A
-    profile that mounts it straight into the workspace instead — the baked
-    image does — is the second place, and the only other one there is.
+    profile that mounts it straight into the workspace instead — the
+    container profile does — is the second place, and the only other one
+    there is.
     """
     for candidate in (step.sdk, manifest_dir):
         if (candidate / SDK_METADATA_FILE).is_file():
@@ -3350,12 +2294,14 @@ if __name__ == "__main__":  # pragma: no cover - the launcher's entry point
     # ``tests/python/test_userpaths.py`` exempts this guard by shape and
     # pins both handovers; library imports never execute it.
     #
-    # **The argv is the discriminator, and it can only be read here.** The
-    # v3 invocation passes no arguments at all
-    # (packaging/build-environment/build-environment-entry runs this
-    # module that way); the legacy one passes exactly two operands
-    # (containers/build-container/run). Nothing else is either, and a
-    # legacy launcher's wrong arity keeps the answer it always had.
-    if len(sys.argv) == 1:
-        raise SystemExit(step(dict(os.environ)))
-    raise SystemExit(main(sys.argv, env=dict(os.environ)))
+    # The invocation takes no arguments (specification §6), which is how
+    # packaging/build-environment/build-environment-entry runs this
+    # module. Arguments are not a second calling convention to dispatch
+    # on — there is only one — so they are refused rather than
+    # interpreted: a caller that passes any is not driving this program.
+    if len(sys.argv) != 1:
+        raise SystemExit(
+            f"{sys.argv[0]}: a build step takes no arguments; "
+            f"everything it is about is in the request document"
+        )
+    raise SystemExit(step(dict(os.environ)))
