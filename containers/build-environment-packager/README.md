@@ -16,10 +16,15 @@ host. This image is exactly what those three need and nothing else:
 | building the wheel set | the interpreter the environment runs on, because the interpreter that builds a wheel decides which interpreter can install it |
 
 So: `debian:trixie-slim` at a pinned digest, plus `python3`,
-`python3-venv`, `git`, `ca-certificates`, `west`, the four Python packages
-CHIP's generators import, and `zap` with its Electron libraries. No Zephyr
-SDK, no CMake, no Ninja, no gn, no ccache, no baked workspace, no entry
-point.
+`python3-venv`, `git`, `ca-certificates`, `west`, and `zap` with its
+Electron libraries. Three Python sets come with west: the four packages
+CHIP's generators import (`click`, `coloredlogs`, `Jinja2`, `lark`), and
+`requests` and `jsonschema`, which Zephyr's `west blobs fetch` needs —
+its http fetcher imports the first and `zephyr_module.py` validates the
+blob metadata with the second, and without them west reports that the
+fetchers "could not be imported" and fetches nothing (measured: the
+first package build stopped there). No Zephyr SDK, no CMake, no Ninja,
+no gn, no ccache, no baked workspace, no entry point.
 
 The image a device is built in is
 [`containers/build-environment/`](../build-environment/README.md), which is
@@ -51,9 +56,13 @@ publishes it, `release.yml` pulls it. Nothing restates the reference.
 
 ## What it declares about itself
 
-Four labels, each a pin somebody downstream may need to compare, and each
-verified against the built image by the last step of the `Dockerfile` — a
-label that could drift from the bytes would be worse than no label:
+Four labels, each a pin somebody downstream may need to compare. Each is
+the `ARG` that decided the image, and the last step of the `Dockerfile`
+asks the image whether that `ARG` is what it actually carries — so a
+label can only be wrong if the image is wrong with it. The one exception
+is `base`: a container cannot see the digest it was built from, so that
+label states the base this build was given, which is the most a build can
+honestly say about it.
 
 | Label | Value |
 |---|---|
@@ -87,7 +96,7 @@ To try a change before it is published, build it locally and point one
 package build at it:
 
 ```sh
-scripts/build_env_package.py workspace --output-dir dist \
+python3 scripts/build_env_package.py workspace --output-dir dist \
     --packager-image <the local image>
 ```
 

@@ -354,6 +354,41 @@ def test_the_packager_label_states_the_west_it_installed():
     assert _packager_arg("WEST_VERSION") == _pins(PACKAGER_REQUIREMENTS)["west"]
 
 
+@pytest.mark.parametrize(
+    ("label", "argument"),
+    [
+        ("base", "DEBIAN_IMAGE"),
+        ("python", "PYTHON_VERSION"),
+        ("west", "WEST_VERSION"),
+        ("zap", "ZAP_VERSION"),
+    ],
+)
+def test_every_packager_label_is_the_pin_that_decided_the_image(label, argument):
+    """A label that repeats a value instead of naming it can drift from it.
+
+    Each of the four is written as the ``ARG`` expansion, which is what
+    ties it to the pin at the top of the file — and, for three of them,
+    to the check at the bottom that holds that pin against the image.
+    A literal here would pass every check and still be able to lie.
+    """
+    text = PACKAGER_DOCKERFILE.read_text(encoding="utf-8")
+    stated = f'org.mcuhome.build-environment-packager.{label}="${{{argument}}}"'
+    assert stated in text, f"the {label} label is not the {argument} pin"
+
+
+def test_the_packager_checks_what_it_installed_for_every_generator():
+    """The import check is the cheapest guard against a forgotten pin.
+
+    It runs inside the image build, so a requirement that is named in
+    ``requirements.txt`` and not really installable fails there rather
+    than in a package build twenty minutes later.
+    """
+    text = PACKAGER_DOCKERFILE.read_text(encoding="utf-8")
+    checked = next(line for line in text.splitlines() if "-c 'import west" in line)
+    for module in ("west", "click", "jinja2", "lark", "coloredlogs", "requests", "jsonschema"):
+        assert module in checked, f"the image build never imports {module}"
+
+
 def test_the_packager_is_named_by_its_digest_and_not_by_its_tag(packager_pin):
     """A tag is a location: an image that moved under it would change a package."""
     assert packager_pin.publish_reference() == f"{packager_pin.REPOSITORY}:{packager_pin.TAG}"

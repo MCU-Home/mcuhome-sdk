@@ -146,6 +146,7 @@ RUN arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
 # --------------------------------------------------------------------------
 FROM ${DEBIAN_IMAGE}
 
+ARG DEBIAN_IMAGE
 ARG PYTHON_VERSION
 ARG WEST_VERSION
 ARG ZAP_VERSION
@@ -217,16 +218,20 @@ LABEL org.opencontainers.image.title="MCUHome build-environment packager" \
       org.opencontainers.image.source="https://github.com/mcu-home/mcuhome-sdk" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-LABEL org.mcuhome.build-environment-packager.base="debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258" \
-      org.mcuhome.build-environment-packager.python="3.13.5" \
-      org.mcuhome.build-environment-packager.west="1.5.0" \
-      org.mcuhome.build-environment-packager.zap="v2025.10.23-nightly"
+LABEL org.mcuhome.build-environment-packager.base="${DEBIAN_IMAGE}" \
+      org.mcuhome.build-environment-packager.python="${PYTHON_VERSION}" \
+      org.mcuhome.build-environment-packager.west="${WEST_VERSION}" \
+      org.mcuhome.build-environment-packager.zap="${ZAP_VERSION}"
 
-# The labels above are values and not ARG expansions on purpose — a label
-# a `--build-arg` could move would be a claim about bytes that the bytes
-# never saw. This step is the other half of that: it asks the image what
-# it actually carries and fails the build on any disagreement, so the two
-# can only be wrong together, in one commit, and never silently.
+# Every label above is the ARG that decided the image, and this step is
+# what makes that a fact rather than a claim: it asks the image what it
+# actually carries and fails the build on any disagreement. So a label
+# can only be wrong if the image is wrong with it — including one moved
+# by a `--build-arg`, which fails here rather than shipping a value the
+# bytes never saw. `base` is the exception and cannot be checked from
+# inside: a container cannot see the digest it was built from, so that
+# label states the base this build was given, which is the most a build
+# can honestly say about it.
 #
 # `zap-cli --version` prints the date-shaped version CHIP's generator
 # compares against, without the leading `v` and without the channel
@@ -246,7 +251,7 @@ RUN set -euo pipefail; \
     if ! printf '%s' "${zap}" | grep -q "^Version: ${expected}$"; then \
         echo "the installed zap is not ${ZAP_VERSION}:" >&2; echo "${zap}" >&2; exit 1; \
     fi; \
-    python3 -c 'import west, click, jinja2, lark, coloredlogs'; \
+    python3 -c 'import west, click, jinja2, lark, coloredlogs, requests, jsonschema'; \
     git --version
 
 # No ENTRYPOINT: `scripts/build_env_package.py` runs this image with a
