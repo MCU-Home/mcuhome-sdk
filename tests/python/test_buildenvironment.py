@@ -1,15 +1,16 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The build environment's self-description and an SDK's environment lock.
+"""The build environment's self-description and a package's own meta file.
 
 ``mcuhome.model.buildenvironment`` parses two documents that share one
 vocabulary: ``build-environment.json`` (an environment's own §5
-declaration, read straight or through an image's labels) and
-``build-environment.lock.json`` (an SDK release's abstract package set,
-§5.1). Both are read before a build starts and both decide whether it
-starts at all, so every refusal is checked for the thing a builder or an
-operator actually needs from it: which member is missing, which package
-name is not a package name, which hash is not a hash.
+declaration, read straight or through an image's labels) and ``meta.json``
+(what a package says about itself — what it is, what it requires of the
+stage below it, and what went into it). Both are read before a build
+starts and both decide whether it starts at all, so every refusal is
+checked for the thing a builder or an operator actually needs from it:
+which member is missing, which package name is not a package name, which
+hash is not a hash.
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ from mcuhome.model.buildenvironment import (
     family_of,
     member_name,
     parse_declaration,
-    parse_lock,
     parse_member,
+    parse_meta,
 )
 from mcuhome.model.errors import BuildError
 
@@ -225,39 +226,108 @@ def test_declaration_from_labels_ignores_labels_outside_the_prefix() -> None:
 
 
 # --------------------------------------------------------------------------
-# parse_lock / EnvironmentLock.version_of
+# parse_meta / PackageMeta
 # --------------------------------------------------------------------------
 
 
-def test_parse_lock_reads_the_two_member_abstract_set() -> None:
-    lock = parse_lock(
-        {
-            "packages.mcuhome-build-workspace": "0.1.10",
-            "packages.mcuhome-build-tools": "0.1.10.dev1",
-        }
+def _meta(**changed: object) -> dict:
+    """A valid meta file, with anything the caller wants broken."""
+    document = {
+        "schema": 1,
+        "package": {
+            "name": "mcuhome-build-workspace",
+            "version": "0.1.0",
+            "architecture": None,
+        },
+        "requires": {"mcuhome-build-tools": "~=0.1.0"},
+        "inputs_sha256": HASH_A,
+        "contents": {"patches": []},
+    }
+    document.update(changed)
+    return document
+
+
+def test_parse_meta_reads_what_a_package_is_and_what_it_requires() -> None:
+    meta = parse_meta(_meta())
+    assert meta.name == "mcuhome-build-workspace"
+    assert meta.version == "0.1.0"
+    assert meta.architecture is None
+    assert meta.package == "mcuhome-build-workspace"
+    assert meta.constraint_on("mcuhome-build-tools") == "~=0.1.0"
+    assert meta.inputs_sha256 == HASH_A
+    assert meta.contents == {"patches": []}
+
+
+def test_a_per_platform_package_names_its_family_and_its_platform_apart() -> None:
+    """The concrete name is the two of them joined, so it is derived, not stated."""
+    meta = parse_meta(
+        _meta(
+            package={
+                "name": "mcuhome-build-tools",
+                "version": "0.1.0",
+                "architecture": "linux-amd64",
+            }
+        )
     )
-    assert lock.version_of("mcuhome-build-workspace") == "0.1.10"
-    assert lock.version_of("mcuhome-build-tools") == "0.1.10.dev1"
+    assert meta.package == "mcuhome-build-tools_linux-amd64"
+    assert family_of(meta.package) == meta.name
 
 
-def test_version_of_an_unnamed_package_is_a_typed_refusal_naming_it() -> None:
-    lock = parse_lock({"packages.mcuhome-build-workspace": "0.1.10"})
+def test_a_package_at_the_end_of_the_chain_requires_nothing() -> None:
+    """Absent, not empty — and asking it for a constraint is a typed refusal."""
+    document = _meta()
+    del document["requires"]
+    meta = parse_meta(document)
+    assert meta.requires == {}
     with pytest.raises(BuildError) as caught:
-        lock.version_of("mcuhome-build-tools")
+        meta.constraint_on("mcuhome-build-tools")
     assert "mcuhome-build-tools" in caught.value.message
+    assert "none" in caught.value.hint
 
 
-def test_version_of_an_unnamed_package_hints_what_the_lock_does_state() -> None:
-    lock = parse_lock(
-        {
-            "packages.mcuhome-build-workspace": "0.1.10",
-            "packages.mcuhome-build-tools": "0.1.10.dev1",
-        }
-    )
+def test_a_constraint_the_package_does_not_state_hints_what_it_does() -> None:
+    meta = parse_meta(_meta())
     with pytest.raises(BuildError) as caught:
-        lock.version_of("mcuhome-build-tools_linux-amd64")
-    assert "mcuhome-build-workspace" in caught.value.hint
+        meta.constraint_on("mcuhome-build-tools_linux-amd64")
     assert "mcuhome-build-tools" in caught.value.hint
+
+
+def test_a_schema_this_version_does_not_read_is_refused_rather_than_guessed() -> None:
+    """A reader that guessed at an unknown shape would resolve a chain wrongly."""
+    with pytest.raises(BuildError) as caught:
+        parse_meta(_meta(schema=2))
+    assert "2" in caught.value.message
+
+
+@pytest.mark.parametrize(
+    ("broken", "expected"),
+    [
+        ({"package": "mcuhome-build-workspace"}, "which package"),
+        (
+            {"package": {"name": "Not A Name", "version": "0.1.0", "architecture": None}},
+            "Not A Name",
+        ),
+        ({"package": {"name": "mcuhome-sdk", "version": "", "architecture": None}}, "version"),
+        (
+            {"package": {"name": "mcuhome-sdk", "version": "0.1.0", "architecture": "Linux AMD64"}},
+            "architecture",
+        ),
+        ({"requires": {"mcuhome-build-tools": 1}}, "requires"),
+        ({"requires": {"mcuhome-build-tools": ""}}, "requires"),
+        ({"inputs_sha256": "not-a-hash"}, "input hash"),
+        ({"inputs_sha256": HASH_A.upper()}, "input hash"),
+        ({"contents": []}, "contents"),
+    ],
+)
+def test_a_meta_file_that_cannot_be_read_says_which_part(broken, expected) -> None:
+    with pytest.raises(BuildError) as caught:
+        parse_meta(_meta(**broken))
+    assert expected in caught.value.message
+
+
+def test_a_meta_file_that_is_not_an_object_is_refused() -> None:
+    with pytest.raises(BuildError):
+        parse_meta(["mcuhome-sdk"])
 
 
 # --------------------------------------------------------------------------

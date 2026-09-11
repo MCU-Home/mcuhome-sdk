@@ -13,29 +13,35 @@ accepts, and one member per package of its set. A container image repeats
 every member as an OCI label under ``org.mcuhome.build-environment.``
 (§5.2), so the same parse serves an unpacked store entry and an image.
 
-``build-environment.lock.json`` is what an **SDK release** states about
-the environment it was built and tested with. It is the same document
-minus everything an SDK cannot know: an SDK is not an environment, so it
-declares no generation, no Zephyr version and no context constraint — it
-names packages and their versions, and nothing else. That is exactly
-§5.1's *abstract* package set, the form a package's own metadata uses
-when hashes are not knowable yet, and the reason it fits here without a
-single field name of its own:
+``meta.json`` is what a **package** says about itself — at the top of the
+archive and, byte for byte the same document, beside it as
+``<archive>.meta.json``. Every MCUHome package carries one: the SDK, the
+build workspace, the build tools. It answers three questions the
+declaration deliberately does not:
 
-* the architecture-neutral workspace package is stated at the SDK's own
-  version, because it is built from the SDK's tag;
-* the per-platform tools package is named by its **family**, at version
-  level only, because its bytes differ per platform on purpose;
-* neither carries a hash, because at SDK-archive time nobody has built
-  those archives yet. The hashes come from the package host's signed
-  index, where a version resolves to bytes.
+* **What is this?** ``package``: the name it is published under, its
+  version, and the platform its bytes are for (``null`` where they are
+  for all of them).
+* **What does it need below it?** ``requires``: a map from package name
+  to a PEP 440 specifier. The SDK requires a range of build workspaces,
+  a build workspace requires a range of build tools, and the tools
+  require nothing — a chain, one link per stage, and the member is
+  **absent** where a package ends the chain.
+* **What went into it, and what came out?** ``inputs_sha256`` identifies
+  the repository inputs it was built from; ``contents`` states what those
+  resolved to — the workspace's project revisions and patches, the
+  tools' tool versions.
 
-Whoever reads the lock therefore learns *which versions*, and resolves
-the rest the way every other pin is resolved.
+A constraint and not a version, because the three are released on lines of
+their own: whoever resolves a chain takes the newest published version
+satisfying each constraint and pins that one exactly, by name, version and
+hash. The hashes are never here — a package cannot state its own, and the
+one below it may not be built yet — they come from the package host's
+signed index, where a version resolves to bytes.
 
 **No PEP 440 here.** This package has no dependencies by construction, so
-a version is checked as a spelling and never parsed; comparing one
-against a constraint is the job of whoever holds ``packaging``.
+a version and a specifier are checked as spellings and never parsed;
+comparing one against the other is the job of whoever holds ``packaging``.
 """
 
 from __future__ import annotations
@@ -57,7 +63,9 @@ __all__ = [
     "GENERATOR_CONSTRAINT_MODE_MEMBER",
     "LABEL_NAMESPACE",
     "LABEL_PREFIX",
-    "LOCK_FILE",
+    "META_FILE",
+    "META_SCHEMA",
+    "META_SUFFIX",
     "MODE_CHAIN",
     "MODE_STRICT",
     "PACKAGE_MEMBER_PREFIX",
@@ -69,24 +77,31 @@ __all__ = [
     "WORKSPACE_SOURCE",
     "ZEPHYR_VERSION_MEMBER",
     "Declaration",
-    "EnvironmentLock",
     "PackageMember",
+    "PackageMeta",
     "declaration_from_labels",
     "family_of",
     "member_name",
     "parse_declaration",
-    "parse_lock",
     "parse_member",
+    "parse_meta",
 ]
 
 #: The environment's self-description, at the top of the package that
 #: carries it and, byte for byte the same document, beside the archive.
 DECLARATION_FILE = "build-environment.json"
 
-#: What an SDK release states about the build environment it was built
-#: and tested with. One file per release, next to the SDK package and
-#: inside it.
-LOCK_FILE = "build-environment.lock.json"
+#: What a package says about itself: at the top of the archive, and the
+#: same bytes beside it as ``<archive file name>.meta.json``. Named for
+#: the file rather than for the package, like the ``.sha256`` sidecar, so
+#: a directory holding two versions keeps two of them.
+META_FILE = "meta.json"
+META_SUFFIX = f".{META_FILE}"
+
+#: The schema this module implements. A meta file that states another
+#: number is refused rather than read: a reader that guessed at a shape it
+#: does not know would resolve a chain from a document it misunderstood.
+META_SCHEMA = 1
 
 #: Specification §5's members. Written out rather than derived, because a
 #: reader in another language reads these strings and not this module.
@@ -339,31 +354,117 @@ def declaration_from_labels(
 
 
 @dataclass(frozen=True)
-class EnvironmentLock:
-    """An SDK release's ``build-environment.lock.json``, as data.
+class PackageMeta:
+    """One package's ``meta.json``, as data.
 
-    Package members and nothing else — see the module docstring for why
-    an SDK declares no generation, no Zephyr version and no hashes.
+    *architecture* is ``None`` where the package is architecture-neutral,
+    and *requires* is empty where the package ends the chain — the tools
+    require nothing below them, and their meta file states no ``requires``
+    member at all.
     """
 
-    packages: Mapping[str, PackageMember]
+    name: str
+    version: str
+    architecture: str | None
+    requires: Mapping[str, str]
+    inputs_sha256: str
+    contents: Mapping[str, Any]
+    schema: int = META_SCHEMA
 
-    def version_of(self, package: str) -> str:
-        """The version this release names for *package*, or a refusal."""
-        member = self.packages.get(package)
-        if member is None:
-            named = ", ".join(sorted(self.packages)) or "none"
+    @property
+    def package(self) -> str:
+        """The concrete package name: the family plus its platform, if any."""
+        if self.architecture is None:
+            return self.name
+        return f"{self.name}{ARCH_SEPARATOR}{self.architecture}"
+
+    def constraint_on(self, package: str) -> str:
+        """What this package requires of *package*, or a refusal.
+
+        The refusal is the interesting half: a package that names no
+        constraint on the stage below it cannot have one guessed for it —
+        "any version" and "this one forgot to say" look identical from
+        here and mean entirely different things.
+        """
+        constraint = self.requires.get(package)
+        if constraint is None:
+            named = ", ".join(sorted(self.requires)) or "none"
             raise BuildError(
-                f'This SDK release names no version of "{package}".',
+                f'{self.package} {self.version} states no requirement on "{package}".',
                 hint=(
-                    f"its {LOCK_FILE} states: {named}. The SDK and its build "
-                    "environment are released together — a release that does not "
-                    "name the package cannot be built with it."
+                    f"its {META_FILE} requires: {named}. Name the package in the "
+                    "device's sources, or use a release that states which versions "
+                    "it was built and tested with."
                 ),
             )
-        return member.version
+        return constraint
 
 
-def parse_lock(document: Any, *, what: str = f"The SDK's {LOCK_FILE}") -> EnvironmentLock:
-    """A ``build-environment.lock.json``, checked and typed."""
-    return EnvironmentLock(packages=_members(document, what=what))
+def parse_meta(document: Any, *, what: str = f"A package's {META_FILE}") -> PackageMeta:
+    """A ``meta.json``, checked and typed, or a refusal in plain language."""
+    if not isinstance(document, dict):
+        raise BuildError(
+            f"{what} is not a JSON object.",
+            hint="a package's meta file is one object describing that package",
+        )
+    schema = document.get("schema")
+    if schema != META_SCHEMA:
+        raise BuildError(
+            f"{what} states schema {schema!r}, and this MCUHome reads {META_SCHEMA}.",
+            hint="update MCUHome, or use a package this version can read",
+        )
+    package = document.get("package")
+    if not isinstance(package, dict):
+        raise BuildError(
+            f"{what} does not say which package it describes.",
+            hint="the package member states the name, the version and the architecture",
+        )
+    name = package.get("name")
+    version = package.get("version")
+    architecture = package.get("architecture")
+    if _PACKAGE_NAME.fullmatch(name or "") is None:
+        raise BuildError(
+            f'{what} names the package "{name}", which is not a package name.',
+            hint="lowercase letters, digits and -, with the platform stated separately",
+        )
+    if not isinstance(version, str) or _VERSION.fullmatch(version) is None:
+        raise BuildError(
+            f'{what} states the version "{version}", which is not a version.',
+            hint="a version is PEP 440, as in 0.1.0 or 0.1.10.dev3",
+        )
+    if architecture is not None and (
+        not isinstance(architecture, str) or _PACKAGE_NAME.fullmatch(architecture) is None
+    ):
+        raise BuildError(
+            f'{what} states the architecture "{architecture}".',
+            hint="an architecture is <os>-<arch>, as in linux-amd64, or null for none",
+        )
+    requires = document.get("requires", {})
+    if not isinstance(requires, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) and value for key, value in requires.items()
+    ):
+        raise BuildError(
+            f"{what} states requires as something other than constraints.",
+            hint="requires maps a package name to a PEP 440 specifier, as in ~=0.1.0",
+        )
+    inputs = document.get("inputs_sha256")
+    if not isinstance(inputs, str) or _SHA256_HEX.fullmatch(inputs) is None:
+        raise BuildError(
+            f'{what} states the input hash "{inputs}".',
+            hint="the input hash is 64 lowercase hex digits",
+        )
+    contents = document.get("contents", {})
+    if not isinstance(contents, dict):
+        raise BuildError(
+            f"{what} states contents as something other than an object.",
+            hint="contents says what the package resolved to, as an object",
+        )
+    return PackageMeta(
+        name=name,
+        version=version,
+        architecture=architecture,
+        requires=dict(requires),
+        inputs_sha256=inputs,
+        contents=contents,
+        schema=META_SCHEMA,
+    )
