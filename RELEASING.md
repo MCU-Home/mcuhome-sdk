@@ -114,13 +114,22 @@ What the catalogue demands, per line:
   workspace its `requires` admits (each with the newest published tools
   that workspace accepts). That range is what an SDK release *promises*, so
   both ends of it are tried. Nothing published satisfies it → the release
-  is **blocked**: `no published mcuhome-build-workspace satisfies '~=0.1.0'`.
+  is **blocked**, before anything is built:
+
+  > mcuhome-sdk 0.1.10.dev3 requires mcuhome-build-workspace '~=0.1.0', and
+  > nothing published satisfies it.
+  > mcuhome-sdk 0.1.10.dev3 cannot be released: a package no chain can be
+  > resolved through is a dead end.
+  > Release the mcuhome-build-workspace line first — tag
+  > workspace-v&lt;version&gt; with a version that constraint admits — and cut
+  > this one afterwards.
 - **workspace tag** — the firmware with the oldest and the newest published
   SDK whose `requires` already accepts this version (a patch of the line),
   or — where none does, which is what a line start looks like — with the
   SDK of this commit, and the verdict says that no released SDK uses it
-  yet. The build tools it requires have to be published: an image and a
-  build both resolve through them.
+  yet. The build tools it requires have to be published — an image and a
+  build both resolve through them — and the same refusal fires one stage
+  down when they are not.
 - **tools tag** — the same one stage down, against published build
   workspaces.
 

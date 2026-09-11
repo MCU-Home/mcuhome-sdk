@@ -25,10 +25,10 @@
 # THE JOBS, in the order a tag walks them:
 #
 #   gate-release       which line, which version, and what has to pass:
-#                      the tag against environment.json, then the D10.9
-#                      catalogue against PUBLISHED versions only. A line
-#                      whose own requirement nothing published satisfies is
-#                      blocked here, before anything is built.
+#                      the tag against environment.json, then the per-stage
+#                      test catalogue against PUBLISHED versions only. A
+#                      line whose own requirement nothing published
+#                      satisfies is blocked here, before anything is built.
 #   build-packages     the tagged line's package(s) at the real version,
 #                      built in the pinned packager from the tagged commit —
 #                      plus, under a local `+gate.<sha>` version, a stand-in
@@ -244,14 +244,12 @@ jobs:
               print(f"{key}<<PLAN_EOF")
               print(json.dumps(value))
               print("PLAN_EOF")
-          # Every combination of one gate resolves the same tools package;
-          # it is what an image of this release would deliver.
-          tools = {
-              one["tools"].get("tag")
-              for one in plan.get("combinations", [])
-              if one["tools"]["source"] == "published"
-          }
-          print(f"tools_tag={tools.pop() if len(tools) == 1 else ''}")
+          # What an image of this release delivers. Out of the gate's own
+          # `below`, never out of the combinations: an SDK release tries
+          # the two ends of a published range and those may accept two
+          # different tools packages, so reading it off the set of
+          # combinations would be empty exactly when it matters.
+          print(f"tools_tag={(plan.get('below', {}).get('tools') or {}).get('tag', '')}")
           print(f"verify_mode={verify.get('mode', 'skip')}")
           print(f"verify_reason={verify.get('reason', '')}")
           print(f"verify_workspace_version={verify.get('workspace_version', '')}")
@@ -317,8 +315,10 @@ jobs:
             echo "verify_reason=no published mcuhome-sdk accepts build workspace ${WORKSPACE_VERSION}, so there is no SDK package to build the reference device from" >> "$GITHUB_OUTPUT"
           fi
 
+      # Always, blocked or not: the document is what says why, and a run
+      # that refused a release is exactly the one somebody comes back to.
       - name: Keep the gate
-        if: steps.mode.outputs.mode != 'image'
+        if: always() && steps.mode.outputs.mode != 'image' && hashFiles('gate.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-gate

@@ -608,7 +608,8 @@ class Row:
 class Plan:
     """Everything the three assessment jobs need, decided once.
 
-    ``catalogue`` holds both directions D10.9 asks for, per stage:
+    ``catalogue`` holds both directions the per-stage test catalogue
+    asks for:
     ``down`` is the line against the versions of the stage it requires,
     ``up`` against the versions of the stage that requires it. The SDK has
     no stage above it and the tools none below, so each of them has one
@@ -1163,7 +1164,11 @@ def build_gate(
 
     if not wanted:
         combination, row = _chain(
-            stage=stage, declared=declared, below=below, candidates=candidates
+            stage=stage,
+            declared=declared,
+            below=below,
+            environment=environment,
+            candidates=candidates,
         )
         wanted.append(combination)
         # Into the upward half, which is the one a line start is about: the
@@ -1182,8 +1187,47 @@ def build_gate(
         "catalogue": catalogue,
         "verdicts": plan.verdicts.get(stage, {}),
         "combinations": wanted,
+        # What an image of this release delivers, resolved once and here.
+        # Never derived from the combinations: an SDK release tries the two
+        # ends of a published range and those may accept two different
+        # tools packages, so "the tools of this run" would be a question
+        # with two answers. `_below` asked the one that matters — the
+        # newest satisfying, which is what a user resolves to.
+        "below": below,
         "verify": _verify(stage=stage, catalogue=catalogue, combinations=wanted),
     }
+
+
+def _holds_together(
+    stages: dict[str, dict], *, environment: dict, candidates: dict[str, list[Published]]
+) -> tuple[bool, str]:
+    """Does this triple hold together — every constraint admitting the one below?
+
+    The same question the planner asks of every combination it builds, asked
+    here because this one is assembled outside it. A triple that does not
+    hold is still built — what a broken chain does is worth seeing — but it
+    is never *required*, because nothing claims it works.
+    """
+    published = {
+        one: {entry.version: entry for entry in entries} for one, entries in candidates.items()
+    }
+    faults = []
+    for upper, lower in NEXT_STAGE.items():
+        above = stages[upper]
+        if above["source"] == "published":
+            entry = published[upper].get(above["version"])
+            requires = entry.requires() if entry is not None else {}
+        else:
+            requires = release_lines.requires_of(environment, upper)
+        constraint = constraint_on(requires, FAMILY[lower])
+        if not accepts(constraint, stages[lower]["version"]):
+            faults.append(
+                f"{FAMILY[upper]} {above['version']} requires {constraint!r} of "
+                f"{FAMILY[lower]} and this combination holds {stages[lower]['version']}"
+            )
+    if faults:
+        return False, "; ".join(faults) + " — built to see what happens, not required to work"
+    return True, ""
 
 
 def _chain(
@@ -1191,13 +1235,15 @@ def _chain(
     stage: str,
     declared: dict[str, str],
     below: dict[str, dict],
+    environment: dict,
     candidates: dict[str, list[Published]],
 ) -> tuple[dict, dict]:
     """The one combination a release is tried in when nothing published can.
 
     Built here rather than by the planner because the planner's tag-time
     rule is exactly that this triple does not count — and for the line being
-    released it is the only thing that can say anything at all.
+    released it is the only thing that can say anything at all. It is held
+    to the same consistency rule as every combination the planner builds.
     """
     above, notes = _above(stage=stage, declared=declared, candidates=candidates)
     stages = {
@@ -1206,15 +1252,16 @@ def _chain(
         **above,
         stage: {"source": "release", "version": declared[stage]},
     }
+    consistent, reason = _holds_together(stages, environment=environment, candidates=candidates)
+    told = {"published": "", "release": " (this release)", "checkout": " (this commit)"}
     combination = {
         "id": "line-start",
         "label": " + ".join(
-            f"{FAMILY[one]} {stages[one]['version']}"
-            + ("" if stages[one]["source"] == "published" else " (this commit)")
+            f"{FAMILY[one]} {stages[one]['version']}{told[stages[one]['source']]}"
             for one in release_lines.STAGES
         ),
-        "required": True,
-        "reason": "",
+        "required": consistent,
+        "reason": reason,
         **stages,
     }
     upper = STAGE_ABOVE.get(stage)
@@ -1224,8 +1271,8 @@ def _chain(
             f"{FAMILY[upper]} {declared[upper]} (this commit)" if upper else combination["label"]
         ),
         "combination": "line-start",
-        "required": True,
-        "note": "; ".join(notes),
+        "required": consistent,
+        "note": "; ".join([part for part in (*notes, reason) if part]),
     }
     return combination, row
 
@@ -1302,7 +1349,7 @@ DIRECTION_HEADING = {
 def summarize(*, stage: str, plan: dict, results: Path | None, out=None, errors=None) -> int:
     """One stage's release-readiness table, and whether it is a failure.
 
-    Both directions D10.9 asks for, each with its own verdict: what this
+    Both directions of the catalogue, each with its own verdict: what this
     line requires (its own constraint against the published versions of the
     stage below) and what requires it (the published versions above whose
     constraint already takes this one). The SDK has only the first and the

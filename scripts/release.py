@@ -70,6 +70,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -529,7 +530,18 @@ def _gate(arguments) -> int:
     print(json.dumps(document, indent=2, sort_keys=True))
     blocked = document.get("blocked")
     if blocked:
+        # A blocked release is the one answer somebody has to read, so it
+        # goes where a reader looks rather than only into the raw log: an
+        # annotation at the top of the run, and the step summary. The
+        # workflow keeps the gate document either way.
         print(f"\n{blocked}", file=sys.stderr)
+        print(f"::error::{blocked.splitlines()[0]}", file=sys.stderr)
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as out:
+                heading = f"## {arguments.tag} cannot be released"
+                body = "\n".join(f"> {line}" for line in blocked.splitlines())
+                print(f"{heading}\n\n{body}\n", file=out)
         return 1
     return 0
 
