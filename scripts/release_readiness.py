@@ -1166,8 +1166,12 @@ def build_gate(
             stage=stage, declared=declared, below=below, candidates=candidates
         )
         wanted.append(combination)
-        for direction in catalogue or {"up": []}:
-            catalogue.setdefault(direction, []).append(row)
+        # Into the upward half, which is the one a line start is about: the
+        # downward half already said which published version this release
+        # resolves to, and repeating the row there would list a statement
+        # about the stage above under the heading of the stage below.
+        direction = "up" if "up" in catalogue else next(iter(catalogue), "up")
+        catalogue.setdefault(direction, []).append(row)
 
     for combination in wanted:
         if combination[stage]["source"] == "checkout":

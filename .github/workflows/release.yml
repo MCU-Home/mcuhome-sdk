@@ -271,15 +271,22 @@ jobs:
           released = plan["release"]
           labels = {one["id"]: one["label"] for one in plan["combinations"]}
           rehearsal = os.environ["MODE"] == "rehearse"
+          headings = {
+              "down": "What this release promises: the versions it requires",
+              "up": "What already requires this line",
+          }
           print(f"## {'Rehearsing' if rehearsal else 'Releasing'} {released['tag']}")
-          print()
-          print(plan["verdicts"][released["stage"]])
-          print()
-          print("| tried against | combination | note |")
-          print("|---|---|---|")
-          for row in plan["catalogue"][released["stage"]]:
-              combination = labels.get(row["combination"], row["combination"])
-              print(f"| {row['subject']} | {combination} | {row['note'] or ''} |")
+          for direction, rows in plan["catalogue"].items():
+              print()
+              print(f"### {headings.get(direction, direction)}")
+              print()
+              print(plan["verdicts"].get(direction, ""))
+              print()
+              print("| tried against | combination | note |")
+              print("|---|---|---|")
+              for row in rows:
+                  combination = labels.get(row["combination"], row["combination"] or "—")
+                  print(f"| {row['subject']} | {combination} | {row['note'] or ''} |")
           print()
           if rehearsal:
               print("Nothing is published by a rehearsal.")
@@ -1257,7 +1264,7 @@ jobs:
       && (needs.publish-release.result == 'success'
           || needs.gate-release.outputs.mode == 'image')
       && (needs.publish-environment-image-index.result == 'success'
-          || needs.gate-release.outputs.verify_mode == 'published-image')
+          || needs.gate-release.outputs.verify_mode != 'pushed-image')
     runs-on: ${{ matrix.target.runner }}
     strategy:
       fail-fast: false
@@ -1282,6 +1289,7 @@ jobs:
           path: mcuhome-sdk
 
       - name: Log in to ghcr.io
+        if: needs.gate-release.outputs.verify_mode != 'skip'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -1306,6 +1314,11 @@ jobs:
           case "$MODE" in
             skip)
               echo "::notice::not verified against an image: $REASON"
+              {
+                echo "## Not verified against an image"
+                echo
+                echo "$REASON"
+              } >> "$GITHUB_STEP_SUMMARY"
               echo "verify=false" >> "$GITHUB_OUTPUT"
               exit 0 ;;
             pushed-image)
@@ -1331,6 +1344,13 @@ jobs:
           done
           if [ -z "$found" ]; then
             echo "::notice::no build-environment image delivers mcuhome-build-workspace $WANTED yet, so there is nothing to verify this release in. Assemble one with the revision dispatch (workspace_version=$WANTED, revision=1)."
+            {
+              echo "## Not verified against an image"
+              echo
+              echo "No build-environment image delivers mcuhome-build-workspace $WANTED yet."
+              echo "Assemble one with the revision dispatch (workspace_version=$WANTED,"
+              echo "revision=1) and it will be verified there."
+            } >> "$GITHUB_STEP_SUMMARY"
             echo "verify=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
