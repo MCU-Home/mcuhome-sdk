@@ -2,18 +2,16 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The SDK package's entry point — a role fixed by the legacy container
-# contract this image still implements, kept until the build environment
-# switchover.
-# `mcuhome-sdk.json` at the SDK root names this file as
-# `generate.program`, and a build container invokes it as
+# The SDK package's entry point. `mcuhome-sdk.json` at the SDK root names
+# this file as `generate.program`, and a build environment invokes it as
 #
-#     <trees.sdk.path>/bin/generate generate <request-document path>
+#     <the delivered SDK>/bin/generate generate <request-document path>
 #
-# — §5.1's ABI unchanged. Everything it does is call
-# mcuhome.compiler.sdkentry.main() with that argv; the action lives there, not
-# here, so a test can drive it in-process while this file stays the
-# three lines a launcher should be.
+# — two operands, a request document and a result document, the ABI
+# `mcuhome.compiler.abi.run_invocation` implements for both ends of that
+# call. Everything this file does is call mcuhome.compiler.sdkentry.main()
+# with that argv; the action lives there, not here, so a test can drive it
+# in-process while this file stays the three lines a launcher should be.
 #
 # The runtime this file needs is what `generate.runtime` declares
 # ("python3"), and providing it is the build environment's duty — which

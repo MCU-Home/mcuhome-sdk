@@ -15,7 +15,7 @@ are thin I/O shells over the same frozen vocabulary, and the golden
 vectors in ``tests/python`` pin them against each other.
 
 Existing because the compiler ships inside the SDK package and runs in
-the build container, where the workbench neither exists nor
+the build environment, where the workbench neither exists nor
 belongs. Everything here depends on ``mcuhome.model`` and a YAML parser,
 nothing else.
 """
@@ -52,14 +52,13 @@ __all__ = [
 class ContextFormatVersionError(BuildError):
     """The manifest states a ``context`` format version nothing here implements.
 
-    The compiler-side twin of the workbench's error of the same name —
-    this refusal answers differently from every other unreadable
-    manifest: ``status: "unsupported"``, ``reason: "unsupported.context"``,
-    the found version in ``error.details`` — the legacy result-document
-    vocabulary that :mod:`mcuhome.compiler.abi`'s legacy invocation still
-    answers with (its ``_STATUS_UNSUPPORTED`` and ``_REASON_CONTEXT``).
-    :attr:`found` carries the manifest's ``context`` key verbatim —
-    ``None`` when the manifest names no format version at all.
+    The compiler-side twin of the workbench's error of the same name. It
+    is kept apart from every other unreadable manifest because the two
+    are different answers: a manifest nobody can read is broken, and a
+    format version nobody implements is a version question, which is
+    something a caller can act on. :attr:`found` carries the manifest's
+    ``context`` key verbatim — ``None`` when the manifest names no format
+    version at all.
     """
 
     def __init__(self, message: str, *, hint: str, found: object) -> None:

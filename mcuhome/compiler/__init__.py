@@ -1,19 +1,20 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Performing a build: stages 4-5, and the invocation-ABI adapter.
+"""Performing a build: stages 4-5, and the builder program.
 
 Code generation, west orchestration, artifact collection and the build
-report — plus the adapter that turns a build container's invocation into
-a build of this same code. It is an adapter and only an adapter: it
-implements no build step of its own, so what an invocation runs and what
-the modules below do cannot drift apart.
+report — plus the program a build environment starts for a step, which
+turns that invocation into a build of this same code. It is an adapter
+and only an adapter: it implements no build step of its own, so what an
+invocation runs and what the modules below do cannot drift apart.
 
 Where it runs is what defines it. This package **ships inside the SDK
-package** and executes in the build container out of the mounted SDK,
-which is what makes "bring your own build container" mean own toolchain
-and own Zephyr rather than own build logic. It is therefore not "the back
-half of the pipeline" but a deliverable of the SDK — and a consumer that
-only ever drives builds through a container never installs it at all.
+package** and executes in the build environment out of the SDK that was
+delivered there, which is what makes "bring your own build environment"
+mean own toolchain and own Zephyr rather than own build logic. It is
+therefore not "the back half of the pipeline" but a deliverable of the
+SDK — and a consumer that only ever drives builds through an environment
+never installs it at all.
 
 =====================================  ======================================
 :mod:`mcuhome.compiler.generate`       stage 4: the per-device build tree

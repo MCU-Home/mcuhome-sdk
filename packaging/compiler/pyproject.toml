@@ -24,15 +24,15 @@ name = "mcuhome-compiler"
 # must not be a second copy of the release version. See the `setup.py`
 # next to this file.
 dynamic = ["version", "dependencies"]
-description = "MCUHome's compiler: code generation, west orchestration, build report, invocation-ABI adapter."
+description = "MCUHome's compiler: code generation, west orchestration, build report, builder program."
 readme = { text = """
 Stages 4 and 5 of the MCUHome build: the per-device Zephyr application,
 the west invocation that compiles it, the artifact set and the build
-report — plus the adapter that turns a build container's invocation into
-exactly that build.
+report — plus the program a build environment starts for a step, which
+turns that invocation into exactly that build.
 
 This is what ships inside the MCUHome SDK package and runs in the build
-container. An installation that only ever drives builds through a
+environment. An installation that only ever drives builds through a
 container never installs it.
 
 Part of the MCUHome firmware framework — https://github.com/mcu-home/mcuhome-workbench

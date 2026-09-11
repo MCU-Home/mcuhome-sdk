@@ -25,15 +25,13 @@ the host then signs. The artifact set is flat: ``firmware.{hex,bin}``
 
 **Why the artifacts are checked by presence, not by hash.** The §2.2
 report carries no per-artifact hash list, so there is no recorded value to
-re-hash against. There is also no need for one here: the build container
-already re-hashed every artifact on egress against the report it emits —
-a guarantee of the legacy container contract this image still
-implements, kept until the build environment switchover — so a second
-hash oracle in CI would only re-check what the container already
-guaranteed. CI's job here is therefore
-narrow and exactly right — "the flashable files exist and are non-empty,
-and the report is a well-formed §2.2 document" — which is what catches a
-build that silently produced nothing, or a report a signer would refuse.
+re-hash against. There is also no need for one here: what a build
+declares it wrote is what the orchestrator collected out of ``out``, and
+a second hash oracle in CI would only re-check bytes that never left the
+machine. CI's job here is therefore narrow and exactly right — "the
+flashable files exist and are non-empty, and the report is a well-formed
+§2.2 document" — which is what catches a build that silently produced
+nothing, or a report a signer would refuse.
 
 What is required (each present and non-empty):
 
@@ -44,8 +42,7 @@ What is required (each present and non-empty):
   Without it a detached signer has nothing to read, and it is one of the
   artifacts the build always produces (§2.1).
 * ``firmware.hex`` and ``firmware.bin`` — the unsigned firmware the
-  container declared (the legacy container contract the baked image
-  still implements).
+  build declared.
 * ``firmware.signed.hex`` and ``firmware.signed.bin`` — what the host
   signer produced; an unsigned application is one MCUboot refuses to
   chain-load.

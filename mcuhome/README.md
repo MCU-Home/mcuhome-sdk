@@ -31,7 +31,7 @@ them is *where the code has to run*, not what it is about:
 |---|---|---|---|
 | `mcuhome.model` | `mcuhome-model` | the shared vocabulary — device model, registry, the context and manifest formats, the frozen context-ID rule, error types. No build machinery, no third-party dependency | everywhere, including a build server that carries no build logic at all |
 | `mcuhome.workbench` | `mcuhome-workbench` | stages 1-3, context creation, the three build methods, the session client, signing — **in [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench)**, not here | wherever a build is *driven*: the command line, the dashboard, third-party embedders |
-| `mcuhome.compiler` | `mcuhome-compiler` | stages 4-5 and the invocation-ABI adapter | inside the build container, out of the mounted SDK |
+| `mcuhome.compiler` | `mcuhome-compiler` | stages 4-5 and the entry point the build environment reaches code generation through | inside the build environment, out of the SDK it was delivered |
 
 `mcuhome.workbench.api` is the supported programmatic surface. The
 `mcuhome` command itself is a thin shell in its own repository
@@ -40,7 +40,7 @@ and calls in here.
 
 The project files are in [`../packaging/`](../packaging/), not here: the
 tree has to sit at the repository root because that root is also the SDK
-package a build container mounts and puts on `PYTHONPATH`, so each
+package a build environment puts on `PYTHONPATH`, so each
 distribution reaches up into it rather than holding sources of its own.
 Both read one version, from `model/__init__.py`; the workbench versions
 independently in its own repository.
@@ -55,7 +55,7 @@ workbench's modules — see
 |---|---|---|
 | `compiler/generate.py` | 4 | the per-device build tree: Matter/channel tables, overlay, Kconfig fragment, CMakeLists, the sysbuild half |
 | `compiler/workspace.py` | 5 | west-workspace discovery, prerequisites, the `west build --sysbuild` invocation, per-image artifacts and memory reports |
-| `compiler/abi.py` | — | the builder program: the build environment's invocation ([specification](../docs/spec/build-environment-specification.md) §6) and the baked image's legacy one, the build behind both, and the SDK-side adapter |
+| `compiler/abi.py` | — | the builder program: the build step ([specification](../docs/spec/build-environment-specification.md) §6), the build behind it, and the ABI the SDK's own entry point is reached over |
 | `model/pairing.py` | — | commissioning credentials: SPAKE2+ verifier, QR and manual code, the atomic Kconfig group |
 | `model/p256.py` | — | the curve arithmetic `pairing.py` and the workbench's `signing.py` share, and nothing more |
 | `model/model.py` | — | the canonical device model and its JSON form |
