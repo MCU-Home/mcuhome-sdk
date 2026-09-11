@@ -81,10 +81,11 @@ def reference() -> str:
     if not DIGEST:
         raise SystemExit(
             f"{REPOSITORY} is not pinned yet.\n"
-            f"The image has to be published once before a package build can name its\n"
-            f"bytes. Publish {publish_reference()} with the Build workflow "
-            f"(push to main),\n"
-            f"take the index digest it prints, and write it into\n"
+            f"The image has to be published once before a package build can name the\n"
+            f"bytes it was produced in. Publish it by pushing to main — the Build\n"
+            f"workflow builds and publishes\n"
+            f"\n    {publish_reference()}\n\n"
+            f"and prints the index digest it resolved to. Write that digest into\n"
             f"scripts/packager_image.py:\n"
             f'\n    DIGEST = "sha256:<the index digest>"\n\n'
             f"To run against an image you built yourself in the meantime, pass\n"
