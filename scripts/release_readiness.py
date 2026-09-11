@@ -11,6 +11,15 @@ this repository. No package registry is consulted here and none may be —
 a registry is fed by hand, hours or days after a release, so a check that
 asked it would be answering about yesterday.
 
+**What this trusts.** The release inventory, the meta documents and the
+archives all come off GitHub over TLS, vouched for by the forge and by
+nothing else: a GitHub release carries no signed index, which is what a
+package registry adds on top when the operator publishes there later. That
+is deliberate — the CI is testing what this repository itself produced and
+published, not acting as a client of the registry — and it is the reason
+``sources`` writes an index out of the files rather than fetching a signed
+one.
+
 It does four jobs, one per question a push has to answer:
 
 ``check-versions``
@@ -23,14 +32,20 @@ It does four jobs, one per question a push has to answer:
 
 ``plan``
     Which (SDK, workspace, tools) combinations this commit has to be tried
-    in, and what each one would prove. A combination is assembled from
-    *exactly one* version per stage, so nothing has to be pinned in a
-    device file: the build resolves the chain the way a user's build does,
-    and there is only one candidate for it to resolve to.
+    in, and what each one would prove. Per stage in **both directions**:
+    against the published versions of the stage it requires (the range its
+    own release would promise) and against the published versions of the
+    stage that requires it (what a new version of this line would reach
+    without a release above it). A combination is assembled from *exactly
+    one* version per stage, so nothing has to be pinned in a device file:
+    the build resolves the chain the way a user's build does, and there is
+    only one candidate for it to resolve to. ``--published-only`` is the
+    tag-time rule, where the checkout of a neighbouring stage no longer
+    counts.
 
 ``summarize``
     One stage's release-readiness table, out of the plan and the outcomes
-    of those builds.
+    of those builds — one section per direction, each with its own verdict.
 
 ``sources``
     A directory of release assets — archive, ``.sha256``, ``.meta.json`` —
@@ -42,6 +57,7 @@ Usage::
 
     release_readiness.py [--releases FILE] [--metas DIR] check-versions
     release_readiness.py [--releases FILE] [--metas DIR] plan --output plan.json
+                                                              [--published-only]
     release_readiness.py summarize <stage> --plan plan.json [--results DIR]
     release_readiness.py sources <dir>
 
@@ -107,6 +123,11 @@ FAMILY = {
     "workspace": "mcuhome-build-workspace",
     "tools": "mcuhome-build-tools",
 }
+
+#: The stage below each one — the one it states a constraint on. The
+#: tools end the chain and constrain nothing, which is why they are not a
+#: key here.
+NEXT_STAGE = {"sdk": "workspace", "workspace": "tools"}
 
 #: The stage above each one — whose constraint decides whether a new
 #: version of this line reaches anybody without a release above it.
@@ -392,6 +413,33 @@ def check_versions(
     return 1 if failures else 0
 
 
+def _resolves(repository: Path, revision: str) -> bool:
+    """Is *revision* a commit this checkout has?
+
+    Asked before an input listing is computed for it, because everything
+    that reads a commit answers "this commit carries no <path>" when the
+    commit itself is missing — and "the tag is not here" and "the tag
+    predates this input" are two different things to be told.
+    """
+    return (
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                f"{revision}^{{commit}}",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
 def _drift_message(
     *,
     stage: str,
@@ -437,6 +485,11 @@ def _listing_difference(
     checkout — a shallow clone, a tag that was never fetched — the two
     hashes are the whole answer and this says so rather than guessing.
     """
+    if not _resolves(repository, tag):
+        return [
+            f"  (the commit {tag} names is not in this checkout, so the two input listings "
+            f"cannot be compared here — git fetch origin tag {tag} to see which input moved)"
+        ]
     try:
         before = release_lines.inputs_listing(
             stage, tag, repository=repository, architecture=architecture
@@ -444,11 +497,13 @@ def _listing_difference(
         after = release_lines.inputs_listing(
             stage, revision, repository=repository, architecture=architecture
         )
-    except (subprocess.CalledProcessError, SystemExit):
+    except SystemExit as gap:
         return [
-            f"  (the commit {tag} names is not in this checkout, so the two input listings "
-            "cannot be compared here — fetch the tag to see which input moved)"
+            f"  ({tag} does not carry every path this stage is identified by today, so the "
+            f"two listings would answer different questions: {gap})"
         ]
+    except subprocess.CalledProcessError as failure:
+        return [f"  (the input listings could not be read: {failure})"]
     was = dict(line.split("\t", 1) for line in before.splitlines() if "\t" in line)
     now = dict(line.split("\t", 1) for line in after.splitlines() if "\t" in line)
     lines = [f"What changed since {tag}:"]
@@ -490,12 +545,20 @@ class Stage:
 
 @dataclass
 class Combination:
-    """One (SDK, workspace, tools) triple, under the identity it is built with."""
+    """One (SDK, workspace, tools) triple, under the identity it is built with.
+
+    *consistent* is whether the triple is one somebody could actually
+    assemble: every stage's own constraint admits the one below it. An
+    inconsistent triple is still built — what a broken chain does is worth
+    seeing — but it is never a failure, because nothing claims it works.
+    """
 
     identifier: str
     sdk: Stage
     workspace: Stage
     tools: Stage
+    consistent: bool = True
+    reason: str = ""
 
     def triple(self) -> tuple:
         return tuple(
@@ -512,6 +575,10 @@ class Combination:
             "sdk": self.sdk.document(),
             "workspace": self.workspace.document(),
             "tools": self.tools.document(),
+            # What the firmware job reads: a leg that builds an
+            # inconsistent triple reports its outcome and does not fail.
+            "required": self.consistent,
+            "reason": self.reason,
         }
 
 
@@ -537,19 +604,30 @@ class Row:
 
 @dataclass
 class Plan:
-    """Everything the three assessment jobs need, decided once."""
+    """Everything the three assessment jobs need, decided once.
+
+    ``catalogue`` holds both directions D10.9 asks for, per stage:
+    ``down`` is the line against the versions of the stage it requires,
+    ``up`` against the versions of the stage that requires it. The SDK has
+    no stage above it and the tools none below, so each of them has one
+    direction; the workspace has both.
+    """
 
     declared: dict[str, str]
     combinations: list[Combination] = field(default_factory=list)
-    catalogue: dict[str, list[Row]] = field(default_factory=dict)
-    verdicts: dict[str, str] = field(default_factory=dict)
+    catalogue: dict[str, dict[str, list[Row]]] = field(default_factory=dict)
+    verdicts: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def document(self) -> dict:
         return {
             "declared": self.declared,
             "combinations": [one.document() for one in self.combinations],
             "catalogue": {
-                stage: [row.document() for row in rows] for stage, rows in self.catalogue.items()
+                stage: {
+                    direction: [row.document() for row in rows]
+                    for direction, rows in directions.items()
+                }
+                for stage, directions in self.catalogue.items()
             },
             "verdicts": self.verdicts,
         }
@@ -558,27 +636,30 @@ class Plan:
 class _Combinations:
     """The combinations asked for, deduplicated, in the order they were asked.
 
-    Three stages ask for overlapping triples — today all three ask for the
-    same one — and a triple is built once. The identity is the triple, so
-    an identifier never names two different sets of packages.
+    Three stages and two directions ask for overlapping triples — today
+    they all ask for the same one — and a triple is built once. The
+    identity is the triple, so an identifier never names two different sets
+    of packages.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, consistency) -> None:
         self.found: list[Combination] = []
         self._by_triple: dict[tuple, Combination] = {}
+        self._consistency = consistency
 
-    def add(self, sdk: Stage, workspace: Stage, tools: Stage) -> str:
+    def add(self, sdk: Stage, workspace: Stage, tools: Stage) -> Combination:
         candidate = Combination("", sdk, workspace, tools)
         triple = candidate.triple()
         if triple in self._by_triple:
-            return self._by_triple[triple].identifier
+            return self._by_triple[triple]
         everything_here = all(one.source == "checkout" for one in (sdk, workspace, tools))
         candidate.identifier = (
             "checkout" if everything_here else f"combination-{len(self.found) + 1}"
         )
+        candidate.consistent, candidate.reason = self._consistency(sdk, workspace, tools)
         self._by_triple[triple] = candidate
         self.found.append(candidate)
-        return candidate.identifier
+        return candidate
 
 
 def _ends(entries: list[Published]) -> list[tuple[Published, str]]:
@@ -590,14 +671,42 @@ def _ends(entries: list[Published]) -> list[tuple[Published, str]]:
     return [(entries[0], "the lowest published"), (entries[-1], "the highest published")]
 
 
+def _row_for(role: str, subject: str, combination: Combination | None, note: str = "") -> Row:
+    """One table line, required exactly when the triple claims to work.
+
+    A row with no combination is one nothing could be assembled for — at
+    tag time, where only published versions count, that is the ordinary
+    answer for a stage nothing published satisfies yet.
+    """
+    if combination is None:
+        return Row(role=role, subject=subject, combination=None, required=False, note=note)
+    parts = [part for part in (note, combination.reason) if part]
+    return Row(
+        role=role,
+        subject=subject,
+        combination=combination.identifier,
+        required=combination.consistent,
+        note="; ".join(parts),
+    )
+
+
 def build_plan(
     *,
     revision: str,
     releases: list[dict],
     metas: MetaSource,
     repository: Path = REPO_ROOT,
+    published_only: bool = False,
 ) -> Plan:
-    """The whole catalogue: three stages, their candidates, their combinations."""
+    """The whole catalogue: three stages, both directions, their combinations.
+
+    *published_only* is the tag-time rule. At a push the checkout of a
+    neighbouring stage counts as released — it is about to be — and the
+    catalogue tries it; at a tag only what is actually published may
+    decide whether a release goes out, so those rows are left out and a
+    stage nothing published satisfies is a row with no combination and a
+    verdict that says why.
+    """
     environment = release_lines.environment(repository, revision)
     declared = {
         stage: release_lines.version_of(environment, stage) for stage in release_lines.STAGES
@@ -618,100 +727,179 @@ def build_plan(
         ]
         for stage, entries in inventory.items()
     }
-    combinations = _Combinations()
+    published_by_version = {
+        stage: {one.version: one for one in entries} for stage, entries in candidates.items()
+    }
+
+    def requires_of_stage(name: str, stage: Stage) -> str | None:
+        """What the package this stage names requires of the stage below it."""
+        family = FAMILY[NEXT_STAGE[name]]
+        if stage.source == "checkout":
+            return constraint_on(release_lines.requires_of(environment, name), family)
+        entry = published_by_version[name].get(stage.version)
+        return constraint_on(entry.requires(), family) if entry is not None else None
+
+    def consistency(sdk: Stage, workspace: Stage, tools: Stage) -> tuple[bool, str]:
+        """Does this triple hold together, and if not, where does it break?"""
+        faults = []
+        for name, upper, lower in (("sdk", sdk, workspace), ("workspace", workspace, tools)):
+            constraint = requires_of_stage(name, upper)
+            if not accepts(constraint, lower.version):
+                faults.append(
+                    f"{FAMILY[name]} {upper.label()} requires {constraint!r} of "
+                    f"{FAMILY[NEXT_STAGE[name]]} and this combination holds {lower.version}"
+                )
+        if faults:
+            return False, "; ".join(faults) + " — built to see what happens, not required to work"
+        return True, ""
+
+    combinations = _Combinations(consistency)
     plan = Plan(declared=declared)
 
-    def tools_for(requires: dict[str, str]) -> tuple[Stage, str]:
-        """The tools package a workspace's own constraint resolves to."""
-        constraint = constraint_on(requires, FAMILY["tools"])
-        satisfying = [one for one in candidates["tools"] if accepts(constraint, one.version)]
-        if satisfying:
-            newest = satisfying[-1]
-            return Stage("published", newest.version, newest.tag), ""
-        if accepts(constraint, declared["tools"]):
-            return here["tools"], "no published build tools satisfy it — this commit's are used"
-        return here["tools"], (
-            f"neither a published build tools package nor this commit's {declared['tools']} "
-            f"satisfies {constraint!r} — built with this commit's anyway"
-        )
+    def newest_satisfying(stage: str, constraint: str | None) -> Published | None:
+        """The newest published version of *stage* inside *constraint*."""
+        satisfying = [one for one in candidates[stage] if accepts(constraint, one.version)]
+        return satisfying[-1] if satisfying else None
 
-    plan.catalogue["sdk"], plan.verdicts["sdk"] = _downward(
-        environment=environment,
-        declared=declared,
-        here=here,
-        inventory=inventory,
-        candidates=candidates,
-        combinations=combinations,
-        tools_for=tools_for,
-    )
+    def tools_under(workspace: Stage) -> tuple[Stage | None, str]:
+        """The tools package a workspace's own constraint resolves to."""
+        constraint = requires_of_stage("workspace", workspace)
+        newest = newest_satisfying("tools", constraint)
+        if newest is not None:
+            return Stage("published", newest.version, newest.tag), ""
+        if published_only:
+            return None, f"no published {FAMILY['tools']} satisfies {constraint!r}"
+        return here[
+            "tools"
+        ], f"no published {FAMILY['tools']} satisfies {constraint!r} — this commit's are used"
+
+    def sdk_over(workspace: Stage) -> tuple[Stage | None, str]:
+        """The SDK a workspace is built under: the newest published that takes it."""
+        newest = next(
+            (
+                one
+                for one in reversed(candidates["sdk"])
+                if accepts(constraint_on(one.requires(), FAMILY["workspace"]), workspace.version)
+            ),
+            None,
+        )
+        if newest is not None:
+            return Stage("published", newest.version, newest.tag), ""
+        if published_only:
+            return (
+                None,
+                f"no published {FAMILY['sdk']} accepts {FAMILY['workspace']} {workspace.version}",
+            )
+        return here[
+            "sdk"
+        ], f"no published {FAMILY['sdk']} accepts {workspace.version} — this commit's is used"
+
+    def down_triple(stage: str, below: Stage) -> tuple[Combination | None, str]:
+        """The triple that tries *stage* of this commit over one below it."""
+        if stage == "sdk":
+            tools, note = tools_under(below)
+            if tools is None:
+                return None, note
+            return combinations.add(here["sdk"], below, tools), note
+        # stage == "workspace": the tools are what varies, and an SDK has
+        # to sit on top for anything to build at all.
+        sdk, note = sdk_over(here["workspace"])
+        if sdk is None:
+            return None, note
+        return combinations.add(sdk, here["workspace"], below), note
+
+    def up_triple(stage: str, above: Stage) -> tuple[Combination | None, str]:
+        """The triple that tries *stage* of this commit under one above it."""
+        if stage == "workspace":
+            tools, note = tools_under(here["workspace"])
+            if tools is None:
+                return None, note
+            return combinations.add(above, here["workspace"], tools), note
+        # stage == "tools": the workspace above decides, and the SDK above
+        # that one follows from the workspace.
+        sdk, note = sdk_over(above)
+        if sdk is None:
+            return None, note
+        return combinations.add(sdk, above, here["tools"]), note
+
+    for stage in ("sdk", "workspace"):
+        rows, verdict = _downward(
+            stage=stage,
+            environment=environment,
+            declared=declared,
+            inventory=inventory,
+            candidates=candidates,
+            triple=down_triple,
+            published_only=published_only,
+        )
+        plan.catalogue.setdefault(stage, {})["down"] = rows
+        plan.verdicts.setdefault(stage, {})["down"] = verdict
     for stage in ("workspace", "tools"):
-        plan.catalogue[stage], plan.verdicts[stage] = _upward(
+        rows, verdict = _upward(
             stage=stage,
             environment=environment,
             declared=declared,
             here=here,
             candidates=candidates,
-            combinations=combinations,
-            tools_for=tools_for,
+            triple=up_triple,
+            published_only=published_only,
         )
+        plan.catalogue.setdefault(stage, {})["up"] = rows
+        plan.verdicts.setdefault(stage, {})["up"] = verdict
     plan.combinations = combinations.found
     return plan
 
 
 def _downward(
     *,
+    stage: str,
     environment: dict,
     declared: dict[str, str],
-    here: dict[str, Stage],
     inventory: dict[str, list[Published]],
     candidates: dict[str, list[Published]],
-    combinations: _Combinations,
-    tools_for,
+    triple,
+    published_only: bool,
 ) -> tuple[list[Row], str]:
-    """The SDK line against the workspaces its own constraint admits.
+    """One line against the versions of the stage it requires.
 
-    An SDK release promises that every workspace inside its range works,
-    so the two ends of that range are what have to be tried. Where the
-    range has no published member the SDK cannot be released at all — not
-    because something is broken, but because the thing it requires does not
-    exist yet.
+    A release promises that every version inside the range it declares
+    works, so the two ends of that range are what have to be tried. Where
+    the range has no published member the line cannot be released at all —
+    not because something is broken, but because the thing it requires does
+    not exist yet. That is the verdict that decides the order a first
+    release of all three lines has to go in.
     """
-    constraint = constraint_on(release_lines.requires_of(environment, "sdk"), FAMILY["workspace"])
-    satisfying = [one for one in candidates["workspace"] if accepts(constraint, one.version)]
+    below = NEXT_STAGE[stage]
+    constraint = constraint_on(release_lines.requires_of(environment, stage), FAMILY[below])
+    satisfying = [one for one in candidates[below] if accepts(constraint, one.version)]
     rows: list[Row] = []
     for entry, role in _ends(satisfying):
-        tools, note = tools_for(entry.requires())
+        combination, note = triple(stage, Stage("published", entry.version, entry.tag))
         rows.append(
-            Row(
-                role=f"{role} build workspace",
-                subject=f"{FAMILY['workspace']} {entry.version}",
-                combination=combinations.add(
-                    here["sdk"], Stage("published", entry.version, entry.tag), tools
-                ),
-                required=True,
-                note=note,
+            _row_for(
+                f"{role} {FAMILY[below]}", f"{FAMILY[below]} {entry.version}", combination, note
             )
         )
-    unpublished = declared["workspace"] not in {one.version for one in inventory["workspace"]}
-    if accepts(constraint, declared["workspace"]) and unpublished:
-        tools, note = tools_for(release_lines.requires_of(environment, "workspace"))
+    unpublished = declared[below] not in {one.version for one in inventory[below]}
+    if not published_only and accepts(constraint, declared[below]) and unpublished:
+        combination, note = triple(stage, Stage("checkout", declared[below]))
         rows.append(
-            Row(
-                role="the build workspace of this commit",
-                subject=f"{FAMILY['workspace']} {declared['workspace']} (this commit)",
-                combination=combinations.add(here["sdk"], here["workspace"], tools),
-                required=True,
-                note=note,
+            _row_for(
+                f"the {FAMILY[below]} of this commit",
+                f"{FAMILY[below]} {declared[below]} (this commit)",
+                combination,
+                note,
             )
         )
     if satisfying:
         verdict = (
-            f"{len(satisfying)} published build workspace(s) satisfy {constraint!r}; the "
-            "ends of that range are what an SDK release promises."
+            f"{len(satisfying)} published {FAMILY[below]} release(s) satisfy {constraint!r}; "
+            f"the ends of that range are what a {FAMILY[stage]} release promises."
         )
     else:
         verdict = (
-            f"SDK release blocked until a build workspace satisfying {constraint!r} is published."
+            f"{FAMILY[stage]} release blocked until a {FAMILY[below]} satisfying "
+            f"{constraint!r} is published."
         )
     return rows, verdict
 
@@ -723,8 +911,8 @@ def _upward(
     declared: dict[str, str],
     here: dict[str, Stage],
     candidates: dict[str, list[Published]],
-    combinations: _Combinations,
-    tools_for,
+    triple,
+    published_only: bool,
 ) -> tuple[list[Row], str]:
     """One line held against the published versions of the stage above it.
 
@@ -742,38 +930,22 @@ def _upward(
     ]
     rows: list[Row] = []
     for entry, role in _ends(accepting):
+        combination, note = triple(stage, Stage("published", entry.version, entry.tag))
         rows.append(
-            Row(
-                role=f"{role} {FAMILY[above]}",
-                subject=f"{FAMILY[above]} {entry.version}",
-                combination=_combination_for(
-                    stage=stage,
-                    above_entry=entry,
-                    environment=environment,
-                    here=here,
-                    candidates=candidates,
-                    combinations=combinations,
-                    tools_for=tools_for,
-                ),
-                required=True,
+            _row_for(
+                f"{role} {FAMILY[above]}", f"{FAMILY[above]} {entry.version}", combination, note
             )
         )
-    rows.append(
-        Row(
-            role=f"the {FAMILY[above]} of this commit",
-            subject=f"{FAMILY[above]} {declared[above]} (this commit)",
-            combination=_combination_for(
-                stage=stage,
-                above_entry=None,
-                environment=environment,
-                here=here,
-                candidates=candidates,
-                combinations=combinations,
-                tools_for=tools_for,
-            ),
-            required=True,
+    if not published_only:
+        combination, note = triple(stage, Stage("checkout", declared[above]))
+        rows.append(
+            _row_for(
+                f"the {FAMILY[above]} of this commit",
+                f"{FAMILY[above]} {declared[above]} (this commit)",
+                combination,
+                note,
+            )
         )
-    )
     own = constraint_on(release_lines.requires_of(environment, above), family)
     if accepting:
         verdict = (
@@ -797,41 +969,6 @@ def _upward(
             f"and this commit's own constraint {own!r} does not either."
         )
     return rows, verdict
-
-
-def _combination_for(
-    *,
-    stage: str,
-    above_entry: Published | None,
-    environment: dict,
-    here: dict[str, Stage],
-    candidates: dict[str, list[Published]],
-    combinations: _Combinations,
-    tools_for,
-) -> str:
-    """The triple that tries *stage* of this commit under one version above it."""
-    if stage == "workspace":
-        sdk = (
-            here["sdk"]
-            if above_entry is None
-            else Stage("published", above_entry.version, above_entry.tag)
-        )
-        tools, _ = tools_for(release_lines.requires_of(environment, "workspace"))
-        return combinations.add(sdk, here["workspace"], tools)
-    # The tools line: the workspace above decides, and the SDK above that
-    # one follows from the workspace — the newest published SDK that
-    # accepts it, and this commit's where none does.
-    if above_entry is None:
-        return combinations.add(here["sdk"], here["workspace"], here["tools"])
-    accepting = [
-        one
-        for one in candidates["sdk"]
-        if accepts(constraint_on(one.requires(), FAMILY["workspace"]), above_entry.version)
-    ]
-    sdk = Stage("published", accepting[-1].version, accepting[-1].tag) if accepting else here["sdk"]
-    return combinations.add(
-        sdk, Stage("published", above_entry.version, above_entry.tag), here["tools"]
-    )
 
 
 # --------------------------------------------------------------------------
@@ -863,57 +1000,79 @@ def read_results(directory: Path | None) -> dict[tuple[str, str], dict]:
     return found
 
 
+#: What each direction of the catalogue is about, as a heading. "Down" is
+#: the stage a line requires, "up" the stage that requires it.
+DIRECTION_HEADING = {
+    "down": "Against what it requires",
+    "up": "Against what requires it",
+}
+
+
 def summarize(*, stage: str, plan: dict, results: Path | None, out=None, errors=None) -> int:
     """One stage's release-readiness table, and whether it is a failure.
 
+    Both directions D10.9 asks for, each with its own verdict: what this
+    line requires (its own constraint against the published versions of the
+    stage below) and what requires it (the published versions above whose
+    constraint already takes this one). The SDK has only the first and the
+    tools only the second.
+
     A row fails the job when it claims validity and did not build: a
     combination assembled from published versions and this commit's own
-    definition is one somebody could put together today, so a broken one
-    is a broken promise rather than a warning.
+    definition is one somebody could put together today, so a broken one is
+    a broken promise rather than a warning. A row whose chain does not hold
+    together in the first place claims nothing and is reported.
     """
     out = sys.stdout if out is None else out
     errors = sys.stderr if errors is None else errors
     outcomes = read_results(results)
     labels = {one["id"]: one["label"] for one in plan.get("combinations", [])}
-    rows = plan.get("catalogue", {}).get(stage, [])
-    lines = [
-        f"## Release readiness: {FAMILY[stage]} {plan['declared'][stage]}",
-        "",
-        plan.get("verdicts", {}).get(stage, ""),
-        "",
-    ]
+    directions = plan.get("catalogue", {}).get(stage, {})
+    verdicts = plan.get("verdicts", {}).get(stage, {})
+    lines = [f"## Release readiness: {FAMILY[stage]} {plan['declared'][stage]}", ""]
     broken: list[str] = []
-    if not rows:
-        lines.append(
-            "Nothing to try: no published version satisfies this line's constraint, and "
-            "this commit's own next stage does not either."
-        )
-    else:
+    for direction in ("down", "up"):
+        if direction not in directions:
+            continue
+        rows = directions[direction]
+        lines.append(f"### {DIRECTION_HEADING[direction]}")
+        lines.append("")
+        lines.append(verdicts.get(direction, ""))
+        lines.append("")
+        if not rows:
+            lines.append(
+                "Nothing to try here: no version of that stage is available to try this "
+                "one against."
+            )
+            lines.append("")
+            continue
         lines.append("| tried against | combination | result | note |")
         lines.append("|---|---|---|---|")
-    for row in rows:
-        identifier = row.get("combination")
-        built = [
-            (architecture, document)
-            for (one, architecture), document in sorted(outcomes.items())
-            if one == identifier
-        ]
-        if not built:
-            result = "not evaluated in this run"
-        else:
-            result = ", ".join(
-                f"{architecture}: {document.get('outcome', 'unknown')}"
-                for architecture, document in built
+        for row in rows:
+            identifier = row.get("combination")
+            built = [
+                (architecture, document)
+                for (one, architecture), document in sorted(outcomes.items())
+                if one == identifier
+            ]
+            if identifier is None:
+                result = "nothing to build it with"
+            elif not built:
+                result = "not evaluated in this run"
+            else:
+                result = ", ".join(
+                    f"{architecture}: {document.get('outcome', 'unknown')}"
+                    for architecture, document in built
+                )
+                if row.get("required") and any(
+                    document.get("outcome") != "success" for _, document in built
+                ):
+                    broken.append(f"{row.get('subject')} — {labels.get(identifier, identifier)}")
+            lines.append(
+                f"| {row.get('subject')} | {labels.get(identifier, identifier) or '—'} | "
+                f"{result} | {row.get('note') or ''} |"
             )
-            if row.get("required") and any(
-                document.get("outcome") != "success" for _, document in built
-            ):
-                broken.append(f"{row.get('subject')} — {labels.get(identifier, identifier)}")
-        lines.append(
-            f"| {row.get('subject')} | {labels.get(identifier, identifier)} | {result} | "
-            f"{row.get('note') or ''} |"
-        )
-    lines.append("")
+        lines.append("")
     if broken:
         lines.append(
             "**Failed:** a combination this line claims to be valid did not build — "
@@ -964,12 +1123,18 @@ def write_index(directory: Path) -> dict:
             )
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         checksum = directory / f"{archive.name}.sha256"
-        if checksum.is_file():
-            stated = checksum.read_text(encoding="utf-8").split()[0]
-            if stated != digest:
-                raise SystemExit(
-                    f"{archive.name} hashes to {digest} and {checksum.name} says {stated}"
-                )
+        # Refused rather than skipped: every release publishes the checksum
+        # beside the archive, so an absent one means the download was
+        # incomplete or the assets are not what they look like — and an
+        # index written over it would state a hash nothing corroborated.
+        if not checksum.is_file():
+            raise SystemExit(
+                f"{archive.name} has no {checksum.name} beside it, so its bytes are "
+                "vouched for by nothing"
+            )
+        stated = checksum.read_text(encoding="utf-8").split()[0]
+        if stated != digest:
+            raise SystemExit(f"{archive.name} hashes to {digest} and {checksum.name} says {stated}")
         packages.setdefault(name, {})[version] = {
             "file": archive.name,
             "sha256": digest,
@@ -1012,6 +1177,12 @@ def main(argv: list[str]) -> int:
 
     planner = sub.add_parser("plan", help="which combinations this commit has to be tried in")
     planner.add_argument("--output", type=Path, required=True, help="where the plan is written")
+    planner.add_argument(
+        "--published-only",
+        action="store_true",
+        help="the tag-time rule: only published versions of the other stages count, so the "
+        "rows that try this commit's own neighbours are left out",
+    )
 
     summary = sub.add_parser("summarize", help="one stage's release-readiness table")
     summary.add_argument("stage", choices=release_lines.STAGES)
@@ -1059,6 +1230,7 @@ def main(argv: list[str]) -> int:
             releases=releases,
             metas=metas,
             repository=arguments.repo,
+            published_only=arguments.published_only,
         )
         arguments.output.write_text(
             json.dumps(plan.document(), indent=2, sort_keys=True) + "\n", encoding="utf-8"

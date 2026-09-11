@@ -1,48 +1,52 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``scripts/release.py``: what it changes, and everything it refuses.
+"""The release act, and what a commit can already say about releasing.
 
-A release script is judged by its refusals. Everything it does is
-reversible until the push — but the mistakes it is there to prevent are
-not: a published version is immutable and eternal, so a wrong number or a
-tag that disagrees with the commit becomes permanent the moment the
-package host records it.
+``scripts/release.py`` answers about a *tag*: which of the three lines it
+releases, whether the version it names is the one the commit declares, and
+exactly which files that release publishes. ``scripts/release_readiness.py``
+answers about the *published world* — which versions exist, which satisfy
+what, and which combinations therefore have to be built.
 
-The one that is easy to miss and expensive to hit is the last: the SDK
-archive is named after ``__version__`` *as the tagged commit carries it*,
-never after the tag, so tagging an unbumped commit produces a package
-whose name contradicts the release it hangs on. ``--check-tag`` is that
-check with no dependencies, and CI runs it before building anything.
+Both are judged by their refusals. Everything around a release is
+reversible until the tag is pushed; what the refusals prevent is not, because
+a published version is immutable and eternal. The one that is easy to miss
+and expensive to hit: the archives are named after the version the tagged
+**commit** declares, never after the tag, so tagging an unbumped commit
+would publish bytes under a number that already means something else.
 """
 
 from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts" / "release.py"
+
+
+def load(name: str):
+    """One of ``scripts/`` as a module — that directory is not a package."""
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "scripts" / f"{name}.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    # Registered before executing: a dataclass with a default_factory field
+    # under `from __future__ import annotations` sends dataclasses back
+    # through sys.modules while the module is still being executed.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture(scope="module")
 def release():
-    """``release.py`` as a module — ``scripts/`` is not a package."""
-    spec = importlib.util.spec_from_file_location("release", SCRIPT)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    # Registered before executing: the script's dataclass has a
-    # default_factory field and `from __future__ import annotations`, and
-    # resolving that pair sends dataclasses back through sys.modules.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return load("release")
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -50,241 +54,6 @@ def git(root: Path, *arguments: str) -> str:
         ["git", "-C", str(root), *arguments], capture_output=True, text=True, check=True
     )
     return done.stdout.strip()
-
-
-CHANGELOG = """# Changelog
-
-## [Unreleased]
-
-### Added
-
-- A thing worth releasing.
-
-## [0.0.9] - 2026-01-01
-
-- The one before.
-"""
-
-
-def make_repo(
-    tmp_path: Path, *, version: str = "0.1.0", two_files: bool = False, changelog: bool = True
-) -> Path:
-    """A minimal repository shaped like ours, with an origin to compare against.
-
-    ``changelog=False`` shapes a repository the way ours looks before
-    1.0.0: no ``changelog`` key in ``[tool.mcuhome-release]`` and no
-    ``CHANGELOG.md`` on disk at all.
-    """
-    root = tmp_path / "repo"
-    (root / "pkg").mkdir(parents=True)
-    (root / "pkg" / "__init__.py").write_text(f'"""A package."""\n\n__version__ = "{version}"\n')
-    files = ["pkg/__init__.py"] + (["pyproject.toml"] if two_files else [])
-    project = "[project]\nname = 'x'\n"
-    if two_files:
-        project += f'version = "{version}"\n'
-    project += (
-        "\n[tool.mcuhome-release]\n"
-        f"version_files = {files!r}\n"
-        + ('changelog = "CHANGELOG.md"\n' if changelog else "")
-        + "gates = []\n"
-        'next_steps = ["push {tag}"]\n'
-    )
-    (root / "pyproject.toml").write_text(project)
-    if changelog:
-        (root / "CHANGELOG.md").write_text(CHANGELOG)
-
-    git(root.parent, "init", "--quiet", "--initial-branch=main", str(root))
-    git(root, "config", "user.email", "test@example.org")
-    git(root, "config", "user.name", "Test")
-    git(root, "add", "-A")
-    git(root, "commit", "--quiet", "-m", "initial")
-
-    origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "--quiet", "--bare", str(origin)], check=True)
-    git(root, "remote", "add", "origin", str(origin))
-    git(root, "push", "--quiet", "origin", "main")
-    return root
-
-
-def test_a_release_commits_and_tags_but_never_pushes(release, tmp_path, capsys):
-    root = make_repo(tmp_path)
-    assert release.main(["0.2.0", "--repo", str(root)]) == 0
-
-    assert release.declared_version(root / "pkg" / "__init__.py") == "0.2.0"
-    assert f"## [0.2.0] - {date.today().isoformat()}" in (root / "CHANGELOG.md").read_text()
-    assert git(root, "tag", "--list") == "v0.2.0"
-    assert "chore(release): 0.2.0" in git(root, "log", "-1", "--pretty=%s")
-    assert "Signed-off-by:" in git(root, "log", "-1", "--pretty=%b")
-    # The push is where a release stops being reversible, so it stays a
-    # decision somebody makes.
-    assert git(root, "rev-parse", "origin/main") != git(root, "rev-parse", "HEAD")
-    assert "push v0.2.0" in capsys.readouterr().out
-
-
-def test_the_unreleased_section_keeps_its_place(release, tmp_path):
-    root = make_repo(tmp_path)
-    release.main(["0.2.0", "--repo", str(root)])
-    text = (root / "CHANGELOG.md").read_text()
-    assert text.index("## [Unreleased]") < text.index("## [0.2.0]") < text.index("## [0.0.9]")
-    assert "A thing worth releasing." in text.split("## [0.2.0]")[1]
-    # Emptied, not removed: the next change has somewhere to go.
-    assert text.split("## [Unreleased]")[1].split("## [")[0].strip() == ""
-
-
-def test_a_dry_run_leaves_nothing_behind(release, tmp_path):
-    root = make_repo(tmp_path)
-    before = (root / "pkg" / "__init__.py").read_text()
-    assert release.main(["0.2.0", "--repo", str(root), "--dry-run"]) == 0
-    assert (root / "pkg" / "__init__.py").read_text() == before
-    assert git(root, "tag", "--list") == ""
-    assert git(root, "status", "--porcelain") == ""
-
-
-def test_every_version_file_is_bumped_together(release, tmp_path):
-    root = make_repo(tmp_path, two_files=True)
-    release.main(["0.2.0", "--repo", str(root)])
-    assert release.declared_version(root / "pyproject.toml") == "0.2.0"
-    assert release.declared_version(root / "pkg" / "__init__.py") == "0.2.0"
-
-
-def test_version_files_that_disagree_are_refused(release, tmp_path):
-    root = make_repo(tmp_path, two_files=True)
-    (root / "pyproject.toml").write_text(
-        (root / "pyproject.toml").read_text().replace('version = "0.1.0"', 'version = "0.0.5"', 1)
-    )
-    git(root, "commit", "--quiet", "-am", "drift")
-    git(root, "push", "--quiet", "origin", "main")
-    with pytest.raises(SystemExit, match="they must agree first"):
-        release.main(["0.2.0", "--repo", str(root)])
-
-
-@pytest.mark.parametrize(
-    ("version", "reason"),
-    [("0.0.1", "comes before"), ("nope", "not a PEP 440")],
-)
-def test_a_version_never_moves_backwards(release, tmp_path, version, reason):
-    root = make_repo(tmp_path)
-    with pytest.raises(SystemExit, match=reason):
-        release.main([version, "--repo", str(root)])
-
-
-def test_the_declared_version_may_be_released_as_it_stands(release, tmp_path):
-    """The first release of all: the number exists in the tree, nowhere else.
-
-    Refusing it would make a repository unable to release the version it
-    already declares. What must never happen twice is *publishing* one —
-    the tag check here and the duplicate refusal at the package host.
-    """
-    root = make_repo(tmp_path, version="0.1.0.dev0")
-    assert release.main(["0.1.0.dev0", "--repo", str(root)]) == 0
-    assert git(root, "tag", "--list") == "v0.1.0.dev0"
-    assert "## [0.1.0.dev0] - " in (root / "CHANGELOG.md").read_text()
-
-    git(root, "push", "--quiet", "origin", "main")
-    with pytest.raises(SystemExit, match="never replaced"):
-        release.main(["0.1.0.dev0", "--repo", str(root)])
-
-
-def test_a_dirty_tree_is_refused(release, tmp_path):
-    root = make_repo(tmp_path)
-    (root / "stray.txt").write_text("uncommitted\n")
-    with pytest.raises(SystemExit, match="uncommitted changes"):
-        release.main(["0.2.0", "--repo", str(root)])
-
-
-def test_an_existing_tag_is_refused(release, tmp_path):
-    root = make_repo(tmp_path)
-    git(root, "tag", "v0.2.0")
-    with pytest.raises(SystemExit, match="never replaced"):
-        release.main(["0.2.0", "--repo", str(root)])
-
-
-def test_a_branch_ahead_of_origin_is_refused(release, tmp_path):
-    root = make_repo(tmp_path)
-    (root / "later.txt").write_text("unpushed\n")
-    git(root, "add", "-A")
-    git(root, "commit", "--quiet", "-m", "unpushed")
-    with pytest.raises(SystemExit, match="differ"):
-        release.main(["0.2.0", "--repo", str(root)])
-
-
-def test_an_empty_changelog_section_is_refused(release, tmp_path):
-    root = make_repo(tmp_path)
-    (root / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n## [0.0.9] - 2026-01\n")
-    git(root, "commit", "--quiet", "-am", "empty changelog")
-    git(root, "push", "--quiet", "origin", "main")
-    with pytest.raises(SystemExit, match="Unreleased section is empty"):
-        release.main(["0.2.0", "--repo", str(root)])
-
-
-def test_a_missing_changelog_is_refused(release, tmp_path):
-    """Once a repository names a changelog, the file has to be there.
-
-    What must not happen is a release that writes the version into every
-    source, commits and tags, and only then discovers it has nowhere to
-    record what changed. So the refusal comes before anything is written.
-    """
-    root = make_repo(tmp_path)
-    (root / "CHANGELOG.md").unlink()
-    git(root, "commit", "--quiet", "-am", "no changelog")
-    git(root, "push", "--quiet", "origin", "main")
-    with pytest.raises(SystemExit, match="is missing"):
-        release.main(["0.2.0", "--repo", str(root)])
-
-
-def test_no_changelog_key_releases_without_a_changelog_step(release, tmp_path):
-    """A repository that keeps no changelog at all — several here do not,
-    on purpose, while the format still changes weekly — omits the
-    ``changelog`` key entirely, and the release proceeds with no
-    changelog file read, written or required.
-    """
-    root = make_repo(tmp_path, changelog=False)
-    assert not (root / "CHANGELOG.md").exists()
-
-    assert release.main(["0.2.0", "--repo", str(root)]) == 0
-
-    assert release.declared_version(root / "pkg" / "__init__.py") == "0.2.0"
-    assert not (root / "CHANGELOG.md").exists()
-    assert git(root, "tag", "--list") == "v0.2.0"
-    committed = git(root, "show", "--stat", "--pretty=format:", "HEAD")
-    assert "CHANGELOG.md" not in committed
-
-
-def test_a_failing_gate_stops_the_release(release, tmp_path):
-    root = make_repo(tmp_path)
-    (root / "pyproject.toml").write_text(
-        (root / "pyproject.toml").read_text().replace("gates = []", 'gates = ["false"]')
-    )
-    git(root, "commit", "--quiet", "-am", "add a failing gate")
-    git(root, "push", "--quiet", "origin", "main")
-    with pytest.raises(SystemExit, match="A gate failed"):
-        release.main(["0.2.0", "--repo", str(root)])
-
-
-def test_check_tag_is_the_guard_ci_runs(release, tmp_path, capsys):
-    root = make_repo(tmp_path)
-    assert release.main(["--check-tag", "v0.1.0", "--repo", str(root)]) == 0
-    assert release.main(["--check-tag", "v0.2.0", "--repo", str(root)]) == 1
-    # The reason has to name both numbers: the whole failure mode is that
-    # they silently differ.
-    assert "0.1.0" in capsys.readouterr().err
-
-
-def test_check_tag_needs_no_third_party_import(release):
-    """CI runs it in a job that installs only the compressor."""
-    source = SCRIPT.read_text()
-    top_level = [line for line in source.splitlines() if line.startswith(("import ", "from "))]
-    assert not any("packaging" in line for line in top_level), (
-        "packaging must stay a function-level import so --check-tag runs on a bare python"
-    )
-
-
-def test_this_repository_declares_a_release_block(release):
-    """The config is what makes the script repository-agnostic — ours must exist."""
-    config = release.load_config(REPO_ROOT)
-    assert config.version_files == [REPO_ROOT / "mcuhome" / "model" / "__init__.py"]
-    assert config.tag_prefix == "v"
-    assert config.gates, "a release without gates is not a release"
 
 
 # --------------------------------------------------------------------------
@@ -494,19 +263,49 @@ def test_the_tools_line_is_checked_per_architecture(readiness, declared, tmp_pat
 
 
 def test_with_nothing_published_the_plan_is_one_combination(readiness, declared):
-    """Every line can only be tried against this commit's own next stage."""
+    """Every line can only be tried against this commit's own neighbour."""
     plan = readiness.build_plan(
         revision="HEAD", releases=[], metas=lambda entry: [], repository=REPO_ROOT
     ).document()
     assert [one["id"] for one in plan["combinations"]] == ["checkout"]
     combination = plan["combinations"][0]
+    assert combination["required"] is True
     for stage in ("sdk", "workspace", "tools"):
         assert combination[stage] == {"source": "checkout", "version": declared[stage]}
-        assert plan["catalogue"][stage], f"{stage} has nothing to try"
-        assert all(row["combination"] == "checkout" for row in plan["catalogue"][stage])
-    assert "blocked until a build workspace" in plan["verdicts"]["sdk"]
-    assert "nothing for" in plan["verdicts"]["workspace"]
-    assert "nothing for" in plan["verdicts"]["tools"]
+    # Both directions where both exist, one where only one does.
+    assert set(plan["catalogue"]["sdk"]) == {"down"}
+    assert set(plan["catalogue"]["workspace"]) == {"down", "up"}
+    assert set(plan["catalogue"]["tools"]) == {"up"}
+    for stage, directions in plan["catalogue"].items():
+        for direction, rows in directions.items():
+            assert rows, f"{stage}/{direction} has nothing to try"
+            assert all(row["combination"] == "checkout" for row in rows)
+    assert "blocked until a mcuhome-build-workspace" in plan["verdicts"]["sdk"]["down"]
+    assert "blocked until a mcuhome-build-tools" in plan["verdicts"]["workspace"]["down"]
+    assert "nothing for" in plan["verdicts"]["workspace"]["up"]
+    assert "nothing for" in plan["verdicts"]["tools"]["up"]
+
+
+def test_the_workspace_is_held_against_the_tools_it_requires(readiness, declared):
+    """The blocker this file exists for: the workspace has a "down" half too.
+
+    It is what says which of the three lines has to be released first —
+    with nothing published, the tools are the only line whose release is
+    not blocked on something below it.
+    """
+    plan = readiness.build_plan(
+        revision="HEAD", releases=[], metas=lambda entry: [], repository=REPO_ROOT
+    ).document()
+    down = plan["catalogue"]["workspace"]["down"]
+    assert [row["subject"] for row in down] == [
+        f"mcuhome-build-tools {declared['tools']} (this commit)"
+    ]
+    assert plan["verdicts"]["workspace"]["down"] == (
+        "mcuhome-build-workspace release blocked until a mcuhome-build-tools satisfying "
+        "'~=0.1.0' is published."
+    )
+    # The tools line has no stage below it and therefore no such verdict.
+    assert "down" not in plan["catalogue"]["tools"]
 
 
 def test_a_published_workspace_is_what_an_sdk_release_promises(readiness, declared, tmp_path):
@@ -532,16 +331,15 @@ def test_a_published_workspace_is_what_an_sdk_release_promises(readiness, declar
         metas=readiness.directory_metas(tmp_path),
         repository=REPO_ROOT,
     ).document()
-    rows = plan["catalogue"]["sdk"]
+    rows = plan["catalogue"]["sdk"]["down"]
     subjects = [row["subject"] for row in rows]
     assert "mcuhome-build-workspace 0.1.0" in subjects
     assert "mcuhome-build-workspace 0.1.7" in subjects
     assert "0.1.4" not in " ".join(subjects), "only the ends of the range are promised"
     # The declared workspace version is published here, so it is not tried
     # a second time as "this commit's".
-    tried = {row["combination"] for row in rows}
-    assert len(tried) == 2
-    assert "satisfy" in plan["verdicts"]["sdk"]
+    assert len({row["combination"] for row in rows}) == 2
+    assert "satisfy" in plan["verdicts"]["sdk"]["down"]
 
 
 def test_a_published_sdk_that_accepts_the_workspace_means_a_patch(readiness, declared, tmp_path):
@@ -563,15 +361,15 @@ def test_a_published_sdk_that_accepts_the_workspace_means_a_patch(readiness, dec
         metas=readiness.directory_metas(tmp_path),
         repository=REPO_ROOT,
     ).document()
-    assert plan["verdicts"]["workspace"].startswith("Patch release possible")
-    labels = {one["id"]: one for one in plan["combinations"]}
+    assert plan["verdicts"]["workspace"]["up"].startswith("Patch release possible")
     published = [
         one
-        for one in labels.values()
+        for one in plan["combinations"]
         if one["sdk"] == {"source": "published", "version": "0.1.9", "tag": tag}
     ]
     assert published, "the published SDK has to be tried against this workspace"
     assert published[0]["workspace"]["source"] == "checkout"
+    assert published[0]["required"] is True
 
 
 def test_a_published_sdk_that_refuses_the_workspace_means_a_minor(readiness, tmp_path):
@@ -593,7 +391,207 @@ def test_a_published_sdk_that_refuses_the_workspace_means_a_minor(readiness, tmp
         metas=readiness.directory_metas(tmp_path),
         repository=REPO_ROOT,
     ).document()
-    assert plan["verdicts"]["workspace"].startswith("Minor needed above")
+    assert plan["verdicts"]["workspace"]["up"].startswith("Minor needed above")
+
+
+def full_inventory(root: Path, declared: dict) -> list[dict]:
+    """Four workspaces, two tools packages and two SDKs, all with meta files.
+
+    The shape the catalogue is actually about: ranges with an inside and
+    two ends, one stage that only some of the versions above accept, and a
+    published version of every line — so each of the six halves has
+    something to say.
+    """
+    releases = []
+    for version, requires in (
+        ("0.1.0", "~=0.1.0"),
+        ("0.1.3", "~=0.1.0"),
+        ("0.1.9", "~=0.1.0"),
+        ("0.2.0", "~=0.2.0"),
+    ):
+        tag = f"workspace-v{version}"
+        write_meta(
+            root,
+            tag,
+            "w.tar.zst.meta.json",
+            meta_document(
+                name="mcuhome-build-workspace",
+                version=version,
+                requires={"mcuhome-build-tools": requires},
+            ),
+        )
+        releases.append(release_entry(tag, "w.tar.zst", "w.tar.zst.meta.json"))
+    for version in ("0.1.0", "0.1.5"):
+        tag = f"tools-v{version}"
+        for platform in ("linux-amd64", "linux-arm64"):
+            write_meta(
+                root,
+                tag,
+                f"t_{platform}.tar.zst.meta.json",
+                meta_document(name="mcuhome-build-tools", version=version, architecture=platform),
+            )
+        releases.append(release_entry(tag, "t.tar.zst", "t.tar.zst.meta.json"))
+    for version, requires in (("0.1.9", "~=0.1.0"), ("0.2.0", "~=0.2.0")):
+        tag = f"v{version}"
+        write_meta(
+            root,
+            tag,
+            "sdk.tar.zst.meta.json",
+            meta_document(
+                name="mcuhome-sdk",
+                version=version,
+                requires={"mcuhome-build-workspace": requires},
+            ),
+        )
+        releases.append(release_entry(tag, "sdk.tar.zst", "sdk.tar.zst.meta.json"))
+    return releases
+
+
+def test_the_whole_catalogue_over_a_populated_registry(readiness, declared, tmp_path):
+    """Six halves, each with a published version at both ends of its range."""
+    releases = full_inventory(tmp_path, declared)
+    plan = readiness.build_plan(
+        revision="HEAD",
+        releases=releases,
+        metas=readiness.directory_metas(tmp_path),
+        repository=REPO_ROOT,
+    ).document()
+    catalogue = plan["catalogue"]
+    # The SDK declares ~=0.1.0, so 0.2.0 is outside it and 0.1.0/0.1.9 are
+    # the ends; the declared workspace 0.1.0 is published, so no extra row.
+    assert [row["subject"] for row in catalogue["sdk"]["down"]] == [
+        "mcuhome-build-workspace 0.1.0",
+        "mcuhome-build-workspace 0.1.9",
+    ]
+    # The workspace declares ~=0.1.0 of the tools: both published ones are
+    # inside it, and the declared 0.1.0 is published, so again two rows.
+    assert [row["subject"] for row in catalogue["workspace"]["down"]] == [
+        "mcuhome-build-tools 0.1.0",
+        "mcuhome-build-tools 0.1.5",
+    ]
+    assert (
+        "2 published mcuhome-build-tools release(s) satisfy"
+        in (plan["verdicts"]["workspace"]["down"])
+    )
+    # Looking up: only the SDK at ~=0.1.0 accepts workspace 0.1.0.
+    assert [row["subject"] for row in catalogue["workspace"]["up"]] == [
+        "mcuhome-sdk 0.1.9",
+        f"mcuhome-sdk {declared['sdk']} (this commit)",
+    ]
+    # And only the three workspaces at ~=0.1.0 accept tools 0.1.0.
+    assert [row["subject"] for row in catalogue["tools"]["up"]] == [
+        "mcuhome-build-workspace 0.1.0",
+        "mcuhome-build-workspace 0.1.9",
+        f"mcuhome-build-workspace {declared['workspace']} (this commit)",
+    ]
+    # Every triple the catalogue names holds together, so every row counts.
+    assert all(one["required"] for one in plan["combinations"]), [
+        one for one in plan["combinations"] if not one["required"]
+    ]
+
+
+def test_the_tag_time_rule_drops_this_commit_s_neighbours(readiness, declared, tmp_path):
+    """`--published-only`: at a tag only what is published may decide."""
+    releases = full_inventory(tmp_path, declared)
+    plan = readiness.build_plan(
+        revision="HEAD",
+        releases=releases,
+        metas=readiness.directory_metas(tmp_path),
+        repository=REPO_ROOT,
+        published_only=True,
+    ).document()
+    subjects = [
+        row["subject"]
+        for directions in plan["catalogue"].values()
+        for rows in directions.values()
+        for row in rows
+    ]
+    assert subjects, "the catalogue is not empty just because the checkout is out"
+    assert not any("this commit" in subject for subject in subjects)
+    # Nothing is assembled out of a checkout neighbour either — the stage
+    # under assessment is the only local one.
+    for combination in plan["combinations"]:
+        sources = [combination[stage]["source"] for stage in ("sdk", "workspace", "tools")]
+        assert sources.count("checkout") <= 1, combination
+
+
+def test_at_tag_time_an_unsatisfiable_stage_is_a_row_without_a_build(readiness, declared, tmp_path):
+    """Nothing published to build it with is a verdict, not a crash."""
+    plan = readiness.build_plan(
+        revision="HEAD",
+        releases=[],
+        metas=lambda entry: [],
+        repository=REPO_ROOT,
+        published_only=True,
+    ).document()
+    assert plan["combinations"] == []
+    for directions in plan["catalogue"].values():
+        for rows in directions.values():
+            assert all(row["combination"] is None for row in rows)
+            assert all(row["required"] is False for row in rows)
+
+
+def test_a_chain_that_cannot_resolve_is_reported_and_not_required(readiness, declared, tmp_path):
+    """A combination nothing claims must not fail a job or a firmware leg.
+
+    The published SDK here takes only 0.2.x workspaces, so pairing it with
+    this commit's is a triple whose chain does not hold — worth building to
+    see what a refusal looks like, never worth a red mark.
+    """
+    tag = "v0.3.0"
+    write_meta(
+        tmp_path,
+        tag,
+        "sdk.tar.zst.meta.json",
+        meta_document(
+            name="mcuhome-sdk",
+            version="0.3.0",
+            requires={"mcuhome-build-workspace": "~=0.2.0"},
+        ),
+    )
+    # The workspace's "up" half adds the published SDK only when it accepts
+    # the declared version, so the unresolvable pairing is reached through
+    # the tools line, whose SDK follows from the workspace above it.
+    plan = readiness.build_plan(
+        revision="HEAD",
+        releases=[release_entry(tag, "sdk.tar.zst", "sdk.tar.zst.meta.json")],
+        metas=readiness.directory_metas(tmp_path),
+        repository=REPO_ROOT,
+    ).document()
+    assert all(one["required"] for one in plan["combinations"])
+
+    # Now make it real: a published workspace this commit's SDK does not
+    # accept, tried from the tools line.
+    write_meta(
+        tmp_path,
+        "workspace-v0.9.0",
+        "w.tar.zst.meta.json",
+        meta_document(
+            name="mcuhome-build-workspace",
+            version="0.9.0",
+            requires={"mcuhome-build-tools": "~=0.1.0"},
+        ),
+    )
+    plan = readiness.build_plan(
+        revision="HEAD",
+        releases=[
+            release_entry(tag, "sdk.tar.zst", "sdk.tar.zst.meta.json"),
+            release_entry("workspace-v0.9.0", "w.tar.zst", "w.tar.zst.meta.json"),
+        ],
+        metas=readiness.directory_metas(tmp_path),
+        repository=REPO_ROOT,
+    ).document()
+    unresolvable = [one for one in plan["combinations"] if not one["required"]]
+    assert unresolvable, "the tools line pairs 0.9.0 with an SDK that refuses it"
+    assert "requires" in unresolvable[0]["reason"]
+    assert "not required to work" in unresolvable[0]["reason"]
+    rows = [
+        row
+        for row in plan["catalogue"]["tools"]["up"]
+        if row["combination"] == unresolvable[0]["id"]
+    ]
+    assert rows and rows[0]["required"] is False
+    assert "requires" in rows[0]["note"]
 
 
 def test_a_host_prefixed_requirement_is_still_a_requirement(readiness):
@@ -690,3 +688,217 @@ def test_a_checksum_that_disagrees_is_refused(readiness, tmp_path):
     with pytest.raises(SystemExit) as refusal:
         readiness.write_index(tmp_path)
     assert "b" * 64 in str(refusal.value)
+
+
+# --------------------------------------------------------------------------
+# scripts/release.py: the release act
+# --------------------------------------------------------------------------
+#
+# What a tag is about, what it has to pass, and what it publishes. The
+# questions here are asked before anything is built, which is the only time
+# their answers are still cheap.
+
+
+def test_each_prefix_names_its_line(release):
+    assert release.line_of("v0.1.10.dev3") == ("sdk", "0.1.10.dev3")
+    assert release.line_of("workspace-v0.1.0") == ("workspace", "0.1.0")
+    assert release.line_of("tools-v0.2.1") == ("tools", "0.2.1")
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "something-else",  # not a release of this repository at all
+        "vnot-a-version",  # the prefix is right and the rest is not a version
+        "v",  # a prefix and nothing else
+        "0.1.0",  # a version without a line
+        "workspace-0.1.0",  # the line without the v
+    ],
+)
+def test_a_tag_that_names_no_line_is_refused(release, tag):
+    with pytest.raises(SystemExit, match="names no release line"):
+        release.line_of(tag)
+
+
+def test_check_tag_accepts_the_version_the_commit_declares(release, declared, capsys):
+    for stage, prefix in (("sdk", "v"), ("workspace", "workspace-v"), ("tools", "tools-v")):
+        tag = f"{prefix}{declared[stage]}"
+        assert release.check_tag(tag=tag, revision="HEAD", repository=REPO_ROOT) == 0
+        printed = capsys.readouterr().out
+        assert f"stage={stage}" in printed
+        assert f"version={declared[stage]}" in printed
+        assert f"tag={tag}" in printed
+
+
+def test_check_tag_refuses_a_version_the_commit_does_not_declare(release, declared):
+    """The expensive mistake: a tag on an unbumped commit."""
+    with pytest.raises(SystemExit) as refused:
+        release.check_tag(tag="workspace-v9.9.9", revision="HEAD", repository=REPO_ROOT)
+    # Both numbers, because the whole failure mode is that they differ
+    # silently.
+    assert "9.9.9" in str(refused.value)
+    assert declared["workspace"] in str(refused.value)
+
+
+def test_check_tag_tells_the_lines_apart(release, declared):
+    """`v<workspace version>` is an SDK tag, and almost certainly a mistake."""
+    with pytest.raises(SystemExit, match="sdk.version"):
+        release.check_tag(tag=f"v{declared['workspace']}", revision="HEAD", repository=REPO_ROOT)
+
+
+def write_package(directory: Path, name: str, *, meta: bool = True, checksum: bool = True) -> None:
+    """An archive and the sidecars a release publishes beside it."""
+    directory.mkdir(parents=True, exist_ok=True)
+    archive = directory / name
+    archive.write_bytes(b"not really an archive")
+    if checksum:
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (directory / f"{name}.sha256").write_text(f"{digest}  {name}\n")
+    if meta:
+        (directory / f"{name}.meta.json").write_text(json.dumps({"schema": 1}))
+
+
+def test_a_release_publishes_the_archive_and_its_two_sidecars(release, tmp_path):
+    write_package(tmp_path, "mcuhome-build-workspace-0.1.0.tar.zst")
+    # index.json belongs to a source and a source is signed at the package
+    # host: it is written by the package build and must not travel.
+    (tmp_path / "index.json").write_text("{}")
+    assets = release.release_assets(tmp_path, stage="workspace", version="0.1.0")
+    assert [path.name for path in assets] == [
+        "mcuhome-build-workspace-0.1.0.tar.zst",
+        "mcuhome-build-workspace-0.1.0.tar.zst.sha256",
+        "mcuhome-build-workspace-0.1.0.tar.zst.meta.json",
+    ]
+
+
+def test_the_tools_line_publishes_both_platforms_on_one_release(release, tmp_path):
+    """The family's meta entry is recorded only once every member exists."""
+    for platform in ("linux-amd64", "linux-arm64"):
+        write_package(tmp_path, f"mcuhome-build-tools_{platform}-0.1.0.tar.zst")
+    assets = release.release_assets(tmp_path, stage="tools", version="0.1.0")
+    assert len(assets) == 6
+    assert sum(path.name.endswith(".meta.json") for path in assets) == 2
+
+
+def test_a_tools_release_missing_an_architecture_is_refused(release, tmp_path):
+    write_package(tmp_path, "mcuhome-build-tools_linux-amd64-0.1.0.tar.zst")
+    with pytest.raises(SystemExit, match="linux-arm64"):
+        release.release_assets(tmp_path, stage="tools", version="0.1.0")
+
+
+@pytest.mark.parametrize("absent", ["meta", "checksum"])
+def test_a_package_without_its_sidecar_is_refused(release, tmp_path, absent):
+    """The package host reads both and refuses a package that has neither."""
+    write_package(
+        tmp_path,
+        "mcuhome-sdk-0.1.0.tar.zst",
+        meta=absent != "meta",
+        checksum=absent != "checksum",
+    )
+    with pytest.raises(SystemExit, match="is missing"):
+        release.release_assets(tmp_path, stage="sdk", version="0.1.0")
+
+
+def test_an_archive_this_tag_is_not_about_is_refused(release, tmp_path):
+    """One tag releases one line — a second archive means something is wrong."""
+    write_package(tmp_path, "mcuhome-build-workspace-0.1.0.tar.zst")
+    write_package(tmp_path, "mcuhome-build-workspace-0.1.0+gate.abc123.tar.zst")
+    with pytest.raises(SystemExit, match=r"does not publish"):
+        release.release_assets(tmp_path, stage="workspace", version="0.1.0")
+
+
+def combination(sdk: str, workspace: str, tools: str) -> dict:
+    return {
+        "id": "combination-1",
+        "sdk": {"source": sdk, "version": "1"},
+        "workspace": {"source": workspace, "version": "1"},
+        "tools": {"source": tools, "version": "1"},
+    }
+
+
+def test_the_package_matrix_builds_what_this_commit_contributes(release):
+    """A published stage is downloaded, not built; a stand-in is built."""
+    matrix = release.gate_packages([combination("published", "release", "published")])
+    assert [entry["stage"] for entry in matrix] == ["workspace"]
+    assert matrix[0]["release"] is True
+    assert matrix[0]["artifact"] == "packages-workspace"
+
+
+def test_the_tools_stage_is_built_for_both_platforms(release):
+    matrix = release.gate_packages([combination("checkout", "published", "release")])
+    tools = [entry for entry in matrix if entry["stage"] == "tools"]
+    assert [entry["platform"] for entry in tools] == ["linux-amd64", "linux-arm64"]
+    assert {entry["runner"] for entry in tools} == {"ubuntu-latest", "ubuntu-24.04-arm"}
+    stand_in = [entry for entry in matrix if entry["stage"] == "sdk"]
+    assert stand_in and stand_in[0]["release"] is False
+
+
+def test_the_released_stage_wins_over_a_stand_in(release):
+    """Two combinations, one of which uses the tagged line as a stand-in."""
+    matrix = release.gate_packages(
+        [
+            combination("published", "release", "published"),
+            combination("checkout", "release", "published"),
+        ]
+    )
+    workspace = [entry for entry in matrix if entry["stage"] == "workspace"]
+    assert len(workspace) == 1 and workspace[0]["release"] is True
+
+
+def summary_text(readiness, *, stage, plan, results) -> tuple[int, str]:
+    """The summary as text and its exit status, without pytest's capture."""
+    out, errors = io.StringIO(), io.StringIO()
+    status = readiness.summarize(stage=stage, plan=plan, results=results, out=out, errors=errors)
+    return status, out.getvalue()
+
+
+def test_a_combination_nobody_claims_does_not_fail_the_job(readiness, tmp_path):
+    """The other half of the rule: a broken chain is reported, never red."""
+    plan = readiness.build_plan(
+        revision="HEAD", releases=[], metas=lambda entry: [], repository=REPO_ROOT
+    ).document()
+    # Made unclaimed, as an unresolvable chain would be.
+    for combination in plan["combinations"]:
+        combination["required"] = False
+    for directions in plan["catalogue"].values():
+        for rows in directions.values():
+            for row in rows:
+                row["required"] = False
+    (tmp_path / "result-checkout-amd64.json").write_text(
+        json.dumps({"combination": "checkout", "architecture": "amd64", "outcome": "failure"})
+    )
+    status, printed = summary_text(readiness, stage="sdk", plan=plan, results=tmp_path)
+    assert status == 0
+    assert "amd64: failure" in printed
+    assert "**Failed:**" not in printed
+
+
+def test_the_summary_shows_both_directions_where_both_exist(readiness):
+    """The workspace is the one line with a stage above it and one below."""
+    plan = readiness.build_plan(
+        revision="HEAD", releases=[], metas=lambda entry: [], repository=REPO_ROOT
+    ).document()
+    status, printed = summary_text(readiness, stage="workspace", plan=plan, results=None)
+    assert status == 0
+    assert "### Against what it requires" in printed
+    assert "### Against what requires it" in printed
+    assert "blocked until a mcuhome-build-tools" in printed
+
+
+def test_the_sdk_summary_has_only_the_downward_half(readiness):
+    """Nothing requires the SDK, so there is no second section to write."""
+    plan = readiness.build_plan(
+        revision="HEAD", releases=[], metas=lambda entry: [], repository=REPO_ROOT
+    ).document()
+    _, printed = summary_text(readiness, stage="sdk", plan=plan, results=None)
+    assert "### Against what it requires" in printed
+    assert "### Against what requires it" not in printed
+
+
+def test_an_archive_without_a_checksum_is_refused(readiness, tmp_path):
+    """A release always publishes one; without it nothing vouches for the bytes."""
+    archive = package_files(tmp_path, name="mcuhome-build-workspace", version="0.1.0")
+    (tmp_path / f"{archive.name}.sha256").unlink()
+    with pytest.raises(SystemExit) as refusal:
+        readiness.write_index(tmp_path)
+    assert "vouched for by nothing" in str(refusal.value)
