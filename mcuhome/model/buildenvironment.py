@@ -171,6 +171,19 @@ _PACKAGE_NAME = re.compile(r"[a-z0-9][a-z0-9-]*(?:_[a-z0-9][a-z0-9-]*)?\Z")
 _VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+!_-]*\Z")
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
 
+#: One PEP 440 comparison, and a set of them separated by commas. Checked
+#: as a **spelling** and never evaluated — this package has no dependencies
+#: by construction, so holding a constraint against a version is the job of
+#: whoever holds ``packaging``.
+_COMPARISON = r"(?:===|==|!=|~=|<=|>=|<|>)\s*[0-9][0-9A-Za-z.*+!_-]*"
+_SPECIFIER_SET = re.compile(rf"{_COMPARISON}(?:\s*,\s*{_COMPARISON})*\Z")
+
+#: What tells a constraint from a version at the start of a member value.
+#: A version begins with an alphanumeric (``_VERSION``) and a comparison
+#: never does, so the first character decides and nothing has to be tried
+#: twice.
+_COMPARISON_START = "=!~<>"
+
 #: The one place a package name is split into family and platform.
 ARCH_SEPARATOR = "_"
 
@@ -189,24 +202,48 @@ def family_of(package: str) -> str:
 class PackageMember:
     """One ``packages.<name>`` member: which package, and which bytes.
 
-    ``sha256`` is ``None`` where the declaring side could not know it —
-    a package's own metadata cannot state its own hash, and a family
-    entry stands for one archive per platform. A *delivery* states it;
-    §5.1 requires that of an image and of every other assembly of exact
-    bytes.
+    A member states one of two things, and which one it may state depends
+    on who is declaring it:
+
+    * **a version**, optionally with the hash of that package's archive.
+      ``sha256`` is ``None`` where the declaring side could not know it —
+      a package's own metadata cannot state its own hash. A *delivery*
+      always states it; §5.1 requires that of an image and of every other
+      assembly of exact bytes, and a delivery always names one platform's
+      package rather than a family.
+    * **a constraint** — a PEP 440 specifier, and only on a *family*
+      member. The tools family is the case it exists for: the sibling
+      platforms' archives may not even be built when the carrier is
+      packed, and, more importantly, which version of them an environment
+      is delivered with is not the carrier's to fix. It accepts a range,
+      the same range its ``meta.json`` requires, and whoever assembles the
+      environment resolves that range to the newest package satisfying it.
+      A member that states a range states no bytes, so it carries no hash.
+
+    Holding a constraint against a version is deliberately **not** done
+    here: this package has no dependencies, so ``constraint`` is checked as
+    a spelling and evaluated by whoever holds ``packaging``.
     """
 
     name: str
-    version: str
+    version: str = ""
     sha256: str | None = None
+    constraint: str = ""
 
     @property
     def concrete(self) -> bool:
         """Whether the name is one platform's package rather than a family."""
         return ARCH_SEPARATOR in self.name
 
+    @property
+    def ranged(self) -> bool:
+        """Whether this member states a range of versions rather than one."""
+        return bool(self.constraint)
+
     def value(self) -> str:
         """The member value, in the one spelling §5.1 defines."""
+        if self.constraint:
+            return self.constraint
         if self.sha256 is None:
             return self.version
         return f"{self.version}@sha256:{self.sha256}"
@@ -216,8 +253,9 @@ def parse_member(name: str, value: object, *, what: str) -> PackageMember:
     """One package member, checked as the spelling §5.1 fixes.
 
     *name* is the package name — the member name with the prefix already
-    removed — and *value* is ``<version>`` or
-    ``<version>@sha256:<64 lowercase hex digits>``.
+    removed — and *value* is ``<version>``,
+    ``<version>@sha256:<64 lowercase hex digits>``, or a PEP 440 specifier
+    such as ``~=0.1.0`` on a family member.
     """
     if _PACKAGE_NAME.fullmatch(name) is None:
         raise BuildError(
@@ -230,8 +268,11 @@ def parse_member(name: str, value: object, *, what: str) -> PackageMember:
     if not isinstance(value, str) or not value:
         raise BuildError(
             f'{what} states no version for "{name}".',
-            hint="a package member is <version> or <version>@sha256:<64 hex digits>",
+            hint="a package member is <version>, <version>@sha256:<64 hex digits>, or a "
+            "PEP 440 constraint like ~=0.1.0",
         )
+    if value[0] in _COMPARISON_START:
+        return _ranged_member(name, value, what=what)
     version, separator, digest = value.partition("@")
     if _VERSION.fullmatch(version) is None:
         raise BuildError(
@@ -246,6 +287,30 @@ def parse_member(name: str, value: object, *, what: str) -> PackageMember:
             hint='the canonical form is "sha256:" followed by 64 lowercase hex digits',
         )
     return PackageMember(name=name, version=version, sha256=digest[7:])
+
+
+def _ranged_member(name: str, value: str, *, what: str) -> PackageMember:
+    """A family member that states a range instead of a version.
+
+    Two refusals, and both are about a statement that would be read as
+    something it is not. A *concrete* package delivers bytes, so a range on
+    one says nothing anybody can act on; and a range is a statement about
+    versions, so it can carry no hash.
+    """
+    if ARCH_SEPARATOR in name:
+        raise BuildError(
+            f'{what} states the range "{value}" for "{name}", which names one platform.',
+            hint=(
+                "a range belongs to a family — the one package name a set resolves "
+                "within; one platform's package is delivered at a version"
+            ),
+        )
+    if _SPECIFIER_SET.fullmatch(value) is None:
+        raise BuildError(
+            f'{what} states "{value}" for "{name}", which is not a version constraint.',
+            hint="a constraint is PEP 440, as in ~=0.1.0 or >=0.1,<0.3",
+        )
+    return PackageMember(name=name, constraint=value)
 
 
 def _members(document: Any, *, what: str) -> dict[str, PackageMember]:

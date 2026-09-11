@@ -54,6 +54,44 @@ def test_parse_member_accepts_a_version_with_a_hash() -> None:
     assert member == PackageMember(name="mcuhome-build-tools", version="0.1.10", sha256=HASH_A)
 
 
+def test_parse_member_accepts_a_range_on_a_family() -> None:
+    """Which version of a family a set resolves to is not the carrier's to fix."""
+    member = parse_member("mcuhome-build-tools", "~=0.1.0", what="test")
+    assert member == PackageMember(name="mcuhome-build-tools", constraint="~=0.1.0")
+    assert member.ranged and not member.version and member.sha256 is None
+    assert member.value() == "~=0.1.0"
+
+
+@pytest.mark.parametrize("value", ["~=0.1.0", ">=0.1,<0.3", "==1.2.*", "!=2.0"])
+def test_parse_member_accepts_the_pep_440_spellings(value: str) -> None:
+    assert parse_member("mcuhome-build-tools", value, what="test").constraint == value
+
+
+def test_parse_member_refuses_a_range_on_one_platforms_package() -> None:
+    """A delivery of exact bytes cannot be a range."""
+    with pytest.raises(BuildError) as caught:
+        parse_member("mcuhome-build-tools_linux-amd64", "~=0.1.0", what="test")
+    assert "names one platform" in str(caught.value)
+
+
+def test_parse_member_refuses_a_range_with_a_hash() -> None:
+    """A range states no bytes, so there is nothing for a hash to pin."""
+    with pytest.raises(BuildError) as caught:
+        parse_member("mcuhome-build-tools", f"~=0.1.0@sha256:{HASH_A}", what="test")
+    assert "not a version constraint" in str(caught.value)
+
+
+@pytest.mark.parametrize("value", ["~=", ">", "<=nope!", "~= 0.1.0 or newer"])
+def test_parse_member_refuses_a_range_that_is_not_a_constraint(value: str) -> None:
+    with pytest.raises(BuildError):
+        parse_member("mcuhome-build-tools", value, what="test")
+
+
+def test_a_version_is_never_read_as_a_range() -> None:
+    """A version begins with an alphanumeric and a comparison never does."""
+    assert not parse_member("mcuhome-build-tools", "0.1.10.dev1", what="test").ranged
+
+
 def test_parse_member_refuses_an_uppercase_hash() -> None:
     """§5.1 fixes lowercase hex; an uppercase digest is a different spelling, not the same bytes."""
     with pytest.raises(BuildError) as caught:

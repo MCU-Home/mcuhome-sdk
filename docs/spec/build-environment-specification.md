@@ -157,7 +157,7 @@ declaration is one JSON object; every member is a string:
 | `zephyr.version` | yes | The Zephyr version your environment builds against, as SemVer 2.0.0 — for example `4.4.0` or `4.5.0-rc.1`. |
 | `build-context.generator-constraint` | yes | Which build contexts you accept. See §9. |
 | `build-context.generator-constraint-mode` | no | `strict` (default) or `chain`. See §9. |
-| `packages.<package name>` | one per package, at least one | One package of the set: its version, and its content hash where the declaring side knows it. See §5.1. |
+| `packages.<package name>` | one per package, at least one | One package of the set: its version and its content hash where the declaring side knows them, or — on a family — the range the set is resolved within. See §5.1. |
 
 ```json
 {
@@ -184,16 +184,26 @@ their label mirrors; names prefixed `x-` are free.
 
 ### 5.1 The package members
 
-A member `packages.<package name>` names exactly one package, and its
-value states that package's version and — where the declaring side knows
-them — its bytes:
+A member `packages.<package name>` names exactly one package or one
+family, and its value states which version, and — where the declaring side
+knows them — which bytes:
 
 ```
 <version>
 <version>@sha256:<64 lowercase hex digits>
+<constraint>
 ```
 
-`<version>` is a PEP 440 version.
+`<version>` is a PEP 440 version; `<constraint>` is a PEP 440 specifier
+set such as `~=1.2.0`. A value beginning with a comparison operator is a
+constraint and never a version, which is unambiguous because a version
+begins with an alphanumeric.
+
+**A constraint may only name a family, and never carries a hash.** It
+states a *range* the set is resolved within rather than one member of it,
+so there are no bytes for it to pin. Which package inside that range an
+environment is delivered with is decided by whoever assembles the
+environment, at the moment it is assembled — see the two rules below.
 
 **The package name.** Lowercase alphanumerics and `-`, optionally followed
 by an architecture suffix introduced by `_`:
@@ -220,16 +230,23 @@ written when the package is built, and two things are then unknowable:
   archive it would be describing, so the hash would have to cover bytes
   that contain it. Its own entry carries the version alone.
 - An architecture-specific package is named by its **family**
-  (`mcuhome-build-tools`), at version level only. Its bytes differ per
-  platform on purpose, the version is what the platforms have in common,
-  and the sibling platforms' archives may not exist yet when the carrier
-  is built.
+  (`mcuhome-build-tools`). Its bytes differ per platform on purpose, and
+  the sibling platforms' archives may not exist yet when the carrier is
+  built.
+- A family member may state a **constraint** instead of a version, and
+  then it states which versions of that family the set may be resolved
+  within. This is what lets the two lines move on their own cadences: a
+  package released inside the declared range reaches an environment
+  without the carrier being republished, and a carrier that named one
+  version would have frozen a choice it has no way to revisit.
 
 **A delivery states the concrete resolved set, hashes and all.** An image
 (§5.2), or any other assembly of exact bytes, knows precisely what it
-unpacked: it **must** carry a hash on every member, it completes the
-carrier's own entry with the hash of the archive it took, and it replaces
-the family entry with the one concrete package it actually contains —
+unpacked: it **must** carry a hash on every member, it **must not** carry
+a constraint — it resolved every range it was given and names the result —
+it completes the carrier's own entry with the hash of the archive it took,
+and it replaces the family entry with the one concrete package it actually
+contains —
 
 ```
 packages.mcuhome-build-workspace   = 2.4.0@sha256:7c31…
@@ -239,8 +256,9 @@ packages.mcuhome-build-tools_linux-amd64 = 1.2.0@sha256:b90a…
 — which is also why an image is per platform while a package set is not.
 
 Whoever matches a set matches what is stated: hashes where they are given,
-name and version otherwise. So the abstract declaration matches every
-delivery of that set, and a concrete one matches only its own bytes.
+a version inside the range where a range is given, name and version
+otherwise. So the abstract declaration matches every delivery of that set,
+and a concrete one matches only its own bytes.
 
 ### 5.2 Container images mirror the declaration
 
