@@ -1,78 +1,70 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-# What a release of this repository produces. Three artifacts a tag
-# builds, and a fourth that is assembled afterwards:
+# The release act of this repository — one workflow, branching on the tag.
 #
-#   package                  — the SDK package, `mcuhome-sdk-<version>`:
-#                              the source a build compiles from.
-#   build-workspace-package  — `mcuhome-build-workspace`: the build
-#                              environment's pinned source world.
-#   build-tools-package      — `mcuhome-build-tools_<os>-<arch>`: the
-#                              build environment's host tools, one
-#                              package per platform.
+# THREE LINES OUT OF ONE HISTORY. The SDK package, the build workspace
+# package and the build tools packages are versioned independently in
+# `packaging/build-environment/environment.json`, and a tag says which of
+# them it releases by its prefix:
 #
-#   build-environment-image and publish-environment-image-index —
-#                              `ghcr.io/mcu-home/build-environment`: the
-#                              two build-environment packages above
-#                              assembled into the container profile's
-#                              image, one manifest per architecture and the
-#                              index over them. On a dispatch only; a tag
-#                              never builds it. Which versions of the two
-#                              it assembles is not the tag's to say: it
-#                              reads the SDK release's
-#                              `build-environment.lock.json` and resolves
-#                              what that names.
+#   v<version>            mcuhome-sdk
+#   workspace-v<version>  mcuhome-build-workspace
+#   tools-v<version>      mcuhome-build-tools_<os>-<arch>, both platforms
 #
-# Together they are the release chain of `docs/design/build-environment.md`
-# section 3. Every package job builds from the tagged *commit* — never a
-# working tree — and attaches the archive and its sidecars to the GitHub
-# release of that tag. The package host (mcu-home/mcuhome-packagetool)
-# then pulls them from here and records them in a signed index; nothing in
-# this repository pushes anywhere, and no cross-repository credential
-# exists. Publication stays one deliberate, manually dispatched act over
-# there.
+# No artifact takes another one's version. A release publishes exactly the
+# line its tag names, and nothing else travels with it.
 #
-# The image is the one artifact that is not built from the commit but from
-# the *published* packages, which is why it has a trigger of its own. It
-# has no push trigger at all: the registry pulls the release assets on the
-# operator's schedule, nothing in here can observe that it happened, and
-# an image assembled from a release asset would pin bytes the registry may
-# not serve. It runs on an explicit dispatch with `image` set, once the
-# packages of that tag are live — and then it builds nothing else, because
-# a package build in the same run could only produce a second copy of
-# bytes the registry has served for a while.
+# WHAT "PUBLISHED" MEANS HERE: a GitHub release of this repository, and
+# nothing else. The package registry is the users' source and is fed by
+# hand by its operator, hours or days after a release — so nothing in this
+# file asks it anything, and every version this workflow resolves comes off
+# this repository's own releases and is handed to the workbench as a local
+# package source. `RELEASING.md` says where the operator's step sits.
 #
-# The four do not share a cadence, which is what the `if:` conditions
-# below say:
+# THE JOBS, in the order a tag walks them:
 #
-# * The SDK package and the workspace package are named after the version
-#   the tagged commit declares, so both belong to every release.
-# * The tools package is not. It carries the toolchain, CMake, Ninja, gn
-#   and the wheel set, it has its own version counter
-#   (`TOOLS_VERSION` in `scripts/build_env_package.py`), and a release
-#   that did not touch any of those would republish gigabytes of
-#   identical binaries — under a version that already names other bytes,
-#   or under a new one that means nothing. It runs when a dispatch asks
-#   for it, which is what "only when the toolchain generation changes"
-#   is in practice.
-# * The image is assembled from what the registry already serves, so it
-#   runs when a dispatch asks for it and never on a tag: at tag time the
-#   packages it needs are not published yet. And because the tools do not
-#   follow the tag, the image run does not either — it takes both
-#   environment versions from the SDK release's environment lock, which is
-#   the one document that ties the two cadences together.
+#   gate-release       which line, which version, and what has to pass:
+#                      the tag against environment.json, then the D10.9
+#                      catalogue against PUBLISHED versions only. A line
+#                      whose own requirement nothing published satisfies is
+#                      blocked here, before anything is built.
+#   build-packages     the tagged line's package(s) at the real version,
+#                      built in the pinned packager from the tagged commit —
+#                      plus, under a local `+gate.<sha>` version, a stand-in
+#                      for any stage that has nothing published yet.
+#   build-firmware     the reference Matter device, once per combination the
+#                      gate named and per architecture, built the way a user
+#                      builds one: `mcuhome device build`, subprocess
+#                      profile, the packages as local sources. Red here and
+#                      nothing is published — that is what `needs:` says.
+#   publish-release    the GitHub release, carrying exactly the archives
+#                      that were tested and their two sidecars.
+#   build-environment-image / publish-environment-image-index
+#                      a workspace release becomes an image: this archive
+#                      plus the newest published tools its meta accepts,
+#                      per architecture, and the index over the two.
+#   verify-release     the same device in the CONTAINER profile against the
+#                      image that was just pushed (by digest), or against
+#                      the published image an SDK release resolves to.
 #
-# Only `package` ever creates the release; the other two package jobs
-# require it to exist and upload into it. Two jobs racing for
-# `gh release create` would otherwise be a coin flip. The image jobs
-# upload nothing to a release — they push to the container registry.
+# TWO DISPATCHES, and they are the only ways to run this by hand.
 #
-# Why zstandard is pinned: two parties building the same tag must reach
-# the same sha256, because that hash is a hashed input of the build
-# context ID. Everything else the scripts do is deterministic by
-# construction; the compressor library is the one residual variable, so
-# it is fixed here and a bump is a deliberate change with a new release.
+#   `rehearse: <tag>`  everything above except publishing: the gate, the
+#                      packages, the firmware. It answers "would this tag
+#                      go through" against any ref, and it creates no
+#                      release, pushes no image and moves nothing.
+#   `workspace_version` + `revision`
+#                      an image revision -r<n> of an already published
+#                      workspace release: a refreshed base, a Dockerfile
+#                      change, or newly published tools that release
+#                      accepts. Assembled from release assets, verified
+#                      like any other image, and it publishes no package.
+#
+# Why zstandard is pinned: two parties building the same tag must reach the
+# same sha256, because that hash is a hashed input of the build context ID.
+# Everything else the scripts do is deterministic by construction; the
+# compressor library is the one residual variable.
 #
 # All actions are pinned to commit SHAs, not tags.
 
@@ -80,342 +72,315 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
+      - "workspace-v*"
+      - "tools-v*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "The tag to package (must exist)"
-        required: true
-      workspace:
-        description: "Also build the build-workspace package"
-        type: boolean
-        default: true
-      tools:
-        description: "Also build the build-tools packages (the toolchain generation changed)"
-        type: boolean
-        default: false
-      image:
-        description: "Instead of the packages: assemble and publish the build-environment image for this tag (its packages must already be published)"
-        type: boolean
-        default: false
-      revision:
-        description: "The image assembly revision, the -r<n> half of its tag (only with `image`)"
+      rehearse:
+        description: "Dry run: the tag to rehearse against this ref (e.g. workspace-v0.1.0). Publishes nothing."
         type: string
-        default: "1"
+        default: ""
+      workspace_version:
+        description: "Image revision: the published build workspace version to assemble again"
+        type: string
+        default: ""
+      revision:
+        description: "Image revision: the -r<n> to publish (with workspace_version; counts from 1)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 env:
   ZSTANDARD_VERSION: "0.25.0"
-  # The one address a client is configured with. Which mirrors exist and
-  # what they serve is discovered from signed documents below it, so no
-  # mirror is named here — the same route `mcuhome-packagetool`'s own
-  # `scripts/test.d/verify-sources` takes, and taken here for the same
-  # reason: a host that is merely discovered can be replaced without a
-  # workflow change, and is never trusted for it.
-  PACKAGE_REGISTRY: "https://packages.mcuhome.org"
 
 jobs:
-  package:
+  # ------------------------------------------------------------------
+  # What this run is about, and whether it may proceed at all.
+  #
+  # Three questions, in the order that makes the cheap refusals cheap:
+  # which of the three ways this run was started, which line the tag names
+  # and whether its version is the one the commit declares, and finally the
+  # catalogue — which (SDK, workspace, tools) combinations have to build
+  # before anything is published.
+  #
+  # The catalogue is `scripts/release_readiness.py`'s, the same one every
+  # push writes, under the rule a tag lives by: only published versions
+  # count. Where the line below the tagged one has nothing published that
+  # satisfies what this one requires, the release is BLOCKED — a package
+  # nobody can resolve a chain through is not a release, and finding that
+  # out after the archives are uploaded is finding it out too late.
+  gate-release:
+    name: Gate (release)
     runs-on: ubuntu-latest
-    # An image dispatch builds no package. The image is assembled from
-    # packages the registry already serves, so a package build in the same
-    # run would rebuild bytes that were published long before — and upload
-    # them over the assets a published index already names. The two
-    # package jobs below repeat this condition rather than inherit it, so
-    # each states its own cadence in full.
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.image }}
-    permissions:
-      contents: write
     outputs:
-      # The one place the tag is resolved. The jobs below take it from
-      # here rather than repeating the dispatch-or-push expression, so
-      # three artifacts of one release cannot end up naming two tags.
-      tag: ${{ steps.build.outputs.tag }}
+      # "tag", "rehearse" or "image" — what this run is.
+      mode: ${{ steps.mode.outputs.mode }}
+      tag: ${{ steps.mode.outputs.tag }}
+      workspace_version: ${{ steps.mode.outputs.workspace_version }}
+      revision: ${{ steps.mode.outputs.revision }}
+      stage: ${{ steps.tag.outputs.stage }}
+      version: ${{ steps.tag.outputs.version }}
+      family: ${{ steps.tag.outputs.family }}
+      packages: ${{ steps.gate.outputs.packages }}
+      combinations: ${{ steps.gate.outputs.combinations }}
+      verify_mode: ${{ steps.gate.outputs.verify_mode || steps.image.outputs.verify_mode }}
+      verify_reason: ${{ steps.gate.outputs.verify_reason || steps.image.outputs.verify_reason }}
+      verify_workspace_version: ${{ steps.gate.outputs.verify_workspace_version }}
+      verify_combinations: ${{ steps.gate.outputs.verify_combinations }}
+      # The tools release an image of this workspace delivers, and the SDK
+      # a verification compiles. Resolved once, here, because both answers
+      # come out of the published world and this is the job that reads it.
+      tools_tag: ${{ steps.gate.outputs.tools_tag || steps.image.outputs.tools_tag }}
+      sdk_tag: ${{ steps.image.outputs.sdk_tag }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # git archive reads the commit, so the tag has to be here.
-          fetch-depth: 0
-          ref: ${{ inputs.tag || github.ref }}
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      - name: The tag must name the version the commit declares
-        # The archive is named after `__version__` as the tagged commit
-        # carries it, never after the tag — so a tag on an unbumped
-        # commit would silently produce a package whose name contradicts
-        # the release it hangs on. Checked before anything is built, and
-        # with no third-party import, so it runs on a bare python.
-        #
-        # It guards the workspace package too, which takes the same
-        # version from the same file; the jobs below need it, `needs:`
-        # this job, and do not repeat it.
-        run: python scripts/release.py --check-tag "${{ inputs.tag || github.ref_name }}"
-
-      - name: Install the pinned compressor
-        run: pip install "zstandard==${ZSTANDARD_VERSION}"
-
-      - name: Build the SDK package
-        id: build
-        run: |
-          set -euo pipefail
-          tag="${{ inputs.tag || github.ref_name }}"
-          python scripts/build_sdk_archive.py --output-dir dist --revision "$tag"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Show what was built
-        run: |
-          ls -l dist/
-          cd dist && sha256sum -c ./*.sha256
-
-      - name: Attach it to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag="${{ steps.build.outputs.tag }}"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes
-          fi
-          # index.json is the host's to write, not ours: it belongs to a
-          # source, and a source is signed. Only the package and its two
-          # sidecars travel — the hash, and the environment lock that says
-          # which build environment this release was built and tested
-          # with. The lock is inside the archive as well; the copy here is
-          # so a mirror can serve it without unpacking anything.
-          gh release upload "$tag" \
-            dist/mcuhome-sdk-*.tar.zst \
-            dist/mcuhome-sdk-*.tar.zst.sha256 \
-            dist/mcuhome-sdk-*.tar.zst.build-environment.lock.json \
-            --clobber
-
-  # --------------------------------------------------------------------
-  # The build environment's source world.
-  # --------------------------------------------------------------------
-  #
-  # Architecture-neutral, and built on one runner for exactly that
-  # reason: what goes in is sources, patches, fetched blobs and generated
-  # code, none of which is a host binary. `scripts/build_env_package.py`
-  # does the work; this job supplies what the script cannot bring itself —
-  # a checkout of the tag, a compressor, disk, and the pinned packager
-  # image the workspace is laid out inside.
-  #
-  # It runs the full materialization: `west update` over the manifest, the
-  # tag refs fetched back, `patches/` applied, `west blobs fetch`, the
-  # workspace record, and the Matter pre-generation. The materialization
-  # wants the network, which a runner has; the pre-generation deliberately
-  # does not get it, and proves with every release that the generated code
-  # in the package was produced offline.
-  #
-  # No byte-identity check here, unlike the tools job below. A second full
-  # materialization is a second set of clones, and what a remote decides
-  # per clone (pack file names, and the stat data in `.git/index`) is not
-  # a property of this repository's revision. The published archive's
-  # hash in the signed index is the identity anchor for this package; the
-  # packer's determinism is proven by `tests/python/test_env_package.py`,
-  # which packs one tree twice.
-  build-workspace-package:
-    name: Build (workspace package)
-    needs: package
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.workspace && !inputs.image) }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      # Pull only — the packager image is published by ci-build.yml.
-      packages: read
-    env:
-      # Empty on purpose, and not pointless: `build_env_package.py` takes
-      # the archive's single mtime from SOURCE_DATE_EPOCH when it is set
-      # and from the packaged commit's own committer date when it is not.
-      # The commit is what should decide it, so nothing a runner image
-      # happens to export may reach the script.
-      SOURCE_DATE_EPOCH: ""
-    steps:
+      # The tagged commit, and its tags: the gate reads environment.json
+      # out of the commit, never out of a working tree.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # `git archive` reads the commit, so the tag has to be here.
           fetch-depth: 0
-          ref: ${{ needs.package.outputs.tag }}
+
+      # Which of the three ways this run was started, decided once. The two
+      # dispatch forms are mutually exclusive: one rehearses a tag and
+      # builds, the other assembles an image from what is already published,
+      # and a run that tried to be both would be a run nobody can read.
+      - name: What kind of run is this
+        id: mode
+        env:
+          REHEARSE: ${{ inputs.rehearse }}
+          WORKSPACE_VERSION: ${{ inputs.workspace_version }}
+          REVISION: ${{ inputs.revision }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            { echo "mode=tag"; echo "tag=$REF_NAME"; } >> "$GITHUB_OUTPUT"
+            echo "::notice::releasing $REF_NAME"
+            exit 0
+          fi
+          if [ -n "$REHEARSE" ] && [ -n "$WORKSPACE_VERSION" ]; then
+            echo "::error::this dispatch asks for both a rehearsal of $REHEARSE and an image revision of $WORKSPACE_VERSION. They are different runs: rehearse a tag, or assemble an image — one per dispatch." >&2
+            exit 1
+          fi
+          if [ -n "$REHEARSE" ]; then
+            { echo "mode=rehearse"; echo "tag=$REHEARSE"; } >> "$GITHUB_OUTPUT"
+            echo "::notice::rehearsing $REHEARSE against $REF_NAME — nothing will be published"
+            exit 0
+          fi
+          if [ -z "$WORKSPACE_VERSION" ]; then
+            echo "::error::this dispatch says nothing. Set 'rehearse' to a tag to try a release without publishing, or 'workspace_version' and 'revision' to assemble another image from a published build workspace release." >&2
+            exit 1
+          fi
+          case "$REVISION" in
+            ''|*[!0-9]*)
+              echo "::error::the image revision is '$REVISION', and it counts assemblies from 1." >&2
+              exit 1 ;;
+          esac
+          if [ "$REVISION" -lt 1 ]; then
+            echo "::error::the image revision is $REVISION, and it counts assemblies from 1." >&2
+            exit 1
+          fi
+          {
+            echo "mode=image"
+            echo "workspace_version=$WORKSPACE_VERSION"
+            echo "revision=$REVISION"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::assembling build-environment:$WORKSPACE_VERSION-r$REVISION"
 
       - name: Set up Python
+        if: steps.mode.outputs.mode != 'image'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      - name: Install the pinned compressor
-        run: pip install "zstandard==${ZSTANDARD_VERSION}"
+      - name: Install what the gate reads versions with
+        if: steps.mode.outputs.mode != 'image'
+        run: python -m pip install --disable-pip-version-check packaging
 
-      # The workspace, the packager image and the archive are on this
-      # disk at the same time and each of them is gigabytes. Free what
-      # nothing here uses, and print the result — `rm -rf` on an absent
-      # path is not an error, so the same list serves any runner image.
-      - name: Make room, and say how much there is
+      # The cheapest refusal there is, and the most expensive one to miss:
+      # the archives are named after the version the COMMIT declares, never
+      # after the tag, so a tag on an unbumped commit would publish bytes
+      # under a number that already means something else. A published
+      # version is immutable and eternal.
+      - name: The tag names the version this commit declares
+        id: tag
+        if: steps.mode.outputs.mode != 'image'
+        env:
+          TAG: ${{ steps.mode.outputs.tag }}
         run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-          df -h /
+          set -o pipefail
+          python scripts/release.py check-tag "$TAG" | tee -a "$GITHUB_OUTPUT"
 
-      # One module names the packager image, and this is it being asked.
-      # It answers with the digest, never with the tag: a package laid out
-      # by "whatever that tag points at today" is a package nobody can
-      # reproduce. The checkout is this job's working directory, so the
-      # import resolves against it.
-      - name: Resolve the packager image reference
-        id: image
-        run: |
-          python3 - >> "$GITHUB_OUTPUT" <<'PY'
-          import sys
-
-          sys.path.insert(0, "scripts")
-          from packager_image import reference
-
-          print(f"reference={reference()}")
-          PY
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Pulled, never built as a fallback: an image that is not published
-      # is one nobody else can reproduce this package with, and a release
-      # artifact laid out by it would be a package whose provenance stops
-      # at this runner. A missing packager means it has not been published
-      # yet, and that is a release blocker, not something to paper over.
-      - name: Pull the pinned packager image
-        run: |
-          set -euo pipefail
-          reference='${{ steps.image.outputs.reference }}'
-          docker pull --quiet "$reference" || {
-            echo "::error::$reference is not published — run the Build workflow on main first" >&2
-            exit 1
-          }
-
-      - name: Build the workspace package
-        run: |
-          set -euo pipefail
-          python scripts/build_env_package.py workspace \
-            --output-dir dist \
-            --work-dir "$RUNNER_TEMP/env-work" \
-            --revision "${{ needs.package.outputs.tag }}"
-          df -h /
-
-      - name: Show what was built
-        run: |
-          set -euo pipefail
-          ls -l dist/
-          cat dist/*.build-environment.json
-          cd dist && sha256sum -c ./*.sha256
-
-      # GitHub's documented ceiling for one release asset is 2 GiB, and it
-      # does not refuse a larger one legibly — reported failures range
-      # from a bare HTTP 500 to an empty asset. This package is the one
-      # that can grow into that wall, so the wall is named here rather
-      # than discovered on a release evening.
-      - name: The archive has to fit a release asset
-        run: |
-          set -euo pipefail
-          limit=$((2 * 1024 * 1024 * 1024))
-          for archive in dist/*.tar.zst; do
-            size="$(stat -c%s "$archive")"
-            echo "$(basename "$archive")  $size bytes"
-            test "$size" -lt "$limit" || {
-              echo "::error::$(basename "$archive") is $size bytes and a GitHub release asset has to stay below 2 GiB — this package needs a carrier the release page is not" >&2
-              exit 1
-            }
-          done
-
-      - name: Attach it to the release
+      - name: What this release has to pass
+        id: gate
+        if: steps.mode.outputs.mode != 'image'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.mode.outputs.tag }}
         run: |
           set -euo pipefail
-          tag='${{ needs.package.outputs.tag }}'
-          # `package` creates the release; this job only ever uploads
-          # into it, so the two cannot race for it.
-          gh release view "$tag" >/dev/null
-          # index.json stays here: it belongs to a source, and a source
-          # is signed by the package host. The archive, the checksum
-          # sidecar and the declaration beside it are what travel — the
-          # declaration because a provisioner reads it before it unpacks
-          # anything.
-          gh release upload "$tag" \
-            dist/mcuhome-build-workspace-*.tar.zst \
-            dist/mcuhome-build-workspace-*.tar.zst.sha256 \
-            dist/mcuhome-build-workspace-*.tar.zst.build-environment.json \
-            --clobber
+          python scripts/release.py \
+            --repository-slug "$GITHUB_REPOSITORY" gate "$TAG" --output gate.json
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json
 
-  # --------------------------------------------------------------------
-  # The build environment's host tools, per platform.
-  # --------------------------------------------------------------------
+          plan = json.load(open("gate.json"))
+          verify = plan.get("verify", {})
+          for key, value in (
+              ("packages", plan.get("packages", [])),
+              ("combinations", plan.get("combinations", [])),
+              # Never empty: a matrix cannot expand an empty list, and the
+              # job that consumes this is turned off by verify_mode.
+              ("verify_combinations", [
+                  one for one in plan.get("combinations", [])
+                  if one["id"] == verify.get("combination")
+              ] or plan.get("combinations", [])[-1:]),
+          ):
+              print(f"{key}<<PLAN_EOF")
+              print(json.dumps(value))
+              print("PLAN_EOF")
+          # Every combination of one gate resolves the same tools package;
+          # it is what an image of this release would deliver.
+          tools = {
+              one["tools"].get("tag")
+              for one in plan.get("combinations", [])
+              if one["tools"]["source"] == "published"
+          }
+          print(f"tools_tag={tools.pop() if len(tools) == 1 else ''}")
+          print(f"verify_mode={verify.get('mode', 'skip')}")
+          print(f"verify_reason={verify.get('reason', '')}")
+          print(f"verify_workspace_version={verify.get('workspace_version', '')}")
+          PY
+
+      - name: Say what it demands
+        if: steps.mode.outputs.mode != 'image'
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          set -euo pipefail
+          python3 - >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json
+          import os
+
+          plan = json.load(open("gate.json"))
+          released = plan["release"]
+          labels = {one["id"]: one["label"] for one in plan["combinations"]}
+          rehearsal = os.environ["MODE"] == "rehearse"
+          print(f"## {'Rehearsing' if rehearsal else 'Releasing'} {released['tag']}")
+          print()
+          print(plan["verdicts"][released["stage"]])
+          print()
+          print("| tried against | combination | note |")
+          print("|---|---|---|")
+          for row in plan["catalogue"][released["stage"]]:
+              combination = labels.get(row["combination"], row["combination"])
+              print(f"| {row['subject']} | {combination} | {row['note'] or ''} |")
+          print()
+          if rehearsal:
+              print("Nothing is published by a rehearsal.")
+          PY
+
+      # An image revision names a published workspace release and nothing
+      # else. What it delivers, and what a verification afterwards compiles,
+      # both follow from that release's own meta file.
+      - name: What this revision assembles
+        id: image
+        if: steps.mode.outputs.mode == 'image'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKSPACE_VERSION: ${{ steps.mode.outputs.workspace_version }}
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check packaging
+          python scripts/release.py --repository-slug "$GITHUB_REPOSITORY" \
+            image-packages --workspace-version "$WORKSPACE_VERSION" > resolved.txt
+          tee -a "$GITHUB_OUTPUT" < resolved.txt
+          # An image can be assembled without an SDK; verifying it cannot —
+          # the reference device is compiled FROM an SDK package, and a
+          # workspace release no published SDK accepts has none to compile.
+          if grep -q '^sdk_tag=.' resolved.txt; then
+            echo "verify_mode=pushed-image" >> "$GITHUB_OUTPUT"
+          else
+            echo "verify_mode=skip" >> "$GITHUB_OUTPUT"
+            echo "verify_reason=no published mcuhome-sdk accepts build workspace ${WORKSPACE_VERSION}, so there is no SDK package to build the reference device from" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Keep the gate
+        if: steps.mode.outputs.mode != 'image'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-gate
+          path: gate.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # ------------------------------------------------------------------
+  # The packages this run builds.
   #
-  # One package per architecture, each built on a runner of that
-  # architecture. Natively, and it could not be otherwise: the package is
-  # host binaries — the Zephyr SDK toolchain, CMake, Ninja, gn — plus a
-  # wheel set whose compiled members are built by the pinned container's
-  # interpreter for the machine it runs on. A Home Assistant box is an
-  # arm64 machine, so an amd64-only tools package is one no HA user could
-  # ever provision from.
+  # The tagged line's own, at the version the tag names and with NO local
+  # suffix: those are the bytes `publish-release` uploads, and they are the
+  # bytes the firmware below is built with — the same file, not a second
+  # build of the same inputs.
   #
-  # This is where the determinism check lives. The tools package is built
-  # out of hash-pinned downloads and one wheel build, with no clone in
-  # sight, so two builds of it on one runner must produce one file — and
-  # if they ever stop doing so, this is the job that says which
-  # architecture and which release it started at.
-  build-tools-package:
-    name: Build (tools package)
-    needs: package
-    if: ${{ inputs.tools && !inputs.image }}
+  # Plus a stand-in for any line that has nothing published to fill its
+  # place, under a `+gate.<sha>` local version. A local version is the one
+  # shape a package host refuses to publish, so a stand-in can never be
+  # mistaken for a release, and `publish-release` names its assets
+  # explicitly rather than uploading whatever it finds.
+  #
+  # The matrix comes from the gate, because which stages need building is a
+  # property of the published world and not of this file.
+  build-packages:
+    name: Build (${{ matrix.stage }} package${{ matrix.platform && format(', {0}', matrix.platform) || '' }})
+    needs: gate-release
+    if: needs.gate-release.outputs.mode != 'image'
     runs-on: ${{ matrix.runner }}
-    strategy:
-      # Both architectures are reported even when one fails: "arm64 broke"
-      # and "the tools package broke" are different news.
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            # Free for public repositories, and native — an emulated
-            # wheel build would be hours and would still be the right
-            # bytes for the wrong reason.
-            runner: ubuntu-24.04-arm
     permissions:
-      contents: write
+      contents: read
       # Pull only — the packager image is published by ci-build.yml.
       packages: read
+    strategy:
+      # A broken workspace package and a broken tools package are different
+      # news, and one cancelling the other would hide the second.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.gate-release.outputs.packages) }}
     env:
-      # See the workspace job: the packaged commit decides the mtime, not
-      # the runner image.
+      # Empty on purpose, and not pointless: the package scripts take the
+      # archive's single mtime from SOURCE_DATE_EPOCH when it is set and
+      # from the packaged commit's own committer date when it is not. The
+      # commit is what should decide it, so nothing a runner image happens
+      # to export may reach the script.
       SOURCE_DATE_EPOCH: ""
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # `git archive` reads the commit, so the tag has to be here.
+          # The package scripts read the commit, so its history has to be here.
           fetch-depth: 0
-          ref: ${{ needs.package.outputs.tag }}
 
       # A matrix entry is a label, and a label is a promise somebody else
-      # keeps. This package is named after an architecture and filled with
-      # binaries for one; built on the wrong runner it would be a file
+      # keeps. The tools package is named after an architecture and filled
+      # with binaries for one; built on the wrong runner it would be a file
       # whose name lies, and nothing downstream could tell.
       - name: The runner is the architecture the matrix claims
+        if: matrix.platform != ''
+        env:
+          PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           case "$(uname -m)" in
-            x86_64) actual=amd64 ;;
-            aarch64) actual=arm64 ;;
+            x86_64) actual=linux-amd64 ;;
+            aarch64) actual=linux-arm64 ;;
             *) actual="$(uname -m)" ;;
           esac
-          test "$actual" = '${{ matrix.arch }}' || {
-            echo "this runner is $actual, not ${{ matrix.arch }}" >&2
+          test "$actual" = "$PLATFORM" || {
+            echo "::error::this runner is $actual, not $PLATFORM" >&2
             exit 1
           }
 
@@ -425,13 +390,14 @@ jobs:
           python-version: "3.13"
 
       - name: Install the pinned compressor
-        run: pip install "zstandard==${ZSTANDARD_VERSION}"
+        run: python -m pip install --disable-pip-version-check "zstandard==${ZSTANDARD_VERSION}"
 
       # The package refuses to be built when one of its binaries needs a
-      # newer glibc than the host baseline — but only where objdump
-      # exists, and it skips with a notice where it does not. A release
-      # artifact must not be the one that skipped it.
+      # newer glibc than the host baseline — but only where objdump exists,
+      # and it skips with a notice where it does not. A release artifact
+      # must not be the one that skipped it.
       - name: objdump must be here, or the host baseline is not checked
+        if: matrix.stage == 'tools'
         run: |
           set -euo pipefail
           command -v objdump || {
@@ -439,12 +405,22 @@ jobs:
             exit 1
           }
 
+      # The workspace, the packager image and the archive are on this disk
+      # at the same time and each of them is gigabytes. `rm -rf` on an
+      # absent path is not an error, so the same list serves any runner
+      # image.
       - name: Make room, and say how much there is
+        if: matrix.stage != 'sdk'
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
 
+      # One module names the packager image, and this is it being asked. It
+      # answers with the digest, never with the tag: a package laid out by
+      # "whatever that tag points at today" is a package nobody can
+      # reproduce.
       - name: Resolve the packager image reference
+        if: matrix.stage != 'sdk'
         id: image
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
@@ -457,16 +433,19 @@ jobs:
           PY
 
       - name: Log in to ghcr.io
+        if: matrix.stage != 'sdk'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Same rule as the workspace job: pulled, never built here. The
-      # wheel set's ABI is the pinned image's interpreter, so an image
-      # built on this runner would decide it locally.
+      # Pulled, never built as a fallback: an image that is not published is
+      # one nobody else can reproduce this package with, and a release
+      # artifact laid out by it would be a package whose provenance stops at
+      # this runner.
       - name: Pull the pinned packager image
+        if: matrix.stage != 'sdk'
         run: |
           set -euo pipefail
           reference='${{ steps.image.outputs.reference }}'
@@ -475,65 +454,51 @@ jobs:
             exit 1
           }
 
-      - name: Build the tools package
+      # The released line gets the version environment.json declares and
+      # nothing appended; a stand-in gets a local segment, which is exactly
+      # the shape a package host will not publish.
+      - name: Build the package
+        env:
+          STAGE: ${{ matrix.stage }}
+          PLATFORM: ${{ matrix.platform }}
+          RELEASED: ${{ matrix.release }}
         run: |
           set -euo pipefail
-          python scripts/build_env_package.py tools \
-            --output-dir dist \
-            --work-dir "$RUNNER_TEMP/env-work" \
-            --arch '${{ matrix.arch }}' \
-            --revision "${{ needs.package.outputs.tag }}"
+          suffix=()
+          if [ "$RELEASED" != "true" ]; then
+            suffix=(--version-suffix "gate.$(git rev-parse --short HEAD)")
+          fi
+          case "$STAGE" in
+            sdk)
+              python scripts/build_sdk_archive.py \
+                --output-dir dist --revision HEAD "${suffix[@]}"
+              ;;
+            workspace)
+              python scripts/build_env_package.py workspace \
+                --output-dir dist --work-dir "$RUNNER_TEMP/package-work" "${suffix[@]}"
+              ;;
+            tools)
+              python scripts/build_env_package.py tools \
+                --output-dir dist --work-dir "$RUNNER_TEMP/package-work" \
+                --os "${PLATFORM%%-*}" --arch "${PLATFORM##*-}" "${suffix[@]}"
+              ;;
+          esac
           df -h /
-
-      # The same package again, into a second directory. The work
-      # directory is shared on purpose: the package tree is deleted and
-      # rebuilt inside it, while the downloads stay — they are verified
-      # against their pinned hashes on every use, so re-fetching a
-      # gigabyte to compare it with itself would prove nothing.
-      - name: Build it a second time
-        run: |
-          set -euo pipefail
-          python scripts/build_env_package.py tools \
-            --output-dir dist-again \
-            --work-dir "$RUNNER_TEMP/env-work" \
-            --arch '${{ matrix.arch }}' \
-            --revision "${{ needs.package.outputs.tag }}"
-          df -h /
-
-      # What "deterministic" means for this package, checked rather than
-      # asserted. Same runner, same revision, same bytes — a difference
-      # here is a defect in the package build, and finding it in CI is the
-      # difference between a bad release and a bad release nobody noticed.
-      - name: Two builds, one digest
-        run: |
-          set -euo pipefail
-          set -- dist/mcuhome-build-tools_*.tar.zst
-          test "$#" -eq 1 && test -f "$1" || {
-            echo "expected exactly one archive in dist/, found: $*" >&2
-            exit 1
-          }
-          name="$(basename "$1")"
-          first="$(sha256sum "dist/$name" | cut -d' ' -f1)"
-          second="$(sha256sum "dist-again/$name" | cut -d' ' -f1)"
-          echo "first   $first"
-          echo "second  $second"
-          test "$first" = "$second" || {
-            echo "::error::two builds of $name on this runner produced different bytes" >&2
-            exit 1
-          }
-          # The comparison is done and the disk is wanted for the upload.
-          rm -rf dist-again "$RUNNER_TEMP/env-work"
 
       - name: Show what was built
         run: |
           set -euo pipefail
           ls -l dist/
-          cd dist && sha256sum -c ./*.sha256
+          cat dist/*.meta.json
+          (cd dist && sha256sum -c ./*.sha256)
 
-      # The same 2 GiB ceiling the workspace job explains. Far away for a
-      # toolchain and a wheel set, checked anyway: the two packages should
-      # fail the same way when they fail.
+      # GitHub's documented ceiling for one release asset is 2 GiB, and it
+      # does not refuse a larger one legibly — reported failures range from
+      # a bare HTTP 500 to an empty asset. The workspace package is the one
+      # that can grow into that wall, so the wall is named here rather than
+      # discovered on a release evening.
       - name: The archive has to fit a release asset
+        if: matrix.release == true
         run: |
           set -euo pipefail
           limit=$((2 * 1024 * 1024 * 1024))
@@ -546,80 +511,425 @@ jobs:
             }
           done
 
-      - name: Attach it to the release
+      # The archive, its checksum, its meta file and the index together: the
+      # downloaded artifact is then already a package source directory the
+      # workbench can be pointed at, rather than four things to reassemble.
+      - name: Upload the package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 30
+
+  # ------------------------------------------------------------------
+  # The gate's firmware builds: the reference Matter device, once per
+  # combination and architecture, built the way a user builds one.
+  #
+  # This is the same walk `ci-build.yml`'s build-firmware does per commit —
+  # `mcuhome device build`, the subprocess profile, the packages as local
+  # sources — with one difference that is the point of a tag: the packages
+  # are the ones that will be published, and the versions around them are
+  # published releases rather than this commit's.
+  #
+  # A red leg here publishes nothing. That is not a policy this job
+  # enforces; it is what `needs:` means.
+  build-firmware:
+    name: Build (firmware, ${{ matrix.combination.id }}, ${{ matrix.target.arch }})
+    needs: [gate-release, build-packages]
+    if: needs.gate-release.outputs.mode != 'image'
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        combination: ${{ fromJSON(needs.gate-release.outputs.combinations) }}
+        # Both architectures, every time. The firmware is the same
+        # cross-compiled ARM binary either way — what differs is the *host*
+        # the toolchain runs on, and that is exactly what a build
+        # environment is.
+        target:
+          - arch: amd64
+            platform: linux-amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux-arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    env:
+      # Pins the host-side ccache directory into the workspace so the cache
+      # action has a path it can name.
+      MCUHOME_CCACHE_DIR: ${{ github.workspace }}/.ccache
+      PLATFORM: ${{ matrix.target.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: mcuhome-sdk
+
+      # The `mcuhome` command is a thin shell in its own repository and this
+      # job needs the command, not just the library. Public siblings, plain
+      # checkouts.
+      - name: Checkout the mcuhome command line
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-cli
+          path: .deps/mcuhome-cli
+
+      - name: Checkout the workbench
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-workbench
+          path: .deps/mcuhome-workbench
+
+      # The workbench depends on the package registry's own reference
+      # verifier, which publishes no distribution — so it is checked out at
+      # the commit the workbench's own CI pins, and nowhere else is that
+      # commit stated.
+      - name: Checkout the package tool
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-packagetool
+          ref: 7ce85fce47b89532dfa1585f0790e0820a1fbc71 # the ref mcuhome-workbench's ci-test.yml pins
+          path: .deps/mcuhome-packagetool
+
+      # 3.13 is not a preference: the tools package ships compiled wheels
+      # built by the packager's interpreter, and the build's virtual
+      # environment is created from them by the interpreter that runs this
+      # job. A different minor would find no candidate for them.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # Editable, and that is not a style preference:
+      # mcuhome.compiler.workspace's installed_module_dir() resolves the
+      # module directory from the package's own location, so a copy in
+      # site-packages would take the Python half of the SDK into the build
+      # and leave the Zephyr module behind.
+      - name: Install the builder and its command line
+        run: |
+          python -m pip install --disable-pip-version-check \
+            -e ./mcuhome-sdk/packaging/model \
+            -e ./.deps/mcuhome-packagetool \
+            -e ./.deps/mcuhome-workbench \
+            -e ./mcuhome-sdk/packaging/compiler \
+            -e ./.deps/mcuhome-cli
+          # A build environment delivers an UNSIGNED image and the host
+          # signs it afterwards — the private key never enters an
+          # environment, so signing is a host duty and imgtool a host tool.
+          python -m pip install --disable-pip-version-check imgtool==2.4.0
+
+      - name: Make room on the runner
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+
+      # One directory per stage, and each holds exactly one version: the
+      # chain then resolves to this combination without anything being
+      # pinned in a device file.
+      - name: Take the SDK package this run built
+        if: matrix.combination.sdk.source != 'published'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: packages-sdk
+          path: sources/sdk
+
+      - name: Take the workspace package this run built
+        if: matrix.combination.workspace.source != 'published'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: packages-workspace
+          path: sources/workspace
+
+      - name: Take the tools package this run built
+        if: matrix.combination.tools.source != 'published'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: packages-tools-${{ matrix.target.platform }}
+          path: sources/tools
+
+      # A published stage comes off its GitHub release — the archive, its
+      # checksum and its meta file — and gets the index.json a release page
+      # does not carry, which is what makes the directory a package source
+      # at all. No registry is asked: it is fed by hand, after this.
+      - name: Take the published packages this combination names
         env:
           GH_TOKEN: ${{ github.token }}
+          SDK_TAG: ${{ matrix.combination.sdk.source == 'published' && matrix.combination.sdk.tag || '' }}
+          WORKSPACE_TAG: ${{ matrix.combination.workspace.source == 'published' && matrix.combination.workspace.tag || '' }}
+          TOOLS_TAG: ${{ matrix.combination.tools.source == 'published' && matrix.combination.tools.tag || '' }}
         run: |
           set -euo pipefail
-          tag='${{ needs.package.outputs.tag }}'
-          # `package` creates the release; this job only ever uploads
-          # into it, so the matrix legs cannot race for it.
-          gh release view "$tag" >/dev/null
-          # index.json stays here, as everywhere in this file: it belongs
-          # to a source, and a source is signed by the package host. The
-          # declaration is the workspace package's to carry — it speaks
-          # for the whole set, and a set that spans architectures needs a
-          # carrier that does not.
-          # One archive per runner and the step above proved there is
-          # exactly one, so the family pattern names this architecture's
-          # package and nothing else. Spelling the architecture out here
-          # would have to repeat the operating system too — the file is
-          # `mcuhome-build-tools_<os>-<arch>-<version>.tar.zst`, and the
-          # script owns that name.
-          gh release upload "$tag" \
-            dist/mcuhome-build-tools_*.tar.zst \
-            dist/mcuhome-build-tools_*.tar.zst.sha256 \
-            --clobber
+          take() {
+            tag="$1"; into="$2"; pattern="$3"
+            [ -n "$tag" ] || return 0
+            mkdir -p "$into"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$pattern" --pattern "$pattern.sha256" \
+              --pattern "$pattern.meta.json" --dir "$into" --clobber
+            python mcuhome-sdk/scripts/release_readiness.py sources "$into"
+          }
+          take "$SDK_TAG" sources/sdk 'mcuhome-sdk-*.tar.zst'
+          take "$WORKSPACE_TAG" sources/workspace 'mcuhome-build-workspace-*.tar.zst'
+          take "$TOOLS_TAG" sources/tools "mcuhome-build-tools_${PLATFORM}-*.tar.zst"
 
-  # --------------------------------------------------------------------
+      - name: Say which packages this leg builds with
+        run: |
+          set -euo pipefail
+          echo "::notice::${{ matrix.combination.label }}"
+          for one in sources/*/index.json; do
+            [ -f "$one" ] || continue
+            echo "--- $one"
+            cat "$one"
+          done
+
+      # Restored, never saved: a tag is rare and the entries this workflow
+      # would write are the same ones `ci-build.yml` writes from main, with
+      # the repository's cache budget spent twice for it.
+      - name: Restore the compiler cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-
+
+      # A project of its own, with the device copied into it: a build writes
+      # a signing key next to the device it signs, and the checkout is not a
+      # place to write one. The key is the throwaway committed in this
+      # repository — signing nothing that leaves a runner, never used for a
+      # release — so that the legs of one run are comparable: MCUboot bakes
+      # the signing *public* key into bootloader.hex, and a key each runner
+      # invented would make that file differ for a reason that says nothing.
+      # Copied out at mode 600 into a directory of its own, because MCUHome
+      # refuses key material other users can read and a checked-out file is
+      # 644 by definition.
+      - name: Make a project for it
+        run: |
+          set -euo pipefail
+          mkdir -p project
+          cd project
+          mcuhome project init
+          mkdir -p devices
+          cp ../mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml devices/
+          install -d -m 700 "$RUNNER_TEMP/signing"
+          install -m 600 ../mcuhome-sdk/.github/workflows/firmware-signing-key.pem \
+            "$RUNNER_TEMP/signing/mcuboot.pem"
+
+      # The documented invocation, and the whole point of this job. A
+      # combination the gate marked as not required is one whose chain does
+      # not hold together — built to see what a broken chain does, never a
+      # reason to stop a release — so only a required leg reddens the run.
+      - name: Build the reference Matter device
+        id: build
+        continue-on-error: ${{ !matrix.combination.required }}
+        working-directory: project
+        run: |
+          set -euo pipefail
+          mcuhome device build devices/00-bmp180-two-endpoints.yaml \
+            --build-dir build/bmp180-node \
+            --signing-key "$RUNNER_TEMP/signing/mcuboot.pem" \
+            --build-target local --build-mode subprocess \
+            --sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
+            --sdk-sources "$GITHUB_WORKSPACE/sources/workspace" \
+            --sdk-sources "$GITHUB_WORKSPACE/sources/tools"
+
+      # A green build that produced nothing is worse than a red one.
+      - name: Check the artifact set
+        id: artifacts
+        if: steps.build.outcome == 'success'
+        continue-on-error: ${{ !matrix.combination.required }}
+        run: python3 mcuhome-sdk/scripts/check_build_artifacts.py project/build/bmp180-node
+
+      - name: What it produced
+        if: steps.build.outcome == 'success'
+        run: |
+          set -euo pipefail
+          cd project/build/bmp180-node
+          sha256sum -- firmware.bin firmware.hex bootloader.hex build-report.json
+
+      - name: A combination that claims to work has to work
+        if: >-
+          matrix.combination.required
+          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success')
+        env:
+          LABEL: ${{ matrix.combination.label }}
+          ARCH: ${{ matrix.target.arch }}
+        run: |
+          echo "::error::$LABEL did not build on $ARCH" >&2
+          exit 1
+
+      - name: A combination that claims nothing is reported, not failed
+        if: >-
+          !matrix.combination.required
+          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success')
+        env:
+          LABEL: ${{ matrix.combination.label }}
+          ARCH: ${{ matrix.target.arch }}
+          REASON: ${{ matrix.combination.reason }}
+        run: |
+          echo "::notice::$LABEL did not build on $ARCH, and nothing claimed it would: $REASON"
+
+  # ------------------------------------------------------------------
+  # The GitHub release, carrying exactly the archives that were tested.
+  #
+  # `needs:` is the gate: the packages and every firmware leg have to have
+  # succeeded, and a rehearsal never gets here at all. The assets are named
+  # by `scripts/release.py assets` rather than globbed — a stand-in package
+  # for another line is in this run's artifacts too, and a release publishes
+  # one line.
+  #
+  # index.json stays here, as it always has: it belongs to a source, and a
+  # source is signed by the package host. What travels is the archive, its
+  # checksum and its meta file — the three files the host's publish
+  # pipeline reads, and it refuses a package that is missing either sidecar.
+  publish-release:
+    name: Publish (release)
+    needs: [gate-release, build-packages, build-firmware]
+    if: needs.gate-release.outputs.mode == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install what the asset list reads versions with
+        run: python -m pip install --disable-pip-version-check packaging
+
+      # Merged into one directory: the tools line has two artifacts, one per
+      # platform, and they are two packages of one release.
+      - name: Take the packages this run built for the tagged line
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: packages-${{ needs.gate-release.outputs.stage }}*
+          path: dist
+          merge-multiple: true
+
+      - name: Exactly these files, and no others
+        id: assets
+        env:
+          STAGE: ${{ needs.gate-release.outputs.stage }}
+          VERSION: ${{ needs.gate-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          python scripts/release.py assets "$STAGE" \
+            --version "$VERSION" --directory dist | tee assets.txt
+          echo "--- what is being published:"
+          while IFS= read -r asset; do
+            case "$asset" in
+              *.tar.zst) sha256sum "$asset" ;;
+            esac
+          done < assets.txt
+
+      # What the release page says about itself: the versions, what this
+      # package requires of the next stage, the hash of the inputs it was
+      # built from, and the hash of every byte that is attached. The meta
+      # files are the source — the same documents the package host records
+      # and a workbench resolves through.
+      - name: Write the release notes
+        env:
+          STAGE: ${{ needs.gate-release.outputs.stage }}
+          VERSION: ${{ needs.gate-release.outputs.version }}
+          TAG: ${{ needs.gate-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 - > notes.md <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          stage = os.environ["STAGE"]
+          version = os.environ["VERSION"]
+          assets = [Path(line) for line in Path("assets.txt").read_text().split()]
+          print(f"Release of the **{stage}** line: {version}.")
+          print()
+          for meta_path in sorted(one for one in assets if one.name.endswith(".meta.json")):
+              meta = json.loads(meta_path.read_text(encoding="utf-8"))
+              package = meta["package"]
+              name = package["name"] + (
+                  f"_{package['architecture']}" if package.get("architecture") else ""
+              )
+              print(f"### {name} {package['version']}")
+              print()
+              requires = meta.get("requires") or {}
+              if requires:
+                  print("Requires, and resolves to the newest published version satisfying it:")
+                  print()
+                  for key, value in sorted(requires.items()):
+                      print(f"- `{key}` `{value}`")
+              else:
+                  print("Requires nothing: this line ends the chain.")
+              print()
+              print(f"Inputs: `{meta['inputs_sha256']}`")
+              print()
+          print("### Assets")
+          print()
+          print("| file | sha256 | bytes |")
+          print("|---|---|---|")
+          for asset in assets:
+              digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+              print(f"| `{asset.name}` | `{digest}` | {asset.stat().st_size} |")
+          print()
+          print(
+              "These are the bytes the release gate built the reference firmware with. "
+              "Publishing them to packages.mcuhome.org is a separate, deliberate act by "
+              "the registry operator; see `RELEASING.md`."
+          )
+          PY
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the release and attach them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.gate-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG already has a release. A version is published once and never replaced — cut the next number." >&2
+            exit 1
+          fi
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md
+          # shellcheck disable=SC2046 # one asset per line, and none has a space in its name
+          gh release upload "$TAG" $(cat assets.txt)
+          gh release view "$TAG" --json assets --jq '.assets[].name'
+
+  # ------------------------------------------------------------------
   # The build environment as a container image, per architecture.
-  # --------------------------------------------------------------------
   #
-  # The container profile of the build environment specification
-  # (`docs/spec/build-environment-specification.md` §2), assembled by
-  # `scripts/build_env_image.py` from the two packages and nothing else.
-  # It is a MULTI-ARCHITECTURE image, for the same reason the tools package
-  # is built twice: a Home Assistant box is an arm64 machine, so an
-  # amd64-only build environment is one no HA user can ever run.
+  # An image is an ASSEMBLY of one build workspace package and the newest
+  # published build tools that package's own meta file accepts — never of
+  # "the tag's version" for both, because the two lines do not share a
+  # cadence. So the workspace archive decides, and it arrives one of two
+  # ways: fresh out of this run for a workspace release, or off its GitHub
+  # release for a revision dispatch. Nothing is fetched from the package
+  # registry: it is fed by hand after a release, and an image that pinned
+  # bytes it had not served would be an image nobody could match.
   #
-  # Four properties, and none of them is optional:
+  # Each architecture on a runner of that architecture, pushed under
+  # `<version>-r<n>-<arch>`; the index over the two follows below under the
+  # plain `<version>-r<n>`, which is what a client resolves.
   #
-  #   1. the packages come from the REGISTRY, not from this repository and
-  #      not from the release page. What an image delivers has to be what
-  #      the signed index names, byte for byte — an image built from a
-  #      release asset would pin a hash no consumer can resolve if the two
-  #      ever drift. And "signed" is meant literally: the served documents
-  #      of every consumed source are verified with the registry's own
-  #      reference verifier against a trust anchor that reaches this job
-  #      out of band, as the organisation variable
-  #      MCUHOME_REGISTRY_ANCHOR. Without that variable the job refuses —
-  #      a publish that quietly skipped verification would be worse than
-  #      one that failed. Each archive is then checked (size and sha256)
-  #      against the index bytes the verifier accepted, off disk, so that
-  #      what was verified and what is used are one document.
-  #   2. WHICH versions those packages are is not the dispatched tag's to
-  #      decide. The tag names an SDK release; the release names its
-  #      environment, in the `build-environment.lock.json` it carries, and
-  #      the tools package is on its own cadence and is regularly older
-  #      than the SDK asking for it. So this job reads that lock out of the
-  #      verified SDK archive and resolves the two versions it states —
-  #      the same document, and the same answer, a workbench provisioning
-  #      that SDK gets.
-  #   3. each architecture is built on a runner of that architecture and
-  #      pushed under its own tag, `<version>-r<n>-<arch>`. That tag names
-  #      exactly these bytes for exactly this architecture, and it is what
-  #      somebody pulls who wants one architecture on purpose.
-  #   4. the index over the two is pushed under the plain `<version>-r<n>`
-  #      by the job below, which is what every client resolves.
-  #
-  # No moving tags. The naming scheme's tag is `<workspace package
-  # version>-r<n>` and convenience tags are a question for the switchover,
-  # not something to invent here — and a tag is a location anyway: an
-  # orchestrator matches this image by its
-  # `org.mcuhome.build-environment.packages.<name>` labels (§5.2).
+  # An existing tag is a REFUSAL, not something to overwrite or skip: the
+  # tag is the content identity and `-r<n>` is the counter that exists for a
+  # second assembly of one package set. A half-published set is repeated
+  # under the next revision.
   build-environment-image:
-    name: Build (build-environment image)
-    if: ${{ inputs.image }}
+    name: Build (build-environment image, ${{ matrix.arch }})
+    needs: [gate-release, publish-release]
+    if: >-
+      always()
+      && needs.gate-release.result == 'success'
+      && (needs.gate-release.outputs.mode == 'image'
+          || (needs.gate-release.outputs.stage == 'workspace'
+              && needs.publish-release.result == 'success'))
     runs-on: ${{ matrix.runner }}
     strategy:
       # Both architectures are reported even when one fails: "arm64 broke"
@@ -628,42 +938,37 @@ jobs:
       matrix:
         include:
           - arch: amd64
+            platform: linux-amd64
             runner: ubuntu-latest
           - arch: arm64
-            # Free for public repositories, and native — a QEMU build of
-            # this image would be hours.
+            platform: linux-arm64
             runner: ubuntu-24.04-arm
     permissions:
       contents: read
       # The package inherits the repository's visibility, which is public.
       packages: write
     outputs:
-      # Both legs compute this from the same two dispatch inputs with the
-      # same code, so the matrix's "last job wins" rule for outputs has
-      # nothing to decide between.
-      reference: ${{ steps.image.outputs.reference }}
+      # Both legs compute this from the same inputs with the same code, so
+      # the matrix's "last job wins" rule has nothing to decide between.
+      reference: ${{ steps.reference.outputs.reference }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The tag's own Dockerfile and assembler, not whatever `main`
-          # carries today: the image is a release artifact of this tag.
-          ref: ${{ inputs.tag }}
+          fetch-depth: 0
 
-      # A matrix entry is a label, and a label is a promise somebody else
-      # keeps. An image built on the wrong runner would be published under
-      # a name that lies, and the index would then serve amd64 bytes to an
-      # arm64 host.
       - name: The runner is the architecture the matrix claims
+        env:
+          PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           case "$(uname -m)" in
-            x86_64) actual=amd64 ;;
-            aarch64) actual=arm64 ;;
+            x86_64) actual=linux-amd64 ;;
+            aarch64) actual=linux-arm64 ;;
             *) actual="$(uname -m)" ;;
           esac
-          test "$actual" = '${{ matrix.arch }}' || {
-            echo "this runner is $actual, not ${{ matrix.arch }}" >&2
+          test "$actual" = "$PLATFORM" || {
+            echo "::error::this runner is $actual, not $PLATFORM" >&2
             exit 1
           }
 
@@ -672,55 +977,93 @@ jobs:
         with:
           python-version: "3.13"
 
-      # Two readers here open an archive to take one document out of it:
-      # the assembler, for each package's own declaration, and the step
-      # below, for the SDK release's environment lock. Both only ever
-      # decompress, so the pin buys consistency rather than reproducible
-      # bytes — but one release should run on one library.
+      # The assembler opens both archives to read each package's own
+      # manifest and the declaration the labels mirror; the resolver below
+      # reads one meta file. Both only ever decompress, so the pin buys
+      # consistency rather than reproducible bytes — but one release should
+      # run on one library.
       - name: Install the pinned compressor
-        run: pip install "zstandard==${ZSTANDARD_VERSION}"
+        run: python -m pip install --disable-pip-version-check "zstandard==${ZSTANDARD_VERSION}" packaging
 
-      # The two package archives, the layers the unpack stage writes and
-      # the finished 4.7 GB image are on this disk at the same time — the
-      # SDK archive beside them is a quarter of a megabyte and changes
-      # nothing. Free what nothing here uses, and print the result —
-      # `rm -rf` on an absent path is not an error, so the same list serves
-      # any runner image.
+      # The two package archives, the layers the unpack stage writes and the
+      # finished image are on this disk at the same time.
       - name: Make room, and say how much there is
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
 
-      # The tag the naming scheme asks for, spelled out in one place: the
-      # image repository comes from the assembler, so the image's name
-      # lives in one file. The version half is the dispatched tag without
-      # its `v` — a *claim* about the packages, which the assembly step
-      # below holds against what the package says about itself.
-      - name: Resolve the image reference
-        id: image
+      - name: Take the workspace package this run built
+        if: needs.gate-release.outputs.mode != 'image'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: packages-workspace
+          path: packages/workspace
+
+      # A revision assembles a workspace release that already exists — a
+      # refreshed base, a changed Dockerfile, or tools that were published
+      # after it. Off the release page, like every other published byte
+      # this workflow reads.
+      - name: Take the published workspace release this revision is about
+        if: needs.gate-release.outputs.mode == 'image'
         env:
-          TAG: ${{ inputs.tag }}
-          REVISION: ${{ inputs.revision }}
+          GH_TOKEN: ${{ github.token }}
+          WORKSPACE_VERSION: ${{ needs.gate-release.outputs.workspace_version }}
         run: |
           set -euo pipefail
-          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          mkdir -p packages/workspace
+          gh release download "workspace-v${WORKSPACE_VERSION}" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'mcuhome-build-workspace-*.tar.zst' \
+            --pattern 'mcuhome-build-workspace-*.tar.zst.sha256' \
+            --pattern 'mcuhome-build-workspace-*.tar.zst.meta.json' \
+            --dir packages/workspace --clobber
+          (cd packages/workspace && sha256sum -c ./*.sha256)
+
+      # WHICH tools this image delivers is the workspace package's to say,
+      # and it said it in its own meta file: a PEP 440 constraint, resolved
+      # by the gate to the newest published version satisfying it — the
+      # same document, and the same answer, a workbench provisioning that
+      # package gets.
+      - name: Take the tools release this workspace accepts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOLS_TAG: ${{ needs.gate-release.outputs.tools_tag }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          test -n "$TOOLS_TAG" || {
+            echo "::error::the gate resolved no build tools release for this workspace package, so there is nothing to assemble an image from" >&2
+            exit 1
+          }
+          mkdir -p packages/tools
+          gh release download "$TOOLS_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "mcuhome-build-tools_${PLATFORM}-*.tar.zst" \
+            --pattern "mcuhome-build-tools_${PLATFORM}-*.tar.zst.sha256" \
+            --dir packages/tools --clobber
+          (cd packages/tools && sha256sum -c ./*.sha256)
+
+      # The tag the naming scheme asks for, spelled out in one place: the
+      # repository comes from the assembler, so the image's name lives in
+      # one file, and the version half comes from the package rather than
+      # from an input — the assembler derives it from the workspace
+      # package's own manifest and the check below holds the two together.
+      - name: Resolve the image reference
+        id: reference
+        env:
+          REVISION: ${{ needs.gate-release.outputs.mode == 'image' && needs.gate-release.outputs.revision || '1' }}
+        run: |
+          set -euo pipefail
+          set -- packages/workspace/*.tar.zst
+          python3 - "$1" >> "$GITHUB_OUTPUT" <<'PY'
           import os
-          import re
           import sys
+          from pathlib import Path
 
           sys.path.insert(0, "scripts")
-          from build_env_image import IMAGE_REPOSITORY
+          from build_env_image import image_reference
 
-          tag = os.environ["TAG"]
-          revision = os.environ["REVISION"]
-          version = tag[1:] if tag.startswith("v") else tag
-          if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version) is None:
-              sys.exit(f"{tag!r} does not name a version a container tag can carry")
-          if not revision.isdigit() or int(revision) < 1:
-              sys.exit(f"the assembly revision is {revision!r}, and it counts assemblies from 1")
-
-          print(f"version={version}")
-          print(f"reference={IMAGE_REPOSITORY}:{version}-r{int(revision)}")
+          revision = int(os.environ["REVISION"])
+          print(f"revision={revision}")
+          print(f"reference={image_reference(Path(sys.argv[1]), revision)}")
           PY
 
       - name: Log in to ghcr.io
@@ -730,511 +1073,57 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The tag IS the content identity, so a tag that already exists is
-      # not something to overwrite: `-r<n>` is the counter that exists for
-      # a second assembly of one package set. Asked with `docker manifest
+      # The tag IS the content identity, so a tag that already exists is not
+      # something to overwrite: `-r<n>` is the counter that exists for a
+      # second assembly of one package set. Asked with `docker manifest
       # inspect` rather than a pull — the answer is a name, and pulling
-      # 4.7 GB to learn that a name is taken is 4.7 GB spent on nothing.
-      #
-      # Skipped rather than refused, because the case is real: one leg of
-      # a dispatch fails, the dispatch is repeated, and the leg that had
-      # already published must not now push different bytes under its tag.
-      - name: Is this architecture already published?
-        id: publish
-        run: |
-          set -euo pipefail
-          arch_reference='${{ steps.image.outputs.reference }}-${{ matrix.arch }}'
-          if docker manifest inspect "$arch_reference" >/dev/null 2>&1; then
-            echo "::notice::$arch_reference is already published — nothing to assemble."
-            echo "needed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "needed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # The trust anchor, and the reason the verification below means
-      # anything at all: an index is trustworthy because a threshold of
-      # the registry's root keys stands behind it, and those keys have to
-      # reach this job from somewhere other than the registry. They arrive
-      # as an organisation variable — public material, deliberately not a
-      # document fetched at verification time, because the anchor says of
-      # itself that "downloading it at verification time is not
-      # verification".
-      #
-      # Unconditional, before anything is downloaded or skipped: a missing
-      # anchor is a misconfiguration, and the cheapest place to learn that
-      # is the top of the job.
-      - name: The registry trust anchor
+      # gigabytes to learn that a name is taken is gigabytes spent on
+      # nothing.
+      - name: This tag must not exist yet
         env:
-          ANCHOR: ${{ vars.MCUHOME_REGISTRY_ANCHOR }}
-        run: |
-          set -euo pipefail
-          test -n "${ANCHOR:-}" || {
-            echo "::error::the organisation variable MCUHOME_REGISTRY_ANCHOR is unset or empty. It carries the registry's trust anchor — the keys and threshold of mcuhome-packagetool's deploy/mcuhome/anchor.json — and without it nothing here can tell a signed index from any other file. Set it under Organisation settings, Actions, Variables, and dispatch again." >&2
-            exit 1
-          }
-          printf '%s' "$ANCHOR" > "$RUNNER_TEMP/registry-anchor.json"
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-          from pathlib import Path
-
-          path = Path(os.environ["RUNNER_TEMP"]) / "registry-anchor.json"
-          try:
-              anchor = json.loads(path.read_text(encoding="utf-8"))
-          except ValueError as unreadable:
-              sys.exit(f"MCUHOME_REGISTRY_ANCHOR is not readable JSON: {unreadable}")
-          if not isinstance(anchor, dict) or not anchor.get("keys") or not anchor.get("threshold"):
-              sys.exit(
-                  "MCUHOME_REGISTRY_ANCHOR is not a trust anchor: an anchor states its root "
-                  "keys and the threshold of them a document needs"
-              )
-          print(f"anchor: {len(anchor['keys'])} root keys, threshold {anchor['threshold']}")
-          PY
-
-      # The registry's own reference verifier, at a commit this repository
-      # pins. Not a branch: `main` over there is somebody else's moving
-      # target, and a verifier that changed under this job would change
-      # what "verified" means with no diff here to show for it. Bumping the
-      # pin is a deliberate act — read that repository's commits, then put
-      # the new SHA in.
-      - name: Check out the reference verifier
-        if: steps.publish.outputs.needed == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/mcuhome-packagetool
-          ref: ed93edc635b1e9609a5969d7572ab245842fbfa8 # main as of 2026-09-06
-          path: .deps/mcuhome-packagetool
-
-      # In a virtual environment of its own, as that repository's README
-      # asks for — never this job's interpreter. Without its `dev` group,
-      # which is for working on that repository rather than running its
-      # verifier: what the verifier needs is what the project declares for
-      # itself, `cryptography` and `packaging`. `--help` is the smoke test
-      # that the install actually imports.
-      - name: Set up the reference verifier
-        if: steps.publish.outputs.needed == 'true'
-        run: |
-          set -euo pipefail
-          cd .deps/mcuhome-packagetool
-          python3 -m venv .venv
-          .venv/bin/pip install --disable-pip-version-check -e .
-          .venv/bin/python verify.py --help > /dev/null
-
-      # The route `mcuhome-packagetool`'s own `scripts/test.d/verify-sources`
-      # takes, walked here for the three sources this job reads: the
-      # bootstrap host is asked for a source's signed mirror list, and
-      # every mirror that list names is fetched from in full and verified
-      # against the anchor. Only the bootstrap host is a constant; nothing
-      # else is meant to be.
-      #
-      # Two of the three are the packages the image is assembled from. The
-      # third is `sdk`, and it is read rather than delivered: the SDK
-      # release states which environment it was built and tested with, and
-      # that statement decides which versions of the other two this job
-      # resolves. It is exactly as trustworthy as the packages it names, so
-      # it is verified exactly the same way.
-      #
-      # Every mirror the list names, not only the one that is used: a
-      # source whose second copy cannot be verified is a registry in
-      # trouble, and an image that pins its bytes is the wrong place to
-      # find that out afterwards. The first mirror in the list is the one
-      # whose documents are then consumed, and the tree stays on disk for
-      # exactly that.
-      - name: Fetch the served sources and verify them against the anchor
-        id: registry
-        if: steps.publish.outputs.needed == 'true'
-        run: |
-          set -euo pipefail
-          # Both are on every runner image this workflow uses; asked for
-          # anyway, because an absent jq reads downstream as "this source
-          # names no mirror" rather than as the missing tool it is.
-          for tool in jq curl; do
-            command -v "$tool" > /dev/null || {
-              echo "::error::$tool is not on this runner, and the registry cannot be read without it" >&2
-              exit 1
-            }
-          done
-
-          tree="$RUNNER_TEMP/registry"
-          anchor="$RUNNER_TEMP/registry-anchor.json"
-          verifier="$PWD/.deps/mcuhome-packagetool"
-          documents=(keys.json mirrors.json index.json)
-          max_key_generations=10
-
-          fetch() {
-            # One document, into the fetched tree. Retries only what a
-            # retry can fix, and never silently writes an error page into
-            # a file the verifier is about to trust.
-            local url="$1" target="$2"
-            mkdir -p "$(dirname "$target")"
-            curl -fsS --max-time 60 --retry 3 --retry-connrefused -o "$target" "$url" || {
-              echo "::error::could not fetch $url" >&2
-              return 1
-            }
-          }
-
-          # Everything fetched here is named by a document that has not
-          # been verified yet — that is the order this check exists in. So
-          # the two things an unchecked document gets to decide are held to
-          # their shape before they are used: a mirror's base URL, and a
-          # file name inside the source.
-          usable_base() {
-            case "$1" in
-              https://*/) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          usable_name() {
-            case "$1" in
-              "" | /* | .* | *..*) return 1 ;;
-              *) return 0 ;;
-            esac
-          }
-
-          for source in sdk build-workspace build-tools; do
-            list="$tree/discovery/$source.json"
-            fetch "$PACKAGE_REGISTRY/$source/mirrors.json" "$list"
-            if [ -z "$(jq -r '.mirrors[]?.url' "$list")" ]; then
-              echo "::error::$PACKAGE_REGISTRY names no mirror for $source" >&2
-              exit 1
-            fi
-            consumed=""
-            while IFS= read -r mirror; do
-              [ -z "$mirror" ] && continue
-              if ! usable_base "$mirror"; then
-                echo "::error::$source: $mirror is not an https base URL ending in '/'" >&2
-                exit 1
-              fi
-              copy="$tree/$source/$(printf '%s' "$mirror" | tr -c 'A-Za-z0-9._-' '_')"
-              for document in "${documents[@]}"; do
-                fetch "$mirror$document" "$copy/$document"
-                fetch "$mirror$document.sig" "$copy/$document.sig"
-              done
-
-              # An index that has outgrown one file names its parts, and
-              # the parts carry most of the entries; verifying only the
-              # head would check the smaller half and say nothing about it.
-              while IFS= read -r part; do
-                [ -z "$part" ] && continue
-                if ! usable_name "$part"; then
-                  echo "::error::$source at $mirror: index part $part is not a file name in the source" >&2
-                  exit 1
-                fi
-                fetch "$mirror$part" "$copy/$part"
-              done < <(jq -r '.parts[]?.file' "$copy/index.json")
-
-              # A rotated key set is authorised by the one before it, so
-              # the chain back to the anchor has to be here too.
-              previous="$(jq -r '.previous // empty' "$copy/keys.json")"
-              generations=0
-              while [ -n "$previous" ]; do
-                generations=$((generations + 1))
-                if [ "$generations" -gt "$max_key_generations" ]; then
-                  echo "::error::$source: more than $max_key_generations key generations at $mirror" >&2
-                  exit 1
-                fi
-                if ! usable_name "$previous"; then
-                  echo "::error::$source at $mirror: key set $previous is not a path in the source" >&2
-                  exit 1
-                fi
-                fetch "$mirror$previous" "$copy/$previous"
-                fetch "$mirror$previous.sig" "$copy/$previous.sig"
-                previous="$(jq -r '.previous // empty' "$copy/$previous")"
-              done
-
-              echo "$source at $mirror"
-              (cd "$verifier" && .venv/bin/python verify.py "$copy" --anchor "$anchor")
-              if [ -z "$consumed" ]; then
-                consumed="$copy"
-                printf '%s\n' "$mirror" > "$tree/$source.base"
-                printf '%s\n' "$copy" > "$tree/$source.consumed"
-              fi
-            done < <(jq -r '.mirrors[]?.url' "$list")
-          done
-          echo "tree=$tree" >> "$GITHUB_OUTPUT"
-
-      # What the image delivers, and WHICH VERSIONS of it — taken from
-      # where consumers take them.
-      #
-      # The dispatched tag names one thing only: the SDK release. It does
-      # not name the environment, because the two do not share a cadence.
-      # The workspace package is built from the SDK's tag and carries its
-      # version; the tools package has its own counter and a release that
-      # did not touch the toolchain republishes nothing — so a release's
-      # tools version is usually an older one. The release says which:
-      # `build-environment.lock.json` is the document whose whole purpose
-      # is to state the environment an SDK was built and tested with, and
-      # this job reads it instead of assuming that one version fits both.
-      #
-      # It is read out of the SDK ARCHIVE the registry serves, after that
-      # archive was checked against the verified index like any other
-      # package. Not the release asset, and not the sidecar beside the
-      # archive: the registry is the source whose bytes were verified
-      # here, and the copy inside the package is the one that cannot be
-      # substituted for the copy a reader happened to take. Whoever built
-      # the image and whoever provisions the same SDK later therefore read
-      # one document.
-      #
-      # Then the same resolution consumers do: the workspace version has
-      # to be the SDK's own — the package is built from that tag, and the
-      # image tag is `<workspace version>-r<n>`, so a lock that says
-      # otherwise means something is not the release this dispatch names.
-      # The tools family is resolved through its meta package — the same
-      # `meta.arch` map an orchestrator follows — so this job cannot pick
-      # a per-architecture package name that the index does not point at.
-      #
-      # Every index is read OFF DISK, out of the tree the verifier just
-      # accepted, and never fetched a second time: an index that was
-      # verified and an index that is downloaded again are two documents,
-      # and only one of them was checked. Each archive is then held against
-      # its entry in that document by size and sha256 before anything
-      # unpacks it, and the archive itself may come over any wire — the
-      # hash is what makes the transport irrelevant.
-      #
-      # Freshness is deliberately not re-checked here: an expired document
-      # is a refusal in `verify.py`, which is the normative implementation
-      # of that rule, and a second copy of it in this file could only ever
-      # drift from it.
-      #
-      # The lock's vocabulary comes from `mcuhome.model.buildenvironment`
-      # in the checkout, the module that defines it, for the reason the
-      # image repository comes from the assembler: a second reader of one
-      # document, spelled out in a workflow, is a reader that drifts.
-      - name: Read the release's environment lock, and download the packages it names
-        id: packages
-        if: steps.publish.outputs.needed == 'true'
-        env:
-          REGISTRY_TREE: ${{ steps.registry.outputs.tree }}
-          VERSION: ${{ steps.image.outputs.version }}
+          REFERENCE: ${{ steps.reference.outputs.reference }}
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          mkdir -p packages
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import sys
-          import tarfile
-          import urllib.request
-          from pathlib import Path
+          for candidate in "$REFERENCE" "${REFERENCE}-${ARCH}"; do
+            if docker manifest inspect "$candidate" >/dev/null 2>&1; then
+              echo "::error::$candidate is already published. A tag names one set of bytes and is never moved — dispatch the next revision instead (workspace_version + revision)." >&2
+              exit 1
+            fi
+          done
 
-          import zstandard
-
-          from mcuhome.model.buildenvironment import (
-              LOCK_FILE,
-              TOOLS_FAMILY,
-              TOOLS_SOURCE,
-              WORKSPACE_PACKAGE,
-              WORKSPACE_SOURCE,
-              parse_lock,
-          )
-          from mcuhome.model.errors import MCUHomeError
-          from mcuhome.model.sdkindex import SDK_PACKAGE_NAME
-
-          # The source the SDK package is published under. Every package
-          # name and the other two source names come from the model, which
-          # owns them; this one string has no constant to take it from —
-          # the model spells it inside the default SDK reference, where it
-          # means "the source of a device's SDK" rather than "the source
-          # this job reads".
-          SDK_SOURCE = "sdk"
-
-          tree = Path(os.environ["REGISTRY_TREE"])
-          version = os.environ["VERSION"]
-          platform = f"linux-{os.environ['ARCH']}"
-          into = Path("packages")
-
-
-          def verified(source):
-              """The index the verifier accepted, and the mirror it came from."""
-              base = (tree / f"{source}.base").read_text(encoding="utf-8").strip()
-              copy = Path((tree / f"{source}.consumed").read_text(encoding="utf-8").strip())
-              document = json.loads((copy / "index.json").read_text(encoding="utf-8"))
-              print(f"{source}: the index verified at {base}")
-              return base, document
-
-
-          def entry(document, source, package, wanted):
-              versions = document.get("packages", {}).get(package)
-              if not versions:
-                  sys.exit(f"{source}/index.json carries no {package}")
-              if wanted not in versions:
-                  sys.exit(
-                      f"{source}/index.json has no {package} {wanted}; "
-                      f"it carries {', '.join(sorted(versions))}"
-                  )
-              return versions[wanted]
-
-
-          def download(base, package, wanted, item):
-              name = item.get("file")
-              expected = item.get("sha256")
-              size = item.get("size")
-              if not name or not expected or not isinstance(size, int):
-                  sys.exit(
-                      f"the index entry for {package} {wanted} names no downloadable "
-                      "archive, so it cannot be a package this job reads"
-                  )
-              # The file name is a name, not a path: it is used as a URL
-              # segment and as a file under packages/, and this block exists
-              # precisely because it does not take what it is handed on
-              # trust.
-              if name != Path(name).name or name.startswith("."):
-                  sys.exit(
-                      f"{package} {wanted} names its archive {name!r}, "
-                      "which is not a file name"
-                  )
-              path = into / name
-              digest = hashlib.sha256()
-              measured = 0
-              with (
-                  urllib.request.urlopen(f"{base}{name}", timeout=60) as answer,
-                  open(path, "wb") as out,
-              ):
-                  while chunk := answer.read(1 << 20):
-                      out.write(chunk)
-                      digest.update(chunk)
-                      measured += len(chunk)
-              if measured != size:
-                  sys.exit(f"{name} is {measured} bytes and the index says {size}")
-              if digest.hexdigest() != expected:
-                  sys.exit(f"{name} hashes to {digest.hexdigest()} and the index says {expected}")
-              print(f"{name}  {measured} bytes  sha256 {expected}  matches the index")
-              return path
-
-
-          def locked(archive):
-              """The environment lock, out of the SDK archive's own bytes.
-
-              Streamed rather than unpacked: the one member this job wants
-              is a few hundred bytes, and nothing else in that archive has
-              a reader here.
-              """
-              with (
-                  open(archive, "rb") as raw,
-                  zstandard.ZstdDecompressor().stream_reader(raw) as stream,
-                  tarfile.open(fileobj=stream, mode="r|") as tar,
-              ):
-                  for member in tar:
-                      if member.name != LOCK_FILE:
-                          continue
-                      carried = tar.extractfile(member)
-                      if carried is None:
-                          sys.exit(f"{archive.name} carries {LOCK_FILE} as no readable file")
-                      try:
-                          stated = json.loads(carried.read().decode("utf-8"))
-                      except (UnicodeDecodeError, ValueError) as unreadable:
-                          sys.exit(
-                              f"{LOCK_FILE} in {archive.name} is not readable JSON: {unreadable}"
-                          )
-                      return parse_lock(stated)
-              sys.exit(
-                  f"{archive.name} carries no {LOCK_FILE}, so this release states no build "
-                  "environment and no version of one can be resolved from it"
-              )
-
-
-          # The release, and what it says about its environment.
-          base, document = verified(SDK_SOURCE)
-          release = download(
-              base,
-              SDK_PACKAGE_NAME,
-              version,
-              entry(document, SDK_SOURCE, SDK_PACKAGE_NAME, version),
-          )
-          try:
-              lock = locked(release)
-              workspace_version = lock.version_of(WORKSPACE_PACKAGE)
-              tools_version = lock.version_of(TOOLS_FAMILY)
-          except MCUHomeError as refusal:
-              sys.exit(str(refusal))
-          print(
-              f"{LOCK_FILE}: {WORKSPACE_PACKAGE} {workspace_version}, "
-              f"{TOOLS_FAMILY} {tools_version}"
-          )
-          if workspace_version != version:
-              sys.exit(
-                  f"the SDK release {version} states {WORKSPACE_PACKAGE} {workspace_version} "
-                  f"in its {LOCK_FILE}, and that package is built from the SDK's own tag — so "
-                  f"these are not the bytes {version} names, and an image tagged after the "
-                  "workspace version would not be the image this dispatch asked for"
-              )
-
-          base, document = verified(WORKSPACE_SOURCE)
-          workspace = download(
-              base,
-              WORKSPACE_PACKAGE,
-              workspace_version,
-              entry(document, WORKSPACE_SOURCE, WORKSPACE_PACKAGE, workspace_version),
-          )
-
-          base, document = verified(TOOLS_SOURCE)
-          family = entry(document, TOOLS_SOURCE, TOOLS_FAMILY, tools_version)
-          architectures = family.get("meta", {}).get("arch", {})
-          if platform not in architectures:
-              sys.exit(
-                  f"{TOOLS_FAMILY} {tools_version} names no {platform}; "
-                  f"it names {', '.join(sorted(architectures)) or 'no architecture at all'}"
-              )
-          concrete = architectures[platform]
-          tools = download(
-              base,
-              concrete,
-              tools_version,
-              entry(document, TOOLS_SOURCE, concrete, tools_version),
-          )
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"workspace={workspace}\n")
-              out.write(f"tools={tools}\n")
-          PY
-
-      # Through the assembler, never a bare `docker build`: §5.2 asks the
-      # image to repeat every member of its packages' declaration as an OCI
-      # label, a `LABEL` cannot read a file, and an image without those
-      # labels is one no orchestrator would ever select. The script also
-      # refuses when the two archives are not the set the declaration
-      # names, and reads the built image back to check that it mirrors it.
-      #
-      # No `--tag`: the assembler derives `<version>-r<n>` from the
-      # workspace package's OWN manifest. So the image lands under the
-      # reference resolved above only if the packages really are the
-      # version the dispatched tag claims — which is what the inspect
-      # below turns from an assumption into a check.
+      # Through the assembler, never a bare `docker build`: the
+      # specification asks the image to repeat every member of its packages'
+      # declaration as an OCI label, a `LABEL` cannot read a file, and an
+      # image without those labels is one no orchestrator would ever select.
+      # The script also refuses when the two archives are not the set the
+      # declaration names, and reads the built image back to check that it
+      # mirrors it.
       - name: Assemble the image
-        if: steps.publish.outputs.needed == 'true'
         env:
-          WORKSPACE: ${{ steps.packages.outputs.workspace }}
-          TOOLS: ${{ steps.packages.outputs.tools }}
-          REVISION: ${{ inputs.revision }}
-          TAG: ${{ inputs.tag }}
+          REFERENCE: ${{ steps.reference.outputs.reference }}
+          REVISION: ${{ steps.reference.outputs.revision }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          reference='${{ steps.image.outputs.reference }}'
+          set -- packages/workspace/*.tar.zst
+          workspace="$1"
+          set -- packages/tools/*.tar.zst
           python scripts/build_env_image.py \
-            --workspace "$WORKSPACE" \
-            --tools "$TOOLS" \
-            --revision "$REVISION"
-          docker image inspect "$reference" >/dev/null 2>&1 || {
-            echo "::error::the packages are not the version $TAG names — the assembler tags the image after the version the workspace package states, and that is not $reference" >&2
-            exit 1
-          }
-          docker tag "$reference" "${reference}-${{ matrix.arch }}"
+            --workspace "$workspace" --tools "$1" --revision "$REVISION"
+          docker image inspect "$REFERENCE" >/dev/null
+          docker tag "$REFERENCE" "${REFERENCE}-${ARCH}"
           df -h /
 
-      # Asserted rather than assumed, like the runner above: this is the
-      # architecture the tag about to be pushed claims.
       - name: The image is the architecture its tag claims
-        if: steps.publish.outputs.needed == 'true'
+        env:
+          REFERENCE: ${{ steps.reference.outputs.reference }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          arch_reference='${{ steps.image.outputs.reference }}-${{ matrix.arch }}'
-          built="$(docker image inspect "$arch_reference" --format '{{.Architecture}}')"
-          test "$built" = '${{ matrix.arch }}' || {
-            echo "$arch_reference is $built, not ${{ matrix.arch }}" >&2
+          built="$(docker image inspect "${REFERENCE}-${ARCH}" --format '{{.Architecture}}')"
+          test "$built" = "$ARCH" || {
+            echo "::error::${REFERENCE}-${ARCH} is $built, not $ARCH" >&2
             exit 1
           }
 
@@ -1243,21 +1132,18 @@ jobs:
       # under it here would publish one architecture under the name every
       # client resolves.
       - name: Publish this architecture
-        if: steps.publish.outputs.needed == 'true'
+        env:
+          REFERENCE: ${{ steps.reference.outputs.reference }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          arch_reference='${{ steps.image.outputs.reference }}-${{ matrix.arch }}'
-          docker push "$arch_reference"
-          echo "::notice::published $arch_reference"
+          docker push "${REFERENCE}-${ARCH}"
+          echo "::notice::published ${REFERENCE}-${ARCH}"
 
   # The index over the two, under the name clients actually use. Split from
   # the job above because it needs BOTH architectures to exist, which is
   # what `needs` says and a matrix cannot — and skipped with them when one
   # leg failed, so a half-published set never gets an index over it.
-  #
-  # `docker manifest` rather than buildx, as in `ci-build.yml`: it needs no
-  # builder setup and composes an index from references that are already in
-  # the registry, which these are.
   publish-environment-image-index:
     name: Publish (build-environment image index)
     needs: build-environment-image
@@ -1265,6 +1151,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      # The digest is the identity; the tag is where it was found. What
+      # verify-release builds against is this.
+      digest: ${{ steps.index.outputs.digest }}
+      reference: ${{ needs.build-environment-image.outputs.reference }}
     steps:
       - name: Log in to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1273,10 +1164,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # `docker manifest rm` first, ignoring its failure: the local
-      # manifest list is state on the runner and `create` refuses to
-      # overwrite one. Nothing in the registry is touched by it.
+      # `docker manifest rm` first, ignoring its failure: the local manifest
+      # list is state on the runner and `create` refuses to overwrite one.
+      # Nothing in the registry is touched by it.
       - name: Compose and push the index
+        id: index
         env:
           REFERENCE: ${{ needs.build-environment-image.outputs.reference }}
         run: |
@@ -1289,14 +1181,19 @@ jobs:
           docker manifest create "$REFERENCE" \
             "${REFERENCE}-amd64" \
             "${REFERENCE}-arm64"
-          docker manifest push "$REFERENCE"
-          echo "::notice::published $REFERENCE"
+          digest="$(docker manifest push "$REFERENCE" | tail -n1)"
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "::error::docker manifest push printed no digest: '$digest'" >&2; exit 1 ;;
+          esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "::notice::published $REFERENCE at $digest"
 
       # What a client will actually do with it, done here once: resolve the
       # tag to a digest and check that the digest names an index over the
-      # two architectures. A tag that resolved to one manifest would be an
-      # environment half this project's users cannot run, published under a
-      # name that says otherwise.
+      # two architectures. A tag that resolved to a single manifest would be
+      # an environment half this project's users cannot run, published under
+      # a name that says otherwise.
       - name: The tag names an index over both architectures
         env:
           REFERENCE: ${{ needs.build-environment-image.outputs.reference }}
@@ -1319,3 +1216,282 @@ jobs:
           if found != ["amd64", "arm64"]:
               sys.exit(f"expected amd64 and arm64, the index names {found}")
           PY
+
+  # ------------------------------------------------------------------
+  # The last question: does the CONTAINER profile deliver the same thing?
+  #
+  # The gate above built the reference device in the subprocess profile out
+  # of the packages. This job builds it again in the image — by DIGEST, so
+  # what is verified and what was pushed are one set of bytes — with the
+  # release's packages as local sources, on both architectures.
+  #
+  # Which image depends on the line:
+  #
+  #   workspace tag, image revision   the image this run just pushed.
+  #   SDK tag                         the published image of the build
+  #                                   workspace this release resolves to.
+  #                                   The workbench matches an image by its
+  #                                   `packages.` labels, so an image that
+  #                                   does not deliver exactly the resolved
+  #                                   set is refused there rather than here;
+  #                                   where no image exists for that
+  #                                   workspace at all, this job says so and
+  #                                   verifies nothing.
+  #   tools tag                       nothing to verify against: an image
+  #                                   delivers a workspace package and the
+  #                                   tools it accepts, and no published
+  #                                   image can declare tools that did not
+  #                                   exist when it was assembled. The
+  #                                   revision dispatch takes them into an
+  #                                   image, and verifies there.
+  #
+  # Skipping is stated, never silent: a release that verified nothing has to
+  # say which of those three it was.
+  verify-release:
+    name: Verify (release, ${{ matrix.target.arch }})
+    needs: [gate-release, build-packages, publish-release, publish-environment-image-index]
+    if: >-
+      always()
+      && needs.gate-release.result == 'success'
+      && needs.gate-release.outputs.mode != 'rehearse'
+      && (needs.publish-release.result == 'success'
+          || needs.gate-release.outputs.mode == 'image')
+      && (needs.publish-environment-image-index.result == 'success'
+          || needs.gate-release.outputs.verify_mode == 'published-image')
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        combination: ${{ fromJSON(needs.gate-release.outputs.verify_combinations || '[{"id":"image-revision"}]') }}
+        target:
+          - arch: amd64
+            platform: linux-amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux-arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PLATFORM: ${{ matrix.target.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: mcuhome-sdk
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Which image, and whether there is one. The pushed one is named by
+      # its digest; a published one is looked for under the revisions of the
+      # workspace version this release resolves to, highest first — "newest
+      # unless pinned", the rule the workbench itself follows.
+      - name: Which image is this verified against
+        id: image
+        env:
+          MODE: ${{ needs.gate-release.outputs.verify_mode }}
+          REASON: ${{ needs.gate-release.outputs.verify_reason }}
+          PUSHED: ${{ needs.publish-environment-image-index.outputs.reference }}
+          DIGEST: ${{ needs.publish-environment-image-index.outputs.digest }}
+          WANTED: ${{ needs.gate-release.outputs.verify_workspace_version }}
+        run: |
+          set -euo pipefail
+          repository=ghcr.io/mcu-home/build-environment
+          case "$MODE" in
+            skip)
+              echo "::notice::not verified against an image: $REASON"
+              echo "verify=false" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            pushed-image)
+              test -n "$DIGEST" || {
+                echo "::error::no image digest reached this job" >&2
+                exit 1
+              }
+              echo "::notice::verifying against $PUSHED at $DIGEST"
+              echo "image=${repository}@${DIGEST}" >> "$GITHUB_OUTPUT"
+              echo "verify=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
+          # A published image for the workspace this release resolves to.
+          # The highest revision wins; ten is far more than any package set
+          # has ever been assembled, and probing a name costs one API call.
+          found=""
+          for revision in $(seq 10 -1 1); do
+            candidate="${repository}:${WANTED}-r${revision}"
+            if docker manifest inspect "$candidate" >/dev/null 2>&1; then
+              found="$candidate"
+              break
+            fi
+          done
+          if [ -z "$found" ]; then
+            echo "::notice::no build-environment image delivers mcuhome-build-workspace $WANTED yet, so there is nothing to verify this release in. Assemble one with the revision dispatch (workspace_version=$WANTED, revision=1)."
+            echo "verify=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::notice::verifying against $found"
+          echo "image=$found" >> "$GITHUB_OUTPUT"
+          echo "verify=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the mcuhome command line
+        if: steps.image.outputs.verify == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-cli
+          path: .deps/mcuhome-cli
+
+      - name: Checkout the workbench
+        if: steps.image.outputs.verify == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-workbench
+          path: .deps/mcuhome-workbench
+
+      - name: Checkout the package tool
+        if: steps.image.outputs.verify == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-packagetool
+          ref: 7ce85fce47b89532dfa1585f0790e0820a1fbc71 # the ref mcuhome-workbench's ci-test.yml pins
+          path: .deps/mcuhome-packagetool
+
+      - name: Set up Python
+        if: steps.image.outputs.verify == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install the builder and its command line
+        if: steps.image.outputs.verify == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check \
+            -e ./mcuhome-sdk/packaging/model \
+            -e ./.deps/mcuhome-packagetool \
+            -e ./.deps/mcuhome-workbench \
+            -e ./mcuhome-sdk/packaging/compiler \
+            -e ./.deps/mcuhome-cli
+          python -m pip install --disable-pip-version-check imgtool==2.4.0
+
+      - name: Make room on the runner
+        if: steps.image.outputs.verify == 'true'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+
+      # The same three source directories the gate built with. The context
+      # still resolves the package set here — that is what decides which
+      # image may deliver it — and the SDK archive is delivered from a
+      # source in every profile.
+      - name: Take the packages this run built
+        if: steps.image.outputs.verify == 'true' && needs.gate-release.outputs.mode != 'image'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: packages-*
+          path: artifacts
+
+      - name: Assemble the package sources
+        if: steps.image.outputs.verify == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.gate-release.outputs.mode }}
+          WORKSPACE_VERSION: ${{ needs.gate-release.outputs.workspace_version }}
+          IMAGE_SDK_TAG: ${{ needs.gate-release.outputs.sdk_tag }}
+          IMAGE_TOOLS_TAG: ${{ needs.gate-release.outputs.tools_tag }}
+          SDK_SOURCE: ${{ matrix.combination.sdk.source }}
+          SDK_TAG: ${{ matrix.combination.sdk.tag }}
+          WORKSPACE_SOURCE: ${{ matrix.combination.workspace.source }}
+          WORKSPACE_TAG: ${{ matrix.combination.workspace.tag }}
+          TOOLS_SOURCE: ${{ matrix.combination.tools.source }}
+          TOOLS_TAG: ${{ matrix.combination.tools.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p sources/sdk sources/workspace sources/tools
+          published() {
+            tag="$1"; into="$2"; pattern="$3"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$pattern" --pattern "$pattern.sha256" \
+              --pattern "$pattern.meta.json" --dir "$into" --clobber
+            python mcuhome-sdk/scripts/release_readiness.py sources "$into"
+          }
+          if [ "$MODE" = image ]; then
+            # A revision verifies the image it just assembled, against the
+            # only published chain that reaches it — the workspace release
+            # itself, the tools it accepts and the newest SDK that accepts
+            # it, all three resolved by the gate.
+            published "workspace-v${WORKSPACE_VERSION}" sources/workspace \
+              'mcuhome-build-workspace-*.tar.zst'
+            published "$IMAGE_SDK_TAG" sources/sdk 'mcuhome-sdk-*.tar.zst'
+            published "$IMAGE_TOOLS_TAG" sources/tools \
+              "mcuhome-build-tools_${PLATFORM}-*.tar.zst"
+          else
+            take() {
+              stage="$1"; source="$2"; tag="$3"; pattern="$4"; artifact="$5"
+              if [ "$source" = published ]; then
+                published "$tag" "sources/$stage" "$pattern"
+              else
+                cp -a "artifacts/$artifact/." "sources/$stage/"
+              fi
+            }
+            take sdk "$SDK_SOURCE" "$SDK_TAG" 'mcuhome-sdk-*.tar.zst' packages-sdk
+            take workspace "$WORKSPACE_SOURCE" "$WORKSPACE_TAG" \
+              'mcuhome-build-workspace-*.tar.zst' packages-workspace
+            take tools "$TOOLS_SOURCE" "$TOOLS_TAG" \
+              "mcuhome-build-tools_${PLATFORM}-*.tar.zst" "packages-tools-${PLATFORM}"
+          fi
+          for one in sources/*/index.json; do
+            echo "--- $one"
+            cat "$one"
+          done
+
+      # The same throwaway signing key as the gate's builds, for the same
+      # reason: what the two profiles produce is then comparable byte for
+      # byte, bootloader included.
+      - name: Make a project for it
+        if: steps.image.outputs.verify == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p project
+          cd project
+          mcuhome project init
+          mkdir -p devices
+          cp ../mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml devices/
+          install -d -m 700 "$RUNNER_TEMP/signing"
+          install -m 600 ../mcuhome-sdk/.github/workflows/firmware-signing-key.pem \
+            "$RUNNER_TEMP/signing/mcuboot.pem"
+
+      # The container profile, against exactly this image. The workbench
+      # holds the image's `packages.` labels against the package set the
+      # context resolved and refuses to build in one that does not declare
+      # it — which is what makes this a verification of the image and not
+      # just another build.
+      - name: Build the reference Matter device in the image
+        if: steps.image.outputs.verify == 'true'
+        working-directory: project
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          mcuhome device build devices/00-bmp180-two-endpoints.yaml \
+            --build-dir build/bmp180-node \
+            --signing-key "$RUNNER_TEMP/signing/mcuboot.pem" \
+            --build-target local --build-mode container \
+            --container-image "$IMAGE" \
+            --sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
+            --sdk-sources "$GITHUB_WORKSPACE/sources/workspace" \
+            --sdk-sources "$GITHUB_WORKSPACE/sources/tools"
+
+      - name: Check the artifact set
+        if: steps.image.outputs.verify == 'true'
+        run: python3 mcuhome-sdk/scripts/check_build_artifacts.py project/build/bmp180-node
+
+      - name: What it produced
+        if: steps.image.outputs.verify == 'true'
+        run: |
+          set -euo pipefail
+          cd project/build/bmp180-node
+          sha256sum -- firmware.bin firmware.hex bootloader.hex build-report.json
