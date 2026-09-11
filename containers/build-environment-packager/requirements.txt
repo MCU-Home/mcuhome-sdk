@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Python environment of the build-environment packager image
+# (containers/build-environment-packager/Dockerfile).
+#
+# This is NOT the build environment's dependency set — that one lives in
+# `packaging/build-environment/requirements.txt` and is packed into the
+# tools package as a wheel set. This file is the much smaller set the
+# *packager* needs to produce those packages, and nothing else: no
+# compiler tooling, no Zephyr build dependencies, no test tooling.
+#
+# Direct dependencies and why they are here:
+#
+#   west          lays the environment's west workspace out
+#                 (`scripts/build_env_package.py`, materialize_workspace).
+#                 One west lays a workspace out and the same west reads it
+#                 later, so this pin MUST equal the build environment's —
+#                 `tests/python/test_env_package.py` asserts every line
+#                 below against `packaging/build-environment/requirements.txt`.
+#   click,        CHIP's Matter code generators, which the workspace
+#   coloredlogs,    package's pre-generation step runs
+#   Jinja2,         (`scripts/codegen.py` and `scripts/tools/zap/generate.py`
+#   lark            inside the pinned CHIP revision). The same four the
+#                   build environment carries for the same generators.
+#
+# Fully pinned including the transitive closure, and installed with
+# `--no-deps` followed by `pip check`: a dependency this file forgot then
+# fails the image build instead of arriving unpinned. Transitive entries,
+# and whose they are:
+#
+#   colorama, PyYAML, pykwalify, packaging     west
+#   docopt, python-dateutil, ruamel.yaml       pykwalify
+#   six                                        python-dateutil
+#   MarkupSafe                                 Jinja2
+#   humanfriendly                              coloredlogs
+
+click==8.4.2
+colorama==0.4.6
+coloredlogs==15.0.1
+docopt==0.6.2
+humanfriendly==10.0
+Jinja2==3.1.6
+lark==1.3.1
+MarkupSafe==3.0.3
+packaging==26.3
+pykwalify==1.8.0
+python-dateutil==2.9.0.post0
+PyYAML==6.0.3
+ruamel.yaml==0.19.1
+six==1.17.0
+west==1.5.0
