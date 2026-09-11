@@ -297,6 +297,37 @@ def test_index_extends_what_is_already_there(builder, tmp_path):
     }
 
 
+def test_the_index_records_the_meta_sidecar_under_its_own_name(builder, tmp_path):
+    """A reader resolving a chain from a directory finds the sidecar there.
+
+    Under ``meta_file`` and never ``meta``: in a package index ``meta`` is
+    what makes an entry a *meta package* — the family that maps platforms
+    onto concrete packages — so the sidecar needs a name of its own, and it
+    is the same name the registry's index uses.
+    """
+    index = tmp_path / "index.json"
+    sidecar = tmp_path / "mcuhome-build-workspace-0.1.0.tar.zst.meta.json"
+    sidecar.write_bytes(b"{}\n")
+    entry = builder.sidecar_entry(sidecar)
+    builder.write_index(
+        index,
+        package="mcuhome-build-workspace",
+        version="0.1.0",
+        file="a",
+        sha256="x",
+        size=1,
+        meta_file=entry,
+    )
+    document = json.loads(index.read_text(encoding="utf-8"))
+    recorded = document["packages"]["mcuhome-build-workspace"]["0.1.0"]
+    assert recorded["meta_file"] == {
+        "file": sidecar.name,
+        "sha256": hashlib.sha256(b"{}\n").hexdigest(),
+        "size": 3,
+    }
+    assert "meta" not in recorded
+
+
 def test_index_refuses_a_file_that_is_not_an_index(builder, tmp_path):
     """Never an overwrite: it is the only record of what is in that directory."""
     index = tmp_path / "index.json"

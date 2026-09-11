@@ -437,20 +437,34 @@ def build_archive(
     # The same bytes the archive carries, beside it — named for the file
     # rather than for the package, the way the .sha256 sidecar is, so a
     # directory holding two releases keeps two meta files.
-    (output_dir / f"{archive.name}{release_lines.META_SUFFIX}").write_bytes(meta)
+    sidecar = output_dir / f"{archive.name}{release_lines.META_SUFFIX}"
+    sidecar.write_bytes(meta)
     write_index(
         output_dir / INDEX_FILE,
         version=version,
         file=archive.name,
         sha256=digest,
         size=len(payload),
+        meta_file={
+            "file": sidecar.name,
+            "sha256": hashlib.sha256(meta).hexdigest(),
+            "size": len(meta),
+        },
     )
     return SdkArchive(
         path=archive, version=version, commit=commit, sha256=digest, size=len(payload)
     )
 
 
-def write_index(path: Path, *, version: str, file: str, sha256: str, size: int) -> None:
+def write_index(
+    path: Path,
+    *,
+    version: str,
+    file: str,
+    sha256: str,
+    size: int,
+    meta_file: dict | None = None,
+) -> None:
     """Record this package in the static index, keeping the versions already there.
 
     The index answers exactly one question — "which file, and which bytes,
@@ -478,7 +492,15 @@ def write_index(path: Path, *, version: str, file: str, sha256: str, size: int) 
             raise SystemExit(f"{path} is not an index: no packages object")
         document = found
     packages = document["packages"].setdefault(PACKAGE_NAME, {})
-    packages[version] = {"file": file, "sha256": sha256, "size": size}
+    entry: dict[str, object] = {"file": file, "sha256": sha256, "size": size}
+    if meta_file is not None:
+        # `meta_file`, not `meta`: in a package index `meta` already means
+        # "this entry is a meta package", the family that maps platforms
+        # onto concrete packages. The sidecar is recorded the same way the
+        # registry's index records it, so a reader finds it identically in
+        # an operator's directory and on a host.
+        entry["meta_file"] = meta_file
+    packages[version] = entry
     path.write_text(
         json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",

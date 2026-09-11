@@ -98,6 +98,14 @@ to, the patch files applied, and the §5 declaration it carries; for the
 tools the toolchain, CMake, Ninja, gn, the interpreter and west, with the
 architecture.
 
+Beside the archives, `index.json` records both files per `(name,
+version)`: the archive under `file`/`sha256`/`size`, and the meta sidecar
+under **`meta_file`** with the same three fields — the name a package
+registry's index uses for it, so a reader finds it identically in an
+operator's directory and on a host. It is not called `meta`: in that index
+`meta` already means "this entry is a meta package", the family that maps
+platforms onto concrete packages.
+
 The meta file and the §5 **declaration** below are two documents and stay
 two: the declaration is what the *specification* asks a build environment
 for and what an image mirrors into its labels, the meta file is what

@@ -631,7 +631,31 @@ def package_filename(name: str, version: str) -> str:
     return f"{name}-{version}.tar.zst"
 
 
-def write_index(path: Path, *, package: str, version: str, file: str, sha256: str, size: int):
+def sidecar_entry(path: Path) -> dict:
+    """One sidecar as an index entry: which file, which bytes, how many.
+
+    The same three fields the archive's own entry carries, because the
+    question is the same one — a reader that has the index has everything
+    it needs to fetch the file and check it before trusting a word of it.
+    """
+    payload = path.read_bytes()
+    return {
+        "file": path.name,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
+    }
+
+
+def write_index(
+    path: Path,
+    *,
+    package: str,
+    version: str,
+    file: str,
+    sha256: str,
+    size: int,
+    meta_file: dict | None = None,
+):
     """Record this package in the static index, keeping the versions already there.
 
     The index answers exactly one question — "which file, and which bytes,
@@ -640,6 +664,13 @@ def write_index(path: Path, *, package: str, version: str, file: str, sha256: st
     is read and extended rather than replaced; an unreadable one is a
     refusal, never an overwrite, because it is the only record of the
     packages already in that directory.
+
+    ``meta_file`` records the meta sidecar the same way, under the name the
+    package registry's index uses for it — so whoever resolves a release
+    chain finds it identically in an operator's directory and on a host.
+    The key is ``meta_file`` and not ``meta`` because ``meta`` already means
+    something else in that index: it is the member that makes an entry a
+    *meta package*, the family that maps platforms onto concrete packages.
     """
     document: dict = {"packages": {}}
     if path.exists():
@@ -650,11 +681,10 @@ def write_index(path: Path, *, package: str, version: str, file: str, sha256: st
         if not isinstance(found, dict) or not isinstance(found.get("packages"), dict):
             raise SystemExit(f"{path} is not an index: no packages object")
         document = found
-    document["packages"].setdefault(package, {})[version] = {
-        "file": file,
-        "sha256": sha256,
-        "size": size,
-    }
+    entry: dict = {"file": file, "sha256": sha256, "size": size}
+    if meta_file is not None:
+        entry["meta_file"] = meta_file
+    document["packages"].setdefault(package, {})[version] = entry
     path.write_text(
         json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -678,7 +708,8 @@ def publish(
     output_dir.mkdir(parents=True, exist_ok=True)
     archive = output_dir / package_filename(name, version)
     digest, size = write_archive(root, archive, mtime=mtime)
-    (output_dir / f"{archive.name}{release_lines.META_SUFFIX}").write_bytes(meta)
+    sidecar = output_dir / f"{archive.name}{release_lines.META_SUFFIX}"
+    sidecar.write_bytes(meta)
     # sha256sum's own format — bare hex, two spaces, the file name — so
     # `sha256sum -c` checks a mirrored copy with no tooling of ours.
     (output_dir / f"{archive.name}.sha256").write_text(
@@ -691,6 +722,7 @@ def publish(
         file=archive.name,
         sha256=digest,
         size=size,
+        meta_file=sidecar_entry(sidecar),
     )
     return Package(path=archive, name=name, version=version, sha256=digest, size=size)
 

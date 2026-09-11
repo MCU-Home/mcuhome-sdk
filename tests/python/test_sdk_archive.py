@@ -330,10 +330,20 @@ def test_the_index_answers_name_and_version_with_file_and_hash(package) -> None:
     source list already answers.
     """
     document = json.loads((package.path.parent / "index.json").read_text(encoding="utf-8"))
+    sidecar = package.path.parent / f"{package.path.name}.meta.json"
+    payload = sidecar.read_bytes()
     assert document["packages"]["mcuhome-sdk"][package.version] == {
         "file": package.path.name,
         "sha256": package.sha256,
         "size": package.size,
+        # `meta_file`, and never `meta`: in a package index `meta` is what
+        # makes an entry a meta package — the family that maps platforms
+        # onto concrete packages — so the sidecar needs a name of its own.
+        "meta_file": {
+            "file": sidecar.name,
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size": len(payload),
+        },
     }
     assert "http" not in json.dumps(document)
     assert "mcuhome.org" not in json.dumps(document)
