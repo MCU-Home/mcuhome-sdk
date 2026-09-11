@@ -926,6 +926,10 @@ jobs:
       # A project of its own, with the device copied into it: a build
       # writes a signing key next to the device it signs, and the checkout
       # is not a place to write one.
+      # The key is copied out of the checkout at mode 600 in a directory
+      # of its own: MCUHome refuses key material other users can read, and
+      # a checked-out file is 644 by definition. The copy lives outside the
+      # workspace so no later step can pick it up by accident.
       - name: Make a project for it
         run: |
           set -euo pipefail
@@ -934,6 +938,9 @@ jobs:
           mcuhome project init
           mkdir -p devices
           cp ../mcuhome-sdk/docs/design/examples/00-bmp180-two-endpoints.yaml devices/
+          install -d -m 700 "$RUNNER_TEMP/signing"
+          install -m 600 ../mcuhome-sdk/.github/workflows/firmware-signing-key.pem \
+            "$RUNNER_TEMP/signing/mcuboot.pem"
 
       # The documented invocation, and the whole point of this job. How
       # much of the machine the build may use is left to the workbench's
@@ -955,7 +962,7 @@ jobs:
           set -euo pipefail
           mcuhome device build devices/00-bmp180-two-endpoints.yaml \
             --build-dir build/bmp180-node \
-            --signing-key "$GITHUB_WORKSPACE/mcuhome-sdk/.github/workflows/firmware-signing-key.pem" \
+            --signing-key "$RUNNER_TEMP/signing/mcuboot.pem" \
             --build-target local --build-mode subprocess \
             --sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
             --sdk-sources "$GITHUB_WORKSPACE/sources/workspace" \
