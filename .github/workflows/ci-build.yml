@@ -1080,55 +1080,102 @@ jobs:
           echo "::notice::${{ matrix.combination.label }} did not build on ${ARCH} — ${{ matrix.combination.reason }}"
 
   # ------------------------------------------------------------------
-  # Does the host architecture change the firmware? A report, not a gate.
+  # Does the host architecture change the firmware? A report, not a gate —
+  # but a report that has to happen.
   #
-  # The two legs of the `checkout` combination cross-compile the same ARM
-  # firmware with the same pinned toolchain, from the same sources, in the
-  # same build environment, signed with the same committed key — only the
-  # machine the compiler itself runs on differs. Byte-identical output is therefore the *expected* answer and
-  # a genuinely useful one: it says the environment, and not the host,
-  # decides what a device gets.
+  # The two legs of ONE combination cross-compile the same ARM firmware
+  # with the same pinned toolchain, from the same sources, in the same
+  # build environment, signed with the same committed key — only the
+  # machine the compiler itself runs on differs. Byte-identical output is
+  # therefore the *expected* answer and a genuinely useful one: it says
+  # the environment, and not the host, decides what a device gets.
   #
-  # It is deliberately not a gate. A difference here has a long list of
-  # innocent causes — a path baked into a build id, a timestamp a tool
+  # Which combination that is, the plan says: it marks exactly one of them
+  # `compare` — the triple this commit contributes the most stages to —
+  # and this job downloads that one's two artefacts BY NAME. It used to
+  # look for a fixed identifier instead, `firmware-checkout-*`, which only
+  # exists while nothing is published; once all three lines had releases,
+  # every combination was named `combination-<n>`, the download matched
+  # nothing and the job reported "nothing to compare" and went green. A
+  # comparison that compares nothing must not be able to pass, so there is
+  # no such path left here: a missing subject fails the job.
+  #
+  # The *finding* is still not a gate. A difference here has a long list
+  # of innocent causes — a path baked into a build id, a timestamp a tool
   # embeds, a linker that orders a hash table by pointer — and turning a
   # red mark on those into "the arm64 build environment is broken" would
   # be the wrong lesson. What the report gives is the diff, named file by
   # file, for somebody to look at.
   compare-firmware:
     name: Compare (firmware across architectures)
-    needs: build-firmware
+    needs: [plan-firmware, build-firmware]
     if: always() && needs.build-firmware.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Download what each architecture produced
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          pattern: firmware-checkout-*
-          path: produced
-
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mcuhome-sdk
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install what the plan reads versions with
+        run: python -m pip install --disable-pip-version-check packaging
+
+      - name: Download the plan
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: firmware-plan
+          path: plan
+
+      # The artefact names come out of the same module that named the
+      # combination, so this job never spells the naming scheme out a
+      # second time. It refuses a plan that marks no subject, which is
+      # what turns "nothing to compare" from a notice into a failure.
+      - name: Which combination is compared
+        id: subject
+        run: |
+          set -euo pipefail
+          python mcuhome-sdk/scripts/release_readiness.py subject \
+            --plan plan/plan.json --architectures amd64 arm64 \
+            | tee -a "$GITHUB_OUTPUT"
+
+      # By name, not by pattern: a named artefact that is not there is a
+      # failure of this step, and that is exactly the answer wanted. The
+      # subject is a required combination, so build-firmware having
+      # succeeded means both of its legs uploaded.
+      - name: Download what amd64 produced
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ steps.subject.outputs.amd64 }}
+          path: produced/amd64
+
+      - name: Download what arm64 produced
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ steps.subject.outputs.arm64 }}
+          path: produced/arm64
 
       # Not a hash comparison: those two hashes already differ and say
       # nothing about why. This prints where and what — how many bytes, in
       # how many regions, at which offsets, and the neighbourhood as text,
       # which is how a compiler stamp or a path announces itself.
       - name: Compare them
+        env:
+          SUBJECT: ${{ steps.subject.outputs.label }}
         run: |
           set -euo pipefail
-          left=produced/firmware-checkout-amd64
-          right=produced/firmware-checkout-arm64
-          if [ ! -d "$left" ] || [ ! -d "$right" ]; then
-            echo "::notice::the checkout combination was not built on both architectures — nothing to compare"
-            exit 0
-          fi
+          echo "comparing ${SUBJECT}"
           python3 mcuhome-sdk/scripts/compare_firmware.py \
-            "$left" "$right" --label-left amd64 --label-right arm64 | tee comparison.txt
+            produced/amd64 produced/arm64 \
+            --label-left amd64 --label-right arm64 | tee comparison.txt
           {
             echo '## Does the host architecture change the firmware?'
+            echo
+            echo "Compared: ${SUBJECT}"
             echo
             echo '```'
             cat comparison.txt

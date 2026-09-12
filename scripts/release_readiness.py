@@ -20,7 +20,7 @@ published, not acting as a client of the registry — and it is the reason
 ``sources`` writes an index out of the files rather than fetching a signed
 one.
 
-It does four jobs, one per question a push has to answer:
+It does five jobs, one per question a push has to answer:
 
 ``check-versions``
     The bump discipline, as a blocker. If the version a stage declares is
@@ -41,7 +41,16 @@ It does four jobs, one per question a push has to answer:
     the build resolves the chain the way a user's build does, and there is
     only one candidate for it to resolve to. ``--published-only`` is the
     tag-time rule, where the checkout of a neighbouring stage no longer
-    counts.
+    counts. Exactly one combination of a plan that has any is marked
+    ``compare``: the triple the two architectures' firmware is compared
+    over.
+
+``subject``
+    That marked combination, as ``name=value`` lines a workflow step
+    reads into its outputs: its identifier, its label, and the artefact
+    name one architecture's build uploaded it under. A plan that marks
+    none or several is refused, because a comparison whose subject is
+    guessed is a comparison that can silently compare nothing.
 
 ``summarize``
     One stage's release-readiness table, out of the plan and the outcomes
@@ -58,6 +67,7 @@ Usage::
     release_readiness.py [--releases FILE] [--metas DIR] check-versions
     release_readiness.py [--releases FILE] [--metas DIR] plan --output plan.json
                                                               [--published-only]
+    release_readiness.py subject --plan plan.json --architectures amd64 arm64
     release_readiness.py summarize <stage> --plan plan.json [--results DIR]
     release_readiness.py sources <dir>
 
@@ -67,8 +77,9 @@ GitHub and ``--metas`` reads the published meta documents from
 answer here reproducible without a network, which is what the tests use.
 
 Exit status: 0 when the question is answered without a finding, 1 when the
-finding is a blocker (``check-versions``) or a combination that was
-claimed to work and did not (``summarize``), 2 on a usage error.
+finding is a blocker (``check-versions``), a combination that was claimed
+to work and did not (``summarize``) or a plan that names no comparison
+subject (``subject``), 2 on a usage error.
 """
 
 from __future__ import annotations
@@ -93,6 +104,7 @@ import release_lines  # noqa: E402 - repo-relative import, needs the path above
 
 __all__ = [
     "FAMILY",
+    "FIRMWARE_ARTEFACT",
     "TAG_PREFIX",
     "Combination",
     "Plan",
@@ -102,8 +114,12 @@ __all__ = [
     "build_gate",
     "build_plan",
     "check_versions",
+    "comparison_subject",
     "constraint_on",
+    "describe_subject",
     "directory_metas",
+    "firmware_artefacts",
+    "mark_comparison_subject",
     "published_of",
     "resolvable",
     "summarize",
@@ -139,6 +155,13 @@ STAGE_ABOVE = {"workspace": "sdk", "tools": "workspace"}
 #: package that does not say what it requires cannot be resolved through,
 #: which is the workbench's rule and therefore this module's.
 META_SUFFIX = release_lines.META_SUFFIX
+
+#: What one firmware build uploads its unsigned artifacts under: the
+#: plan's combination identifier and the architecture of the host that
+#: compiled them. The comparison job downloads two of these *by name*, so
+#: the format is stated once here, and a test holds ``ci-build.yml`` to
+#: it rather than trusting two files to keep saying the same thing.
+FIRMWARE_ARTEFACT = "firmware-{combination}-{architecture}"
 
 # --------------------------------------------------------------------------
 # The release inventory
@@ -553,6 +576,9 @@ class Combination:
     assemble: every stage's own constraint admits the one below it. An
     inconsistent triple is still built — what a broken chain does is worth
     seeing — but it is never a failure, because nothing claims it works.
+
+    *compare* marks the one triple the two architectures are compared
+    over; :func:`mark_comparison_subject` picks it and says why.
     """
 
     identifier: str
@@ -561,11 +587,16 @@ class Combination:
     tools: Stage
     consistent: bool = True
     reason: str = ""
+    compare: bool = False
 
     def triple(self) -> tuple:
         return tuple(
             (stage.source, stage.version) for stage in (self.sdk, self.workspace, self.tools)
         )
+
+    def checkouts(self) -> int:
+        """How many of the three stages this commit itself contributes."""
+        return sum(stage.source == "checkout" for stage in (self.sdk, self.workspace, self.tools))
 
     def document(self) -> dict:
         return {
@@ -581,6 +612,9 @@ class Combination:
             # inconsistent triple reports its outcome and does not fail.
             "required": self.consistent,
             "reason": self.reason,
+            # What the comparison job reads: exactly one combination of a
+            # plan that has any carries this.
+            "compare": self.compare,
         }
 
 
@@ -864,7 +898,77 @@ def build_plan(
         plan.catalogue.setdefault(stage, {})["up"] = rows
         plan.verdicts.setdefault(stage, {})["up"] = verdict
     plan.combinations = combinations.found
+    mark_comparison_subject(plan.combinations)
     return plan
+
+
+def mark_comparison_subject(combinations: list[Combination]) -> Combination | None:
+    """Mark the one triple the two architectures are compared over.
+
+    The comparison asks a single question — does the host the compiler
+    runs on change the firmware — and one triple answers it, so the plan
+    names which one instead of leaving the job to guess from identifiers.
+    The choice is the triple this commit contributes the most stages to:
+    a difference there is a difference in something this commit can do
+    something about, and with nothing published that is the triple where
+    all three stages are this checkout's. Among equals the first wins,
+    which is the order the catalogue asked for them in.
+
+    Only a consistent triple qualifies. An inconsistent one is built to
+    see what a broken chain does and is allowed to fail, and a comparison
+    over something that may not exist is the defect this function was
+    written for. A plan with no consistent combination — at tag time,
+    where a stage nothing published satisfies yields no triple at all —
+    has no subject, and then there is nothing to compare and nothing to
+    report either.
+    """
+    claimed = [one for one in combinations if one.consistent]
+    if not claimed:
+        return None
+    subject = max(claimed, key=lambda one: one.checkouts())
+    subject.compare = True
+    return subject
+
+
+def comparison_subject(plan: dict) -> dict:
+    """The combination a written plan marks as the comparison subject.
+
+    Refuses rather than picks: a plan that marks none or several is a
+    plan whose producer and whose reader disagree, and guessing one would
+    hide exactly that.
+    """
+    marked = [one for one in plan.get("combinations", ()) if one.get("compare")]
+    if len(marked) == 1:
+        return marked[0]
+    raise SystemExit(
+        f"the plan marks {len(marked)} combinations to compare, not one. "
+        "Rebuild it: scripts/release_readiness.py plan --output plan.json"
+    )
+
+
+def firmware_artefacts(subject: dict, architectures: list[str]) -> dict[str, str]:
+    """The artefact one combination's builds are uploaded under, per architecture."""
+    return {
+        architecture: FIRMWARE_ARTEFACT.format(combination=subject["id"], architecture=architecture)
+        for architecture in architectures
+    }
+
+
+def describe_subject(*, plan: dict, architectures: list[str], out=None) -> int:
+    """The comparison subject as ``name=value`` lines, for ``$GITHUB_OUTPUT``.
+
+    ``id`` and ``label`` say what is compared, and one line per
+    architecture says which artefact holds it — the names the comparison
+    job downloads, so that no workflow file spells the format out a second
+    time.
+    """
+    subject = comparison_subject(plan)
+    stream = out if out is not None else sys.stdout
+    print(f"id={subject['id']}", file=stream)
+    print(f"label={subject['label']}", file=stream)
+    for architecture, artefact in firmware_artefacts(subject, architectures).items():
+        print(f"{architecture}={artefact}", file=stream)
+    return 0
 
 
 def _downward(
@@ -1127,6 +1231,13 @@ def build_gate(
     build at all, one combination is assembled out of the chain around this
     release — published below, this commit's above — and the verdict says
     that no release uses it yet.
+
+    The ``compare`` flag travels as the plan set it and is not re-decided:
+    a tag run builds one line's combinations and compares nothing, so the
+    set here is a trimmed view in which the plan's subject may not appear
+    at all. :func:`comparison_subject` refuses such a document rather than
+    picking a stand-in, which is the right answer for a reader that would
+    have to be written first.
     """
     environment = release_lines.environment(repository, revision)
     declared = {one: release_lines.version_of(environment, one) for one in release_lines.STAGES}
@@ -1522,6 +1633,17 @@ def main(argv: list[str]) -> int:
         "rows that try this commit's own neighbours are left out",
     )
 
+    subject = sub.add_parser("subject", help="the combination the plan marks for comparison")
+    subject.add_argument("--plan", type=Path, required=True, help="the plan to read")
+    subject.add_argument(
+        "--architectures",
+        nargs="+",
+        required=True,
+        metavar="ARCH",
+        help="the architectures the combination was built on; one artefact name is printed "
+        "per architecture",
+    )
+
     summary = sub.add_parser("summarize", help="one stage's release-readiness table")
     summary.add_argument("stage", choices=release_lines.STAGES)
     summary.add_argument("--plan", type=Path, required=True, help="the plan to read")
@@ -1535,6 +1657,12 @@ def main(argv: list[str]) -> int:
     if arguments.question == "sources":
         print(json.dumps(write_index(arguments.directory), indent=2, sort_keys=True))
         return 0
+
+    if arguments.question == "subject":
+        return describe_subject(
+            plan=json.loads(arguments.plan.read_text(encoding="utf-8")),
+            architectures=arguments.architectures,
+        )
 
     if arguments.question == "summarize":
         return summarize(

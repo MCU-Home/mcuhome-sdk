@@ -599,6 +599,145 @@ def test_a_chain_that_cannot_resolve_is_reported_and_not_required(readiness, dec
     assert "requires" in rows[0]["note"]
 
 
+# --------------------------------------------------------------------------
+# The combination the two architectures are compared over
+# --------------------------------------------------------------------------
+#
+# The comparison job downloads two artefacts and diffs them. It used to
+# name them after a fixed identifier that only exists while nothing is
+# published, so once all three lines had releases it downloaded nothing,
+# said "nothing to compare" and passed. What keeps that from coming back
+# is here: the plan names its subject, and the name the job downloads is
+# formed by this module.
+
+
+def compare_subjects(plan: dict) -> list[dict]:
+    return [one for one in plan["combinations"] if one["compare"]]
+
+
+def test_a_plan_that_has_combinations_marks_exactly_one_to_compare(readiness, declared, tmp_path):
+    """The invariant the comparison job relies on, in both worlds.
+
+    With nothing published there is one combination and it is the subject;
+    over a populated registry there are several and still exactly one.
+    """
+    empty = readiness.build_plan(
+        revision="HEAD", releases=[], metas=lambda entry: [], repository=REPO_ROOT
+    ).document()
+    assert [one["id"] for one in compare_subjects(empty)] == ["checkout"]
+
+    populated = readiness.build_plan(
+        revision="HEAD",
+        releases=full_inventory(tmp_path, declared),
+        metas=readiness.directory_metas(tmp_path),
+        repository=REPO_ROOT,
+    ).document()
+    assert len(populated["combinations"]) > 1, "this registry has to ask for several"
+    subjects = compare_subjects(populated)
+    assert len(subjects) == 1, [one["id"] for one in subjects]
+    assert subjects[0]["required"] is True
+
+
+def test_the_subject_is_the_triple_this_commit_contributes_most_of(readiness, declared, tmp_path):
+    """Of the triples the catalogue asks for, the most local one is compared.
+
+    A difference between two hosts is only worth a report where the
+    sources it was compiled from are this commit's, so the subject is the
+    triple with the most ``checkout`` stages — and never an inconsistent
+    one, which is allowed to fail to build at all.
+    """
+    plan = readiness.build_plan(
+        revision="HEAD",
+        releases=full_inventory(tmp_path, declared),
+        metas=readiness.directory_metas(tmp_path),
+        repository=REPO_ROOT,
+    ).document()
+    subject = compare_subjects(plan)[0]
+
+    def checkouts(combination: dict) -> int:
+        return sum(
+            combination[stage]["source"] == "checkout" for stage in ("sdk", "workspace", "tools")
+        )
+
+    claimed = [one for one in plan["combinations"] if one["required"]]
+    assert checkouts(subject) == max(checkouts(one) for one in claimed)
+    assert checkouts(subject) >= 2, "this commit's SDK and workspace are both tried"
+
+
+def test_at_tag_time_a_plan_without_a_combination_has_no_subject(readiness):
+    """Nothing to build means nothing to compare — and the reader refuses.
+
+    The tag-time rule can leave the catalogue with no triple at all. That
+    is a verdict and not a crash, but a job that asked for a subject
+    anyway must be told, not handed a stand-in.
+    """
+    plan = readiness.build_plan(
+        revision="HEAD",
+        releases=[],
+        metas=lambda entry: [],
+        repository=REPO_ROOT,
+        published_only=True,
+    ).document()
+    assert plan["combinations"] == []
+    with pytest.raises(SystemExit, match="marks 0 combinations to compare"):
+        readiness.comparison_subject(plan)
+
+
+def test_a_plan_marking_two_subjects_is_refused(readiness):
+    """Producer and reader disagreeing is said, never smoothed over."""
+    plan = {
+        "combinations": [
+            {"id": "one", "label": "one", "compare": True},
+            {"id": "two", "label": "two", "compare": True},
+        ]
+    }
+    with pytest.raises(SystemExit, match="marks 2 combinations to compare"):
+        readiness.comparison_subject(plan)
+
+
+def test_the_subject_is_printed_as_the_names_the_job_downloads(readiness, capsys):
+    """`subject`: the identifier, the label, and one artefact per architecture."""
+    plan = {
+        "combinations": [
+            {"id": "combination-1", "label": "not this one", "compare": False},
+            {"id": "combination-2", "label": "SDK 1.2.3 + …", "compare": True},
+        ]
+    }
+    assert readiness.describe_subject(plan=plan, architectures=["amd64", "arm64"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "id=combination-2",
+        "label=SDK 1.2.3 + …",
+        "amd64=firmware-combination-2-amd64",
+        "arm64=firmware-combination-2-arm64",
+    ]
+
+
+def test_the_workflow_uploads_the_artefact_names_this_module_forms(readiness):
+    """The two files cannot drift: one names the artefact, the other forms it.
+
+    `ci-build.yml` uploads a firmware leg under a name it spells out in
+    YAML, and the comparison job downloads it by the name
+    `FIRMWARE_ARTEFACT` forms. A rename on one side and not the other is
+    the defect this asserts away — it would look exactly like the one
+    that made the job compare nothing.
+    """
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci-build.yml").read_text(encoding="utf-8")
+    expected = readiness.FIRMWARE_ARTEFACT.format(
+        combination="${{ matrix.combination.id }}",
+        architecture="${{ matrix.target.arch }}",
+    )
+    assert f"name: {expected}" in workflow, expected
+    # And the comparison job takes its names from the module rather than
+    # spelling them out a second time.
+    assert "release_readiness.py subject" in workflow
+    assert "steps.subject.outputs.amd64" in workflow
+    assert "steps.subject.outputs.arm64" in workflow
+    assert "pattern: firmware-" not in workflow, (
+        "a firmware artefact is downloaded by name; a pattern that matches "
+        "nothing is what let the comparison pass without comparing"
+    )
+
+
 def test_a_host_prefixed_requirement_is_still_a_requirement(readiness):
     """`requires` keys may name the host; the host is not part of the name."""
     assert (
