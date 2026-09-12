@@ -1,17 +1,17 @@
 {
   "sdk": {
     "requires": {
-      "mcuhome-build-workspace": "~=0.1.0"
+      "mcuhome-build-workspace": "~=0.2.0"
     },
-    "version": "0.1.20"
+    "version": "0.2.0"
   },
   "tools": {
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "workspace": {
     "requires": {
-      "mcuhome-build-tools": "~=0.1.0"
+      "mcuhome-build-tools": "~=0.2.0"
     },
-    "version": "0.1.0"
+    "version": "0.2.0"
   }
 }
