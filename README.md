@@ -98,16 +98,40 @@ runs, one job per check.
 Needs Python ≥3.13 for `packaging/model` and `packaging/compiler`. C sources
 follow `.clang-format`, checked with a pinned clang-format binary.
 
-`scripts/test twister` needs a build environment and a west workspace, and
-takes either of the two ways one is delivered. On a developer machine: your
-own workspace (`west init -m https://github.com/mcu-home/mcuhome-sdk && west
-update`) passed as the first argument or in `MCUHOME_SDK_WEST_WORKSPACE`,
-plus a container runtime and a build-environment image already pulled — the
-wrapper never fetches one. In CI: the workspace and tools packages the
-commit under test produces, unpacked, with `MCUHOME_SDK_BUILD_TOOLS` naming
-the tools tree; then nothing is containerized and the suites compile on the
-host with that package's toolchain. `.github/workflows/ci-build.yml`'s
-`test-twister` job shows the second form end to end.
+**Where the checkout lies.** This repository is the manifest repository of
+a west workspace, and it has to lie *inside* that workspace: `west init -l`
+resolves a symlinked manifest repository and anchors the workspace at the
+checkout's **physical** parent, so the workspace directory is the
+checkout's parent, and a convenience symlink points into the workspace,
+never the other way round. From scratch:
+
+```sh
+mkdir mcuhome-workspace && cd mcuhome-workspace
+git clone https://github.com/mcu-home/mcuhome-sdk.git mcuhome-sdk
+west init -l mcuhome-sdk
+west update
+```
+
+`.west/`, `zephyr/`, `modules/` and `bootloader/` end up beside the
+checkout. If you are used to reaching the repository at some other path,
+put a link there and nothing else changes — `ln -s
+mcuhome-workspace/mcuhome-sdk mcuhome-sdk` in the parent directory; git,
+editable installs and the wrappers all work through it, and west still
+anchors on the physical location.
+
+`scripts/test twister` needs a build environment and a west workspace. The
+workspace is the one this checkout lies in, so a checkout laid out as above
+needs nothing set; a different workspace is passed as the wrapper's first
+argument or in `MCUHOME_SDK_WEST_WORKSPACE`. The build environment comes in
+either of the two ways it is delivered. On a developer machine: a container
+runtime and a build-environment image already pulled — the wrapper never
+fetches one. In CI: the workspace and tools packages the commit under test
+produces, unpacked, with `MCUHOME_SDK_BUILD_TOOLS` naming the tools tree;
+then nothing is containerized and the suites compile on the host with that
+package's toolchain. `.github/workflows/ci-build.yml`'s `test-twister` job
+shows the second form end to end. Twister's output — build trees, logs, the
+report — goes to a temporary directory that is removed when the run ends;
+`MCUHOME_SDK_TWISTER_KEEP=1` keeps it and prints its path.
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install \

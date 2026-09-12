@@ -355,17 +355,24 @@ in every compile invocation, so hit rates follow path stability:
    of symlink-view workspaces).
 4. **Switchover** — local and remote builds move to the package-built
    image, the old image is retired, and the development workspace moves
-   out of the project root into a dedicated workspace directory (the
-   manifest repository lives physically in that directory; the
-   accustomed dev-root path stays as a symlink pointing into it —
-   section 9). **Done for the builds themselves**: a local build in a
+   out of the project root into a dedicated workspace directory.
+   **Done for the builds themselves**: a local build in a
    container, a local build in a subprocess and a remote build through
    the build server all run the package-built image on the invocation
    this specification defines, and the vocabulary a user states them in
    is a target (`local` | `remote`) crossed with a mode (`container` |
    `subprocess`). This repository's own CI compiles the Zephyr suites
-   and the reference Matter firmware in that same environment. What
-   remains of this step is the workspace move and the documentation.
+   and the reference Matter firmware in that same environment. **The
+   workspace move is done too**, in the layout section 9's symlink
+   finding prescribes: the workspace directory holds `.west/`,
+   `zephyr/`, `modules/`, `bootloader/` and the manifest repository
+   physically, and the path the checkout used to be reached at is a
+   symlink into it, so every absolute path — virtual environments,
+   editable installs, tool configuration — keeps working while west
+   anchors on the physical location. `scripts/test twister` takes that
+   workspace as its default and needs nothing configured; its output
+   goes to a temporary directory that the run removes. What remains of
+   this step is the documentation of dev mode itself.
    The one thing that had to be settled before the workspace move is
    settled and measured (section 9): the copy-up is paid. A step's
    `work` stays in the container's writable layer, the view is mirrored
@@ -392,7 +399,12 @@ incorporate their consequences.
   read-only manifest repo. West's workspace containment check is
   deliberately lexical and replacing a *project* directory with a
   symlink is an upstream-documented pattern — the basis for symlink
-  views of read-only trees.
+  views of read-only trees. This is no longer a finding about an option:
+  it is the layout the development workspace is in (section 8, step 4)
+  and the one the repository README tells a newcomer to create — checkout
+  inside the workspace directory, link at the accustomed path, confirmed
+  on a real workspace by `west topdir` answering with the workspace
+  directory from inside the checkout and from the link alike.
 - **View of the environment's workspace** (verified 2026-09-06 with
   west 1.5.0, the version the tools package ships; the builder assembles
   one for every step, read-only workspace or not — section 5). A view
