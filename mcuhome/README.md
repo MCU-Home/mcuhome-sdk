@@ -14,7 +14,7 @@ pip install -e ../mcuhome-cli            # the `mcuhome` command (own repo, gith
 mcuhome device matter-pairing --new <device>    # draw this device's commissioning credentials
 mcuhome device validate <device>        # stages 1-3, prints the resolved device
 mcuhome device build <device> --generate-only   # + stage 4, writes the application
-mcuhome device build <device>           # + stage 5, compiles it in the builder image
+mcuhome device build <device>           # + stage 5, compiles it in a build environment
 pytest                           # the suite in ../tests/python/
 ```
 
@@ -30,7 +30,7 @@ them is *where the code has to run*, not what it is about:
 | Import package | Distribution | What it is | Where it runs |
 |---|---|---|---|
 | `mcuhome.model` | `mcuhome-model` | the shared vocabulary — device model, registry, the context and manifest formats, the frozen context-ID rule, error types. No build machinery, no third-party dependency | everywhere, including a build server that carries no build logic at all |
-| `mcuhome.workbench` | `mcuhome-workbench` | stages 1-3, context creation, the three build methods, the session client, signing — **in [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench)**, not here | wherever a build is *driven*: the command line, the dashboard, third-party embedders |
+| `mcuhome.workbench` | `mcuhome-workbench` | stages 1-3, context creation, the two build targets and the two modes a local one is executed in, the session client, signing — **in [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench)**, not here | wherever a build is *driven*: the command line, the dashboard, third-party embedders |
 | `mcuhome.compiler` | `mcuhome-compiler` | stages 4-5 and the entry point the build environment reaches code generation through | inside the build environment, out of the SDK it was delivered |
 
 `mcuhome.workbench.api` is the supported programmatic surface. The
@@ -42,8 +42,12 @@ The project files are in [`../packaging/`](../packaging/), not here: the
 tree has to sit at the repository root because that root is also the SDK
 package a build environment puts on `PYTHONPATH`, so each
 distribution reaches up into it rather than holding sources of its own.
-Both read one version, from `model/__init__.py`; the workbench versions
-independently in its own repository.
+Neither states a version of its own: `mcuhome.model.__version__` is the
+`sdk` version of [`packaging/build-environment/environment.json`](../packaging/build-environment/environment.json),
+read from the generated `model/VERSION` in a built distribution and from
+that file in a checkout, and both distributions take their version from
+that one attribute. The workbench versions independently in its own
+repository.
 
 ## Modules
 

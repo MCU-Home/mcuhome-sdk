@@ -43,12 +43,22 @@ must build (a commissionable but featureless node).
 
 `sources:` names the SDK and the two build-environment packages
 (`sdk`, `build_workspace`, `build_tools`), in the reference form
-`[registry/]<source>/<package>[:version][@sha256:…]`. Every entry is an
+`[<registry-host>/][<source>/]<package>[:<constraint>][@sha256:<hash>]` —
+docker's spelling, with a PEP 440 constraint where docker has a tag, and
+with the host and the source shelf defaulting to the ones that package is
+served from. A value that begins with the separator states the rest about
+the package the entry is already about (`":~=0.1.0"`, `"@sha256:…"`), a
+bare version is the exact pin it looks like. Every entry is an
 override of a version that is otherwise resolved at build time, each one
 for its own package alone, and nothing ever writes such an entry into a
 device — a device is not to be frozen onto whatever happened to be
 current on the day it was created. What the absent entries resolve to is
-the orchestrator's rule, not this schema's.
+the orchestrator's rule, not this schema's: the SDK release states which
+build workspaces it was built with, that workspace states which build
+tools it needs, and each range resolves to the newest published version
+satisfying it. An override outside such a range is honoured with a note
+in the build log, never refused — the stage above knows what it was
+tested with, not what is allowed.
 
 `sources.container_image` is the fourth entry and the one that names no
 package: it pins the **container image that delivers** those two
@@ -59,10 +69,14 @@ the value starts with:
 ```yaml
 sources:
   container_image: ghcr.io/mcu-home/build-environment          # that repository
-  # container_image: ":0.1.10.dev2-r1"                         # that tag
+  # container_image: ":0.1.0-r2"                               # that tag
   # container_image: "@sha256:…"                               # those bytes
-  # container_image: ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1
+  # container_image: ghcr.io/mcu-home/build-environment:0.1.0-r2
 ```
+
+A tag of that image is `<build workspace package version>-r<n>`, and it is a
+location rather than an identity: what an image is accepted for is the package
+set its labels declare.
 
 A pin narrows which images are looked at and never what is accepted: an
 image is matched by the package set its labels declare, and a mismatch

@@ -1,12 +1,10 @@
 # tests/python/
 
-Python tests for the three packages under `mcuhome/`
-(`mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler`), run with
-pytest:
+Python tests for the two packages under `mcuhome/`
+(`mcuhome-model`, `mcuhome-compiler`), run with pytest:
 
 ```sh
-pip install -e ./packaging/model -e ./packaging/workbench \
-            -e ./packaging/compiler 'pytest>=8.0'
+pip install -e ./packaging/model -e ./packaging/compiler 'pytest>=8.0'
 pytest
 ```
 
@@ -30,70 +28,50 @@ second — they are the fast half of the strategy in
 
 | File | Covers |
 |---|---|
-| `test_tree.py` | config-root discovery, device resolution (name, folder, bare file) |
-| `test_loader.py` | YAML parsing and `!secret` resolution, including their error messages |
-| `test_schema.py` | shape errors: unknown keys, wrong types, malformed durations |
-| `test_validate.py` | every v0.1 scope gate and cross-reference check, message **and** location |
-| `test_pairing.py` | commissioning: the CHIP vectors, the atomic Kconfig group, `matter-pairing` |
+| `test_pairing.py` | commissioning credentials: the CHIP vectors and the atomic Kconfig group |
 | `test_registry.py` | the per-board update scheme and flash layout, and that no module branches on a board name |
-| `test_signing.py` | the per-user signing key: where it is, what it is, and how the refusals read |
-| `test_examples.py` | the design examples in `docs/design/examples/` |
-| `test_model_golden.py` | the canonical model of `00-bmp180-two-endpoints.yaml`, byte-exact |
 | `test_generate.py` | stage 4: every generated artifact, byte-exact, plus its error paths |
 | `test_workspace.py` | stage 5 on the host: workspace discovery, prerequisites, the sysbuild command, per-image artifacts and memory reports |
-| `test_container.py` | stage 5 in the image: image tag, mounts, environment, the three refusals |
-| `test_api.py` | the supported programmatic surface (`mcuhome.workbench.api`) and the serialized shape of an error |
-| `test_imgtool.py` | detached signing: the command is Zephyr's own, and two signings of one image differ only in the signature |
-| `test_export.py` | the registry and the `main.yaml` JSON Schema, golden and against the parser |
-| `test_scaffold.py` | `mcuhome new`: what it writes, what it refuses, and that matter-pairing then validate works on it |
-| `test_packaging.py` | the package layout: one distribution per subpackage, one version for all three, the two files outside Python that name an import path, and the `remote` extra's declaration |
-| `test_sessionclient.py` | the `remote` build method: the session-protocol client, driven against the **real** build server (see below) |
-
-## The one suite with extra requirements
-
-`test_sessionclient.py` tests the client of the session protocol
-against the real `mcuhome-buildserver` over a real socket — one client
-and one server tested against each other rather than each against a mock
-of the other. That needs two things the installs above do not bring:
-
-```sh
-pip install -e './packaging/workbench[remote]'   # aiohttp + zstandard
-pip install -e ../mcuhome-buildserver                   # the peer, cloned beside this repo
-```
-
-Without them the file skips itself with **one** reason naming exactly
-what is missing (`pytest -rs` prints it). CI installs the extra but not
-the build server: that repository is private and the workflow has no
-deploy key for it, so those tests are green locally and skipped there —
-a stated gap, not a silent one.
+| `test_export.py` | the registry, exported as data for the dashboard: golden-tested byte for byte |
+| `test_packaging.py` | the package layout: one distribution per subpackage, one version shared by both, and the two files outside Python that name an import path |
+| `test_context.py` | the build context format and its normative, version-locked ID |
+| `test_imageref.py` | parsing an external image reference: registry vs. path, port colon vs. tag colon |
+| `test_jobs.py` | the compile-jobs heuristic and the precedence ladder above it |
+| `test_ota.py` | the device version: the SemVer-to-SoftwareVersion mapping, and refusing one out of range |
+| `test_userpaths.py` | per-user paths come from the stated environment, and that no other module reads process state instead |
+| `test_abi.py` | the build environment's request/result ABI and the SDK entry point's own call into it, mostly through refusals |
+| `test_buildenvironment.py` | parsing `build-environment.json` and `meta.json`, and what each refusal names |
+| `test_container_closure.py` | the SDK entry point's import closure stays stdlib plus `mcuhome` |
+| `test_env_image.py` | the thin build-environment image: what it may contain, and what its labels claim |
+| `test_env_package.py` | the build-environment packages: determinism, the declared member set, and the pins that must agree |
+| `test_builder_workspace.py` | the west workspace record a build environment writes: layer names, resolved commit and patch digest |
+| `test_check_build_artifacts.py` | the CI artifact gate: a complete build passes, a broken one is named |
+| `test_compare_firmware.py` | the firmware-comparison report: telling "one stamp" apart from "everywhere" |
+| `test_sdk_archive.py` | the SDK package: the same bytes twice, the allowlist, and a real unpack through the orchestrator |
+| `test_release.py` | the release act and release readiness: what a commit can already say, and what a release refuses |
 
 The command-surface tests (exit codes, summary output, `-o json`
 documents) live with the command: `tests/test_cli.py` in the
 [mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli) repository, which is
-where the `mcuhome` command itself moved.
+where the `mcuhome` command itself moved. Driving a build environment —
+docker included — is the workbench's job since the repository split, and
+its own suite guards that; no module in this repository starts one.
 
-The one test that runs an external program is the detached-signing
-equivalence proof in `test_imgtool.py`, which invokes `imgtool` over a
-few kilobytes of synthetic image and skips itself where imgtool is not
-installed. That is signing, not building: it takes milliseconds and needs
-no toolchain.
+**No build ever runs here, and no test touches the developer's own
+signing key.** An autouse fixture in `conftest.py` points
+`XDG_CONFIG_HOME` (and `HOME`) at `tmp_path`, because a real signing key
+is a real, long-lived secret on the machine running the suite and a test
+that reached it would either read a secret it has no business reading or
+create one outside a temporary directory.
 
-**No build ever runs here, docker never runs, and no test touches the
-developer's own signing key.** An autouse fixture in `conftest.py` points
-`XDG_CONFIG_HOME` at `tmp_path`, because `mcuhome build` generates a real
-private key on first need and a suite that reached the real one would
-either read a secret or create one outside a temporary directory.
-
-**No build ever runs here, and neither does docker.** `test_workspace.py`
-and `test_container.py` (plus the `build` tests in the mcuhome-cli repository)
-cover everything stage 5 decides *before* the compiler starts and mock
-the subprocess itself — `container.preflight()` takes its process
-runner as an argument for exactly that reason, and an autouse fixture in
-`conftest.py` makes the real one raise, so a test that forgets to stub
-stage 5 fails instead of starting a Matter build. Compiling a Matter node takes
-minutes, a toolchain and a few gigabytes of image; that belongs to
-twister and to hardware verification, not to a suite whose whole value is
-running in a second.
+**No build ever runs here.** `test_workspace.py` (plus the `build` tests
+in the mcuhome-cli repository) covers everything stage 5 decides *before*
+the compiler starts: the command line, which prerequisite is missing, and
+what the build log meant. The one test that needs a subprocess mocks it
+directly, with `monkeypatch.setattr(subprocess, ...)`. Compiling a Matter
+node takes minutes, a toolchain and a few gigabytes of image; that
+belongs to twister and to hardware verification, not to a suite whose
+whole value is running in a second.
 
 ## Golden files
 
@@ -101,28 +79,31 @@ running in a second.
 overlay, Kconfig fragment, application `CMakeLists.txt`,
 `CHIPProjectConfig.h` wrapper and the three sysbuild artifacts
 (`sysbuild.conf` plus the bootloader image's `.conf` and `.overlay`),
-plus the two documents the builder exports as its contract with the
-dashboard — `registry.json` and `main.schema.json`. The two generated C files are not
+plus `registry.json`, the document `mcuhome.model.export` exports as its
+contract with the dashboard. (The `main.yaml` JSON Schema is a workbench
+export, tested in that repository.) The two generated C files are not
 duplicated here: **the committed sample is the golden file** for those,
 so `test_generate.py` compares fresh generator output against
 `samples/matter-node/src/mcuhome_config.{c,h}` directly.
 
-Regenerate deliberately, never automatically — from the repository root:
+The device model golden itself is resolved from YAML in the workbench
+repository and copied in from there. What this repository regenerates,
+deliberately and never automatically, is everything it derives from that
+model — from the repository root:
 
 ```sh
-# the device model
-python - <<'PY'
-from pathlib import Path
-from mcuhome.workbench import api
-project, entry = api.find_device(
-    "docs/design/examples/00-bmp180-two-endpoints.yaml", env={}, cwd=Path.cwd())
-model = api.load_model(entry, project=project)
-Path("tests/python/data/golden/00-bmp180-two-endpoints.device-model.json").write_text(model.to_json())
-PY
-
 # the stage-4 artifacts, including the sample's C files
-mcuhome device build docs/design/examples/00-bmp180-two-endpoints.yaml \
-  --build-dir /tmp/bmp180-node --generate-only
+python - <<'PY'
+import json
+from pathlib import Path
+from mcuhome.compiler.generate import write_tree
+from mcuhome.model.model import DeviceModel
+
+golden = Path("tests/python/data/golden")
+model = DeviceModel.from_dict(
+    json.loads((golden / "00-bmp180-two-endpoints.device-model.json").read_text()))
+write_tree(model, out_dir=Path("/tmp/bmp180-node"), config_name="00-bmp180-two-endpoints.yaml")
+PY
 cp /tmp/bmp180-node/app/src/mcuhome_config.[ch] samples/matter-node/src/
 cp /tmp/bmp180-node/app/prj.conf \
    tests/python/data/golden/00-bmp180-two-endpoints.prj.conf
@@ -139,9 +120,16 @@ cp /tmp/bmp180-node/app/sysbuild/mcuboot.conf \
 cp /tmp/bmp180-node/app/sysbuild/mcuboot.overlay \
    tests/python/data/golden/00-bmp180-two-endpoints.mcuboot.overlay
 
-# the two exported contract documents
-mcuhome schema config > tests/python/data/golden/main.schema.json
-mcuhome schema registry > tests/python/data/golden/registry.json
+# the registry export — the builder version is stated as a placeholder,
+# the same one test_export.py substitutes it for, so a release does not
+# turn this golden red for a reason unrelated to its content
+python - <<'PY'
+from pathlib import Path
+from mcuhome.model import export, __version__
+
+data = export.to_json(export.registry_data()).replace(__version__, "0.1.0.dev0")
+Path("tests/python/data/golden/registry.json").write_text(data)
+PY
 ```
 
 Regenerating the sample's C files is not optional bookkeeping: it is how

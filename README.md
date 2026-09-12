@@ -56,7 +56,7 @@ own west workspace, which is how an application consumes the C runtime directly.
 
 | Path | Purpose |
 |---|---|
-| `mcuhome/` | `mcuhome-model` and `mcuhome-compiler`: device model, registry, build context, code generation, west orchestration, invocation-ABI adapter |
+| `mcuhome/` | `mcuhome-model` and `mcuhome-compiler`: device model, registry, build context, code generation, west orchestration, and the builder program a build environment runs |
 | `packaging/` | Distribution metadata for the two Python distributions |
 | `components/`, `lib/`, `drivers/` | The C runtime: Matter and sensor components, portable libraries, out-of-tree drivers |
 | `include/`, `dts/` | Public headers and devicetree bindings |
@@ -118,6 +118,15 @@ put a link there and nothing else changes — `ln -s
 mcuhome-workspace/mcuhome-sdk mcuhome-sdk` in the parent directory; git,
 editable installs and the wrappers all work through it, and west still
 anchors on the physical location.
+
+That workspace is also what a device build compiles against while you are
+changing the SDK: point `build.dev_workspace` at the workspace directory
+(not at this checkout) and build without a container —
+`mcuhome config set build.mode subprocess` — and the build uses these
+trees and the tools on your `PATH` instead of a provisioned environment,
+without writing anything into them. The
+[workbench's README](https://github.com/mcu-home/mcuhome-workbench#building-against-a-west-workspace-of-your-own)
+documents what such a build does and refuses.
 
 `scripts/test twister` needs a build environment and a west workspace. The
 workspace is the one this checkout lies in, so a checkout laid out as above

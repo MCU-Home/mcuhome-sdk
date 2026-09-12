@@ -356,14 +356,20 @@ in every compile invocation, so hit rates follow path stability:
 4. **Switchover** — local and remote builds move to the package-built
    image, the old image is retired, and the development workspace moves
    out of the project root into a dedicated workspace directory.
-   **Done for the builds themselves**: a local build in a
-   container, a local build in a subprocess and a remote build through
-   the build server all run the package-built image on the invocation
-   this specification defines, and the vocabulary a user states them in
-   is a target (`local` | `remote`) crossed with a mode (`container` |
-   `subprocess`). This repository's own CI compiles the Zephyr suites
-   and the reference Matter firmware in that same environment. **The
-   workspace move is done too**, in the layout section 9's symlink
+   **Done.** A local build in a container, a local build in a subprocess
+   and a remote build through the build server all run the package-built
+   image on the invocation this specification defines, and the vocabulary
+   a user states them in is a target (`local` | `remote`) crossed with a
+   mode (`container` | `subprocess`). This repository's own CI compiles
+   the Zephyr suites and the reference Matter firmware in that same
+   environment. The old monolithic image is retired, as point 2 above
+   records: the one role it had left is the packager's, and
+   `ghcr.io/mcu-home/build-environment` is the only image a device is
+   ever built in. What that image delivers, and the SDK
+   compiled in it, are versioned on the three release lines of section 2
+   since the same step, so a toolchain that did not move is no longer
+   republished for a generator change.
+   **The workspace move is done too**, in the layout section 9's symlink
    finding prescribes: the workspace directory holds `.west/`,
    `zephyr/`, `modules/`, `bootloader/` and the manifest repository
    physically, and the path the checkout used to be reached at is a
@@ -371,8 +377,15 @@ in every compile invocation, so hit rates follow path stability:
    editable installs, tool configuration — keeps working while west
    anchors on the physical location. `scripts/test twister` takes that
    workspace as its default and needs nothing configured; its output
-   goes to a temporary directory that the run removes. What remains of
-   this step is the documentation of dev mode itself.
+   goes to a temporary directory that the run removes. Building against
+   such a workspace instead of against a provisioned environment is the
+   subprocess profile's development build (`build.dev_workspace`), and
+   the workbench's README is where it is documented for the person who
+   uses it: the workspace is the whole environment, the tools are the
+   ones on that person's `PATH`, the context such a build writes is the
+   developer form — pinning no packages, reproducible by nobody else and
+   refused by a build server — and MCUHome writes nothing into the
+   workspace.
    The one thing that had to be settled before the workspace move is
    settled and measured (section 9): the copy-up is paid. A step's
    `work` stays in the container's writable layer, the view is mirrored
