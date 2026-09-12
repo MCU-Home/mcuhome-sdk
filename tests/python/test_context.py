@@ -461,8 +461,9 @@ def test_a_reported_line_is_always_one_the_release_satisfies(version: str) -> No
 )
 def test_normalize_release_strips_one_leading_v(version: str, expected: str) -> None:
     """West states every pinned revision with a ``v`` no release grammar
-    carries; this is the one place that strip happens, for every reader
-    of a ``describe`` answer or a west revision alike."""
+    carries — ``west list`` answers ``v4.4.0`` where a constraint and an
+    environment's own version label read ``4.4.0`` — and this is the one
+    place that strip happens."""
     assert normalize_release(version) == expected
 
 
