@@ -620,10 +620,13 @@ def expected_jobs(*, mode: str, stage: str, verify_mode: str) -> dict[str, str]:
     """Which jobs this run needs, and which it is right to have skipped.
 
     ``mode`` is what the run is — a tag, a rehearsal, an image revision, a
-    verification of something already released — and the two other
-    arguments are what the gate resolved. The answer is a verdict per job:
-    ``success`` for one this run exists for, ``skipped`` for one that has
-    nothing to do in it.
+    verification of something already released — and *stage* is which line
+    a tag is about. The answer is a verdict per job: ``success`` for one
+    this run exists for, ``skipped`` for one that has nothing to do in it.
+
+    *verify_mode* is not read. Whether there is an image to verify against
+    decides what that job *does*, not whether it runs — it runs either way
+    and says which it was.
     """
     if mode not in ("tag", "rehearse", "image", "verify"):
         raise SystemExit(f"{mode!r} is not a kind of release run")
@@ -631,7 +634,6 @@ def expected_jobs(*, mode: str, stage: str, verify_mode: str) -> dict[str, str]:
     # An image is assembled by a build workspace release and by a revision
     # dispatch, and by nothing else: it delivers a workspace package.
     image = mode == "image" or (mode == "tag" and stage == "workspace")
-    verified = verify_mode not in ("", "skip")
     wanted = {
         "gate-release": True,
         "build-packages": builds,
@@ -639,7 +641,13 @@ def expected_jobs(*, mode: str, stage: str, verify_mode: str) -> dict[str, str]:
         "publish-release": mode == "tag",
         "build-environment-image": image,
         "publish-environment-image-index": image,
-        "verify-release": verified,
+        # Always. A verification with nothing to verify against does not
+        # skip as a job — it runs and says which of the reasons it is,
+        # because a release that verified nothing has to say so somewhere a
+        # reader looks. A verify job that really was skipped means its
+        # preconditions did not hold, and that is a run that did not do
+        # its job.
+        "verify-release": True,
     }
     return {job: ("success" if needed else "skipped") for job, needed in wanted.items()}
 

@@ -1306,7 +1306,31 @@ def test_a_tag_of_each_line_runs_the_jobs_that_line_needs(release):
     assert sdk["verify-release"] == "success"
     tools = release.expected_jobs(mode="tag", stage="tools", verify_mode="skip")
     assert tools["publish-release"] == "success"
-    assert tools["verify-release"] == "skipped"
+    # Even with nothing to verify against: the job runs and says which of
+    # the reasons it is, so a release that verified nothing says so.
+    assert tools["verify-release"] == "success"
+
+
+def test_a_verification_with_nothing_to_verify_still_runs(release):
+    """It does not skip as a job — it reports, and that is the difference.
+
+    A verify job that really was skipped means its preconditions did not
+    hold: the image was not pushed, or the release was not published. That
+    is a run that did not do its job, and it has to be red.
+    """
+    for mode, stage in (("tag", "tools"), ("rehearse", "workspace"), ("image", "")):
+        assert (
+            release.expected_jobs(mode=mode, stage=stage, verify_mode="skip")["verify-release"]
+            == "success"
+        )
+    results = dict.fromkeys(release.RELEASE_JOBS, "skipped")
+    results["gate-release"] = "success"
+    results["build-packages"] = "success"
+    results["build-firmware"] = "success"
+    assert (
+        release.check_run(mode="rehearse", stage="workspace", verify_mode="skip", results=results)
+        == 1
+    )
 
 
 def test_an_image_revision_publishes_an_index_and_verifies_it(release):
