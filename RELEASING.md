@@ -49,8 +49,15 @@ gh workflow run release.yml --ref main -f rehearse=workspace-v0.1.0
 ```
 
 That runs the whole release act except the publishing: the tag check, the
-gate, the package builds and every firmware build the gate demands. It
-creates no release, pushes no image, and moves nothing.
+gate, the package builds, every firmware build the gate demands and — where
+a published image can deliver what this line resolves to — the
+verification. It creates no release, pushes no image, and moves nothing.
+
+An SDK rehearsal is verified in the published image of the build workspace
+it resolves to, because an image declares the workspace and the tools and
+never the SDK. A build workspace rehearsal is not: a published image
+carries the hash of the archive a *release* attached, and a rehearsal's
+package is a different archive — so the job says that and verifies nothing.
 
 ## 1. Bump the line
 
@@ -265,6 +272,32 @@ Which image, per line:
   delivers a workspace package and the tools it accepts, and no published
   image can declare tools that did not exist when it was assembled. A
   revision dispatch takes the new tools into an image, and verifies there.
+
+**Where the packages come from.** A tag verifies **what it published**: its
+own release's assets, plus the releases of the two stages around it, each
+turned into a package source directory. Not the artefacts the run uploaded
+them from — those are the same bytes, but "the release works" is the
+statement worth making. A rehearsal has no release of its own and uses its
+artefact for that one line.
+
+**Verifying again, without re-tagging:**
+
+```sh
+gh workflow run release.yml -f verify=v0.1.10.dev3
+```
+
+That runs `verify-release` and nothing else, for a tag that is already
+released: its assets and the published chain around them, in the published
+image. It builds no package, creates no release and pushes no image. Use it
+when a verification failed for a reason of its own — a runner, a registry
+hiccup, or a fault in this workflow that has since been fixed — and for a
+release cut before this check existed. A tag is never moved and never
+re-cut for it.
+
+It refuses legibly where there is nothing to verify: a tools tag (an image
+revision is what takes those into an image), a tag that carries no meta
+file, and a chain with a missing link — a release whose own requirement
+nothing published satisfies cannot be verified in anything.
 
 ## When the packager changes
 

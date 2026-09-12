@@ -51,9 +51,17 @@
 # TWO DISPATCHES, and they are the only ways to run this by hand.
 #
 #   `rehearse: <tag>`  everything above except publishing: the gate, the
-#                      packages, the firmware. It answers "would this tag
-#                      go through" against any ref, and it creates no
-#                      release, pushes no image and moves nothing.
+#                      packages, the firmware, and — where a published
+#                      image can deliver what this line resolves to — the
+#                      verification. It answers "would this tag go through"
+#                      against any ref, and it creates no release, pushes
+#                      no image and moves nothing.
+#   `verify: <tag>`    only `verify-release`, for a release that already
+#                      exists: its assets and the published chain around
+#                      them, in the published image. A verification that
+#                      failed for its own reasons can be repeated without
+#                      re-tagging anything, and a release cut before this
+#                      check existed can still get its proof.
 #   `workspace_version` + `revision`
 #                      an image revision -r<n> of an already published
 #                      workspace release: a refreshed base, a Dockerfile
@@ -80,6 +88,10 @@ on:
     inputs:
       rehearse:
         description: "Dry run: the tag to rehearse against this ref (e.g. workspace-v0.1.0). Publishes nothing."
+        type: string
+        default: ""
+      verify:
+        description: "Verify only: a tag that is already released (e.g. v0.1.10.dev3). Builds and publishes nothing."
         type: string
         default: ""
       workspace_version:
@@ -127,15 +139,43 @@ jobs:
       family: ${{ steps.tag.outputs.family }}
       packages: ${{ steps.gate.outputs.packages }}
       combinations: ${{ steps.gate.outputs.combinations }}
-      verify_mode: ${{ steps.gate.outputs.verify_mode || steps.image.outputs.verify_mode }}
+      # Where a verification takes each stage's bytes from, and which image
+      # it runs in — the same six answers whichever of the three kinds of
+      # run produced them, so `verify-release` reads one set of variables
+      # and never asks what kind of run it is in.
+      verify_mode: >-
+        ${{ steps.gate.outputs.verify_mode || steps.image.outputs.verify_mode
+        || steps.published.outputs.verify_mode }}
       verify_reason: ${{ steps.gate.outputs.verify_reason || steps.image.outputs.verify_reason }}
-      verify_workspace_version: ${{ steps.gate.outputs.verify_workspace_version }}
+      verify_workspace_version: >-
+        ${{ steps.gate.outputs.verify_workspace_version
+        || steps.image.outputs.workspace_version
+        || steps.published.outputs.image_workspace_version }}
       verify_combinations: ${{ steps.gate.outputs.verify_combinations }}
-      # The tools release an image of this workspace delivers, and the SDK
-      # a verification compiles. Resolved once, here, because both answers
-      # come out of the published world and this is the job that reads it.
+      verify_sdk_from: >-
+        ${{ steps.gate.outputs.verify_sdk_from || steps.image.outputs.verify_sdk_from
+        || steps.published.outputs.verify_sdk_from }}
+      verify_workspace_from: >-
+        ${{ steps.gate.outputs.verify_workspace_from
+        || steps.image.outputs.verify_workspace_from
+        || steps.published.outputs.verify_workspace_from }}
+      verify_tools_from: >-
+        ${{ steps.gate.outputs.verify_tools_from || steps.image.outputs.verify_tools_from
+        || steps.published.outputs.verify_tools_from }}
+      verify_sdk_tag: >-
+        ${{ steps.gate.outputs.verify_sdk_tag || steps.image.outputs.sdk_tag
+        || steps.published.outputs.sdk_tag }}
+      verify_workspace_tag: >-
+        ${{ steps.gate.outputs.verify_workspace_tag
+        || steps.image.outputs.verify_workspace_tag
+        || steps.published.outputs.workspace_tag }}
+      verify_tools_tag: >-
+        ${{ steps.gate.outputs.verify_tools_tag || steps.image.outputs.tools_tag
+        || steps.published.outputs.tools_tag }}
+      # The tools release an image of this workspace delivers. Resolved
+      # once, here, because the answer comes out of the published world and
+      # this is the job that reads it.
       tools_tag: ${{ steps.gate.outputs.tools_tag || steps.image.outputs.tools_tag }}
-      sdk_tag: ${{ steps.image.outputs.sdk_tag }}
     steps:
       # The tagged commit, and its tags: the gate reads environment.json
       # out of the commit, never out of a working tree.
@@ -152,6 +192,7 @@ jobs:
         id: mode
         env:
           REHEARSE: ${{ inputs.rehearse }}
+          VERIFY: ${{ inputs.verify }}
           WORKSPACE_VERSION: ${{ inputs.workspace_version }}
           REVISION: ${{ inputs.revision }}
           EVENT: ${{ github.event_name }}
@@ -163,8 +204,12 @@ jobs:
             echo "::notice::releasing $REF_NAME"
             exit 0
           fi
-          if [ -n "$REHEARSE" ] && [ -n "$WORKSPACE_VERSION" ]; then
-            echo "::error::this dispatch asks for both a rehearsal of $REHEARSE and an image revision of $WORKSPACE_VERSION. They are different runs: rehearse a tag, or assemble an image — one per dispatch." >&2
+          asked=0
+          for one in "$REHEARSE" "$VERIFY" "$WORKSPACE_VERSION"; do
+            [ -n "$one" ] && asked=$((asked + 1))
+          done
+          if [ "$asked" -gt 1 ]; then
+            echo "::error::this dispatch asks for more than one thing. They are different runs: rehearse a tag, verify a released one, or assemble an image — one per dispatch." >&2
             exit 1
           fi
           if [ -n "$REHEARSE" ]; then
@@ -172,8 +217,13 @@ jobs:
             echo "::notice::rehearsing $REHEARSE against $REF_NAME — nothing will be published"
             exit 0
           fi
+          if [ -n "$VERIFY" ]; then
+            { echo "mode=verify"; echo "tag=$VERIFY"; } >> "$GITHUB_OUTPUT"
+            echo "::notice::verifying the published $VERIFY — nothing is built and nothing is published"
+            exit 0
+          fi
           if [ -z "$WORKSPACE_VERSION" ]; then
-            echo "::error::this dispatch says nothing. Set 'rehearse' to a tag to try a release without publishing, or 'workspace_version' and 'revision' to assemble another image from a published build workspace release." >&2
+            echo "::error::this dispatch says nothing. Set 'rehearse' to a tag to try a release without publishing, 'verify' to a released tag to verify it again, or 'workspace_version' and 'revision' to assemble another image from a published build workspace release." >&2
             exit 1
           fi
           case "$REVISION" in
@@ -193,13 +243,11 @@ jobs:
           echo "::notice::assembling build-environment:$WORKSPACE_VERSION-r$REVISION"
 
       - name: Set up Python
-        if: steps.mode.outputs.mode != 'image'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
       - name: Install what the gate reads versions with
-        if: steps.mode.outputs.mode != 'image'
         run: python -m pip install --disable-pip-version-check packaging
 
       # The cheapest refusal there is, and the most expensive one to miss:
@@ -209,7 +257,7 @@ jobs:
       # version is immutable and eternal.
       - name: The tag names the version this commit declares
         id: tag
-        if: steps.mode.outputs.mode != 'image'
+        if: steps.mode.outputs.mode == 'tag' || steps.mode.outputs.mode == 'rehearse'
         env:
           TAG: ${{ steps.mode.outputs.tag }}
         run: |
@@ -218,14 +266,19 @@ jobs:
 
       - name: What this release has to pass
         id: gate
-        if: steps.mode.outputs.mode != 'image'
+        if: steps.mode.outputs.mode == 'tag' || steps.mode.outputs.mode == 'rehearse'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.mode.outputs.tag }}
+          MODE: ${{ steps.mode.outputs.mode }}
         run: |
           set -euo pipefail
-          python scripts/release.py \
-            --repository-slug "$GITHUB_REPOSITORY" gate "$TAG" --output gate.json
+          rehearsal=()
+          if [ "$MODE" = rehearse ]; then
+            rehearsal=(--rehearsal)
+          fi
+          python scripts/release.py --repository-slug "$GITHUB_REPOSITORY" \
+            gate "$TAG" --output gate.json "${rehearsal[@]}"
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import json
 
@@ -253,10 +306,13 @@ jobs:
           print(f"verify_mode={verify.get('mode', 'skip')}")
           print(f"verify_reason={verify.get('reason', '')}")
           print(f"verify_workspace_version={verify.get('workspace_version', '')}")
+          for stage, where in (verify.get("sources") or {}).items():
+              print(f"verify_{stage}_from={where['from']}")
+              print(f"verify_{stage}_tag={where['tag']}")
           PY
 
       - name: Say what it demands
-        if: steps.mode.outputs.mode != 'image'
+        if: steps.mode.outputs.mode == 'tag' || steps.mode.outputs.mode == 'rehearse'
         env:
           MODE: ${{ steps.mode.outputs.mode }}
         run: |
@@ -314,11 +370,42 @@ jobs:
             echo "verify_mode=skip" >> "$GITHUB_OUTPUT"
             echo "verify_reason=no published mcuhome-sdk accepts build workspace ${WORKSPACE_VERSION}, so there is no SDK package to build the reference device from" >> "$GITHUB_OUTPUT"
           fi
+          # Nothing is built by a revision, so every stage of the
+          # verification comes off a release — the same six variables the
+          # other two kinds of run answer with.
+          {
+            echo "verify_sdk_from=release"
+            echo "verify_workspace_from=release"
+            echo "verify_tools_from=release"
+            echo "verify_workspace_tag=workspace-v${WORKSPACE_VERSION}"
+          } >> "$GITHUB_OUTPUT"
+
+      # A verification of something that is already released. Nothing is
+      # read out of the commit here — which release exists, what it
+      # requires and what satisfies it are all questions about the
+      # published world, so a release cut from a commit this checkout has
+      # never seen is verified exactly the same way.
+      - name: What verifies this published release
+        id: published
+        if: steps.mode.outputs.mode == 'verify'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.mode.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python scripts/release.py --repository-slug "$GITHUB_REPOSITORY" \
+            verify-plan "$TAG" | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "verify_mode=published-image"
+            echo "verify_sdk_from=release"
+            echo "verify_workspace_from=release"
+            echo "verify_tools_from=release"
+          } >> "$GITHUB_OUTPUT"
 
       # Always, blocked or not: the document is what says why, and a run
       # that refused a release is exactly the one somebody comes back to.
       - name: Keep the gate
-        if: always() && steps.mode.outputs.mode != 'image' && hashFiles('gate.json') != ''
+        if: always() && hashFiles('gate.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-gate
@@ -345,7 +432,7 @@ jobs:
   build-packages:
     name: Build (${{ matrix.stage }} package${{ matrix.platform && format(', {0}', matrix.platform) || '' }})
     needs: gate-release
-    if: needs.gate-release.outputs.mode != 'image'
+    if: needs.gate-release.outputs.mode == 'tag' || needs.gate-release.outputs.mode == 'rehearse'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -547,7 +634,7 @@ jobs:
   build-firmware:
     name: Build (firmware, ${{ matrix.combination.id }}, ${{ matrix.target.arch }})
     needs: [gate-release, build-packages]
-    if: needs.gate-release.outputs.mode != 'image'
+    if: needs.gate-release.outputs.mode == 'tag' || needs.gate-release.outputs.mode == 'rehearse'
     runs-on: ${{ matrix.target.runner }}
     strategy:
       fail-fast: false
@@ -1257,15 +1344,29 @@ jobs:
   #
   # Skipping is stated, never silent: a release that verified nothing has to
   # say which of those three it was.
+  #
+  # WHERE THE BYTES COME FROM is the gate's answer, not this job's: one
+  # variable per stage, `artifact` or `release`, and a tag for the second.
+  # A tag verifies **what it published** — the release exists by the time
+  # this runs — a rehearsal has only its own artefacts, and the two
+  # dispatches build nothing at all. Six variables, one meaning, no
+  # condition in here that could be right in five cases and wrong in the
+  # sixth.
   verify-release:
     name: Verify (release, ${{ matrix.target.arch }})
     needs: [gate-release, build-packages, publish-release, publish-environment-image-index]
+    # Four kinds of run reach this job and each has its own precondition:
+    # a tag has to have published its release, a rehearsal has to have
+    # built its packages, an image revision and a `verify` dispatch
+    # neither. Everything that pushed an image waits for the index; a
+    # published image is there already.
     if: >-
       always()
       && needs.gate-release.result == 'success'
-      && needs.gate-release.outputs.mode != 'rehearse'
-      && (needs.publish-release.result == 'success'
-          || needs.gate-release.outputs.mode == 'image')
+      && (needs.gate-release.outputs.mode != 'tag'
+          || needs.publish-release.result == 'success')
+      && (needs.gate-release.outputs.mode != 'rehearse'
+          || needs.build-packages.result == 'success')
       && (needs.publish-environment-image-index.result == 'success'
           || needs.gate-release.outputs.verify_mode != 'pushed-image')
     runs-on: ${{ matrix.target.runner }}
@@ -1406,69 +1507,72 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
 
-      # The same three source directories the gate built with. The context
-      # still resolves the package set here — that is what decides which
-      # image may deliver it — and the SDK archive is delivered from a
-      # source in every profile.
-      - name: Take the packages this run built
-        if: steps.image.outputs.verify == 'true' && needs.gate-release.outputs.mode != 'image'
+      # Each stage into its own directory, by artefact NAME. Never by
+      # pattern: `download-artifact` extracts a single matching artefact
+      # into the path itself and only creates a per-artefact directory when
+      # several match, so a pattern that matched one thing today would
+      # match two tomorrow and the layout underneath would change with it.
+      - name: Take the SDK package this run built
+        if: steps.image.outputs.verify == 'true' && needs.gate-release.outputs.verify_sdk_from == 'artifact'
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          pattern: packages-*
-          path: artifacts
+          name: packages-sdk
+          path: sources/sdk
 
-      - name: Assemble the package sources
+      - name: Take the workspace package this run built
+        if: steps.image.outputs.verify == 'true' && needs.gate-release.outputs.verify_workspace_from == 'artifact'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: packages-workspace
+          path: sources/workspace
+
+      - name: Take the tools package this run built
+        if: steps.image.outputs.verify == 'true' && needs.gate-release.outputs.verify_tools_from == 'artifact'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: packages-tools-${{ matrix.target.platform }}
+          path: sources/tools
+
+      # And everything the gate said comes off a release, off its release —
+      # the archive, its checksum and its meta file, plus the `index.json` a
+      # release page does not carry. A tag verifies the bytes it published,
+      # not the artefact it uploaded them from.
+      - name: Take the published packages this verification uses
         if: steps.image.outputs.verify == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          MODE: ${{ needs.gate-release.outputs.mode }}
-          WORKSPACE_VERSION: ${{ needs.gate-release.outputs.workspace_version }}
-          IMAGE_SDK_TAG: ${{ needs.gate-release.outputs.sdk_tag }}
-          IMAGE_TOOLS_TAG: ${{ needs.gate-release.outputs.tools_tag }}
-          SDK_SOURCE: ${{ matrix.combination.sdk.source }}
-          SDK_TAG: ${{ matrix.combination.sdk.tag }}
-          WORKSPACE_SOURCE: ${{ matrix.combination.workspace.source }}
-          WORKSPACE_TAG: ${{ matrix.combination.workspace.tag }}
-          TOOLS_SOURCE: ${{ matrix.combination.tools.source }}
-          TOOLS_TAG: ${{ matrix.combination.tools.tag }}
+          SDK_TAG: ${{ needs.gate-release.outputs.verify_sdk_from == 'release' && needs.gate-release.outputs.verify_sdk_tag || '' }}
+          WORKSPACE_TAG: ${{ needs.gate-release.outputs.verify_workspace_from == 'release' && needs.gate-release.outputs.verify_workspace_tag || '' }}
+          TOOLS_TAG: ${{ needs.gate-release.outputs.verify_tools_from == 'release' && needs.gate-release.outputs.verify_tools_tag || '' }}
         run: |
           set -euo pipefail
-          mkdir -p sources/sdk sources/workspace sources/tools
-          published() {
+          take() {
             tag="$1"; into="$2"; pattern="$3"
+            [ -n "$tag" ] || return 0
+            mkdir -p "$into"
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
               --pattern "$pattern" --pattern "$pattern.sha256" \
               --pattern "$pattern.meta.json" --dir "$into" --clobber
             python mcuhome-sdk/scripts/release_readiness.py sources "$into"
           }
-          if [ "$MODE" = image ]; then
-            # A revision verifies the image it just assembled, against the
-            # only published chain that reaches it — the workspace release
-            # itself, the tools it accepts and the newest SDK that accepts
-            # it, all three resolved by the gate.
-            published "workspace-v${WORKSPACE_VERSION}" sources/workspace \
-              'mcuhome-build-workspace-*.tar.zst'
-            published "$IMAGE_SDK_TAG" sources/sdk 'mcuhome-sdk-*.tar.zst'
-            published "$IMAGE_TOOLS_TAG" sources/tools \
-              "mcuhome-build-tools_${PLATFORM}-*.tar.zst"
-          else
-            take() {
-              stage="$1"; source="$2"; tag="$3"; pattern="$4"; artifact="$5"
-              if [ "$source" = published ]; then
-                published "$tag" "sources/$stage" "$pattern"
-              else
-                cp -a "artifacts/$artifact/." "sources/$stage/"
-              fi
+          take "$SDK_TAG" sources/sdk 'mcuhome-sdk-*.tar.zst'
+          take "$WORKSPACE_TAG" sources/workspace 'mcuhome-build-workspace-*.tar.zst'
+          take "$TOOLS_TAG" sources/tools "mcuhome-build-tools_${PLATFORM}-*.tar.zst"
+
+      # Three directories, one version in each, or this build resolves
+      # something nobody planned. Asked here rather than discovered from a
+      # confused refusal twenty minutes later.
+      - name: Say which packages this verification uses
+        if: steps.image.outputs.verify == 'true'
+        run: |
+          set -euo pipefail
+          for stage in sdk workspace tools; do
+            test -f "sources/$stage/index.json" || {
+              echo "::error::sources/$stage holds no package — the verification has nothing to resolve that stage to" >&2
+              exit 1
             }
-            take sdk "$SDK_SOURCE" "$SDK_TAG" 'mcuhome-sdk-*.tar.zst' packages-sdk
-            take workspace "$WORKSPACE_SOURCE" "$WORKSPACE_TAG" \
-              'mcuhome-build-workspace-*.tar.zst' packages-workspace
-            take tools "$TOOLS_SOURCE" "$TOOLS_TAG" \
-              "mcuhome-build-tools_${PLATFORM}-*.tar.zst" "packages-tools-${PLATFORM}"
-          fi
-          for one in sources/*/index.json; do
-            echo "--- $one"
-            cat "$one"
+            echo "--- sources/$stage"
+            cat "sources/$stage/index.json"
           done
 
       # The same throwaway signing key as the gate's builds, for the same

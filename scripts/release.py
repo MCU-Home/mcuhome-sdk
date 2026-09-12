@@ -91,6 +91,8 @@ __all__ = [
     "image_packages",
     "line_of",
     "release_assets",
+    "verify_plan",
+    "verify_sources",
 ]
 
 #: This repository, seen from ``scripts/``.
@@ -240,6 +242,100 @@ def release_assets(directory: Path, *, stage: str, version: str) -> list[Path]:
 
 
 # --------------------------------------------------------------------------
+# verify-plan: the published chain around a release that already exists
+# --------------------------------------------------------------------------
+
+
+def verify_plan(*, stage: str, version: str, releases: list[dict], metas) -> dict[str, str]:
+    """The three releases a published release is verified with, and the image.
+
+    The gate answers this for a tag it is *about to* publish, out of the
+    commit. This answers it for a release that already exists, out of the
+    published world alone — which is what lets a failed verification be
+    repeated without re-tagging anything, and what a release cut before this
+    check existed needs.
+
+    The chain is resolved the way a user resolves it: newest published
+    satisfying each constraint, downwards from the released stage, and the
+    newest published version above it that accepts it. A link that does not
+    exist is a refusal naming it, because a verification against half a
+    chain would prove nothing.
+    """
+    published = {one: release_readiness.published_of(one, releases) for one in release_lines.STAGES}
+    resolved = release_readiness.resolvable(published, metas)
+    tags = {}
+
+    def newest_below(owner: release_readiness.Published, lower: str) -> release_readiness.Published:
+        family = release_readiness.FAMILY[lower]
+        constraint = release_readiness.constraint_on(owner.requires(), family)
+        satisfying = [
+            one for one in resolved[lower] if release_readiness.accepts(constraint, one.version)
+        ]
+        if not satisfying:
+            raise SystemExit(
+                f"{owner.tag} resolves to no {family}: it requires {constraint!r} and no "
+                "published version satisfies it.\n"
+                "There is no chain to verify this release in — release that line first."
+            )
+        return satisfying[-1]
+
+    def the(stage_name: str) -> release_readiness.Published:
+        found = next((one for one in resolved[stage_name] if one.version == version), None)
+        if found is None:
+            raise SystemExit(
+                f"{release_readiness.TAG_PREFIX[stage_name]}{version} is not a published "
+                f"{release_readiness.FAMILY[stage_name]} release carrying a meta file, so "
+                "there is nothing to verify.\n"
+                "A release says what it requires in its <archive>.meta.json; one without "
+                "it cannot be resolved through by anybody."
+            )
+        return found
+
+    if stage == "tools":
+        raise SystemExit(
+            "A build tools release is not verified on its own: an image delivers a build "
+            "workspace package and the tools that package accepts, so the tools reach an "
+            "image only when one is assembled.\n"
+            "Dispatch the image revision (workspace_version + revision) — that run "
+            "assembles them and verifies the result."
+        )
+
+    if stage == "sdk":
+        sdk = the("sdk")
+        workspace = newest_below(sdk, "workspace")
+        tools = newest_below(workspace, "tools")
+        tags = {"sdk_tag": sdk.tag, "workspace_tag": workspace.tag, "tools_tag": tools.tag}
+        image_version = workspace.version
+    else:
+        workspace = the("workspace")
+        tools = newest_below(workspace, "tools")
+        sdk = next(
+            (
+                one
+                for one in reversed(resolved["sdk"])
+                if release_readiness.accepts(
+                    release_readiness.constraint_on(
+                        one.requires(), release_readiness.FAMILY["workspace"]
+                    ),
+                    workspace.version,
+                )
+            ),
+            None,
+        )
+        if sdk is None:
+            raise SystemExit(
+                f"No published {release_readiness.FAMILY['sdk']} accepts "
+                f"{release_readiness.FAMILY['workspace']} {workspace.version}, and the "
+                "reference device is compiled from an SDK package.\n"
+                "Verify it with the SDK release that requires it, once there is one."
+            )
+        tags = {"sdk_tag": sdk.tag, "workspace_tag": workspace.tag, "tools_tag": tools.tag}
+        image_version = workspace.version
+
+    return {**tags, "image_workspace_version": image_version}
+
+
+# --------------------------------------------------------------------------
 # The package matrix a gate run has to build
 # --------------------------------------------------------------------------
 
@@ -302,6 +398,49 @@ def digest_of(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+# --------------------------------------------------------------------------
+# Where the verification takes each stage's bytes from
+# --------------------------------------------------------------------------
+
+
+def verify_sources(combination: dict, *, released_tag: str, rehearsal: bool) -> dict[str, dict]:
+    """Per stage: this run's artefact, or a GitHub release, and which one.
+
+    One rule per source, and the reason each is what it is:
+
+    ``published``
+        A release of this repository, named by the combination. Downloaded
+        and turned into a package source directory, exactly as the gate's
+        firmware builds do.
+    ``release``
+        The line being released. Its release exists by the time anything is
+        verified — ``publish-release`` runs first — so the bytes come from
+        **the release**, which makes the verification a statement about what
+        was published rather than about what was uploaded. In a rehearsal
+        nothing is published, so there the run's own artefact is the only
+        copy there is.
+    ``checkout``
+        A stand-in for a line nothing has published. It carries a local
+        version no package host will ever accept, so there is no release to
+        take it from and the artefact is the only answer.
+
+    Returned rather than computed in the workflow because a matrix, three
+    sources and two modes is exactly the kind of condition that is wrong in
+    one of its six cases and nobody notices until that case is a release.
+    """
+    answer: dict[str, dict] = {}
+    for stage in release_lines.STAGES:
+        entry = combination.get(stage) or {}
+        source = entry.get("source")
+        if source == "published":
+            answer[stage] = {"from": "release", "tag": entry.get("tag", "")}
+        elif source == "release" and not rehearsal:
+            answer[stage] = {"from": "release", "tag": released_tag}
+        else:
+            answer[stage] = {"from": "artifact", "tag": ""}
+    return answer
 
 
 # --------------------------------------------------------------------------
@@ -396,6 +535,15 @@ def main(argv: list[str]) -> int:
     gate = sub.add_parser("gate", help="what this tag has to pass before anything is published")
     gate.add_argument("tag")
     gate.add_argument("--output", type=Path, required=True, help="where the gate plan is written")
+    gate.add_argument(
+        "--rehearsal",
+        action="store_true",
+        help="this run publishes nothing, so the released line exists only as this run's "
+        "own artefact and no image delivers it",
+    )
+
+    verify = sub.add_parser("verify-plan", help="the published chain around a released tag")
+    verify.add_argument("tag")
 
     assets = sub.add_parser("assets", help="exactly the files this release publishes")
     assets.add_argument("stage", choices=release_lines.STAGES)
@@ -424,7 +572,41 @@ def main(argv: list[str]) -> int:
     if arguments.question == "image-packages":
         return _image_packages(arguments)
 
+    if arguments.question == "verify-plan":
+        return _verify_plan(arguments)
+
     return _gate(arguments)
+
+
+def _verify_inputs(document: dict, *, released_tag: str, rehearsal: bool) -> None:
+    """Fill the gate's verify block with where each stage's bytes come from.
+
+    A rehearsal publishes nothing, so two things change: the released line
+    exists only as this run's own artefact, and no image can deliver it —
+    a published image declares the *published* workspace package's hash,
+    and a rehearsal's is a different archive. Verifying an SDK rehearsal
+    against the published image is still exactly right, though: an image
+    declares the workspace and the tools, never the SDK.
+    """
+    verify = document.get("verify")
+    if not verify:
+        return
+    chosen = next(
+        (one for one in document.get("combinations", []) if one["id"] == verify.get("combination")),
+        None,
+    )
+    if chosen is None:
+        verify["mode"] = "skip"
+        verify["reason"] = "this release has no combination to verify with"
+        return
+    if rehearsal and verify["mode"] == "pushed-image":
+        verify["mode"] = "skip"
+        verify["reason"] = (
+            "a rehearsal pushes no image, and no published image can deliver a build "
+            "workspace package that was never published — its labels carry the hash of "
+            "the archive a release attached. Cut the tag to see this verified."
+        )
+    verify["sources"] = verify_sources(chosen, released_tag=released_tag, rehearsal=rehearsal)
 
 
 def _published_world(arguments, work: Path):
@@ -494,6 +676,22 @@ def _published_workspace_meta(arguments, work: Path) -> dict:
     return json.loads(found[0].read_text(encoding="utf-8"))
 
 
+def _verify_plan(arguments) -> int:
+    """``verify-plan``: which releases verify an already published one."""
+    stage, version = line_of(arguments.tag)
+    work = Path(tempfile.mkdtemp(prefix="mcuhome-release-verify-"))
+    try:
+        releases, metas = _published_world(arguments, work)
+        answer = verify_plan(stage=stage, version=version, releases=releases, metas=metas)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    print(f"stage={stage}")
+    print(f"version={version}")
+    for key, value in answer.items():
+        print(f"{key}={value}")
+    return 0
+
+
 def _gate(arguments) -> int:
     """``gate``: the catalogue, the package matrix, and what it publishes."""
     stage, version = line_of(arguments.tag)
@@ -524,6 +722,7 @@ def _gate(arguments) -> int:
         "family": release_readiness.FAMILY[stage],
     }
     document["packages"] = gate_packages(document["combinations"])
+    _verify_inputs(document, released_tag=arguments.tag, rehearsal=arguments.rehearsal)
     arguments.output.write_text(
         json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

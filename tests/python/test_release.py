@@ -212,9 +212,12 @@ def test_changed_inputs_under_a_published_version_are_a_blocker(
     assert "a" * 64 in captured.err
     assert "bump workspace.version" in captured.err
     assert "packaging/build-environment/environment.json" in captured.err
-    # The tag is not in this checkout, so the listing diff says so instead
-    # of inventing one.
-    assert "cannot be compared here" in captured.err
+    # And it says WHICH input moved — out of the tagged commit's own
+    # listing where this checkout has that tag, and by saying it cannot
+    # compare where it does not. Either answer is right and which one comes
+    # out is a property of the clone, not of the check: a full clone has
+    # the tag, a shallow CI checkout may not.
+    assert "What changed since" in captured.err or "cannot be compared here" in captured.err
 
 
 def test_a_published_version_without_a_meta_file_is_a_blocker(readiness, declared, capsys):
@@ -1130,3 +1133,144 @@ def test_the_build_workspace_never_carries_a_local_suffix(release):
     assert by_stage["workspace"]["release"] is False
     assert by_stage["workspace"]["suffix"] is False
     assert by_stage["tools"]["suffix"] is False
+
+
+# --------------------------------------------------------------------------
+# Where a verification takes each stage's bytes from
+# --------------------------------------------------------------------------
+#
+# The case that broke a real release: an SDK tag verifies with its own
+# released package plus two published ones, and that combination of sources
+# is the one no rehearsal had ever produced.
+
+
+def test_an_sdk_release_verifies_with_its_release_and_two_published_ones(release):
+    sources = release.verify_sources(
+        {
+            "sdk": {"source": "release", "version": "0.1.10.dev3"},
+            "workspace": {"source": "published", "version": "0.1.0", "tag": "workspace-v0.1.0"},
+            "tools": {"source": "published", "version": "0.1.0", "tag": "tools-v0.1.0"},
+        },
+        released_tag="v0.1.10.dev3",
+        rehearsal=False,
+    )
+    assert sources == {
+        # Its own release, not the artefact it was uploaded from: what is
+        # verified is what was published.
+        "sdk": {"from": "release", "tag": "v0.1.10.dev3"},
+        "workspace": {"from": "release", "tag": "workspace-v0.1.0"},
+        "tools": {"from": "release", "tag": "tools-v0.1.0"},
+    }
+
+
+def test_a_rehearsal_has_only_its_own_artefact_for_the_released_line(release):
+    sources = release.verify_sources(
+        {
+            "sdk": {"source": "release", "version": "0.1.10.dev3"},
+            "workspace": {"source": "published", "version": "0.1.0", "tag": "workspace-v0.1.0"},
+            "tools": {"source": "published", "version": "0.1.0", "tag": "tools-v0.1.0"},
+        },
+        released_tag="v0.1.10.dev3",
+        rehearsal=True,
+    )
+    assert sources["sdk"] == {"from": "artifact", "tag": ""}
+    assert sources["workspace"]["from"] == "release"
+
+
+def test_a_stand_in_is_never_taken_from_a_release(release):
+    """It carries a local version no package host will ever accept."""
+    sources = release.verify_sources(
+        {
+            "sdk": {"source": "checkout", "version": "0.1.10.dev3"},
+            "workspace": {"source": "release", "version": "0.1.0"},
+            "tools": {"source": "published", "version": "0.1.0", "tag": "tools-v0.1.0"},
+        },
+        released_tag="workspace-v0.1.0",
+        rehearsal=False,
+    )
+    assert sources["sdk"] == {"from": "artifact", "tag": ""}
+    assert sources["workspace"] == {"from": "release", "tag": "workspace-v0.1.0"}
+
+
+def test_every_stage_of_a_verification_has_a_source(release):
+    """Three directories, one per stage — the job refuses an empty one."""
+    for rehearsal in (False, True):
+        sources = release.verify_sources(
+            {
+                "sdk": {"source": "release", "version": "1"},
+                "workspace": {"source": "published", "version": "1", "tag": "workspace-v1"},
+                "tools": {"source": "published", "version": "1", "tag": "tools-v1"},
+            },
+            released_tag="v1",
+            rehearsal=rehearsal,
+        )
+        assert set(sources) == {"sdk", "workspace", "tools"}
+        assert all(one["from"] in ("release", "artifact") for one in sources.values())
+        assert all(one["tag"] or one["from"] == "artifact" for one in sources.values())
+
+
+# --------------------------------------------------------------------------
+# verify-plan: the published chain around a release that already exists
+# --------------------------------------------------------------------------
+
+
+def plan_for(release, readiness, stage, version, releases, tmp_path):
+    return release.verify_plan(
+        stage=stage,
+        version=version,
+        releases=releases,
+        metas=readiness.directory_metas(tmp_path),
+    )
+
+
+def test_a_published_sdk_release_resolves_its_whole_chain(release, readiness, tmp_path):
+    releases = world(
+        tmp_path, tools_release("0.1.0"), workspace_release("0.1.0"), sdk_release("0.1.10.dev3")
+    )
+    answer = plan_for(release, readiness, "sdk", "0.1.10.dev3", releases, tmp_path)
+    assert answer == {
+        "sdk_tag": "v0.1.10.dev3",
+        "workspace_tag": "workspace-v0.1.0",
+        "tools_tag": "tools-v0.1.0",
+        "image_workspace_version": "0.1.0",
+    }
+
+
+def test_a_published_workspace_release_resolves_up_and_down(release, readiness, tmp_path):
+    releases = world(
+        tmp_path, tools_release("0.1.0"), workspace_release("0.1.0"), sdk_release("0.1.10.dev3")
+    )
+    answer = plan_for(release, readiness, "workspace", "0.1.0", releases, tmp_path)
+    assert answer["tools_tag"] == "tools-v0.1.0"
+    assert answer["sdk_tag"] == "v0.1.10.dev3"
+    assert answer["image_workspace_version"] == "0.1.0"
+
+
+def test_verifying_a_tag_that_is_not_published_is_refused(release, readiness, tmp_path):
+    releases = world(tmp_path, tools_release("0.1.0"))
+    with pytest.raises(SystemExit, match="not a published"):
+        plan_for(release, readiness, "sdk", "9.9.9", releases, tmp_path)
+
+
+def test_a_chain_with_a_missing_link_is_refused(release, readiness, tmp_path):
+    """Half a chain proves nothing, so it is a refusal and not a warning."""
+    releases = world(tmp_path, sdk_release("0.1.10.dev3"))
+    with pytest.raises(SystemExit, match="resolves to no mcuhome-build-workspace"):
+        plan_for(release, readiness, "sdk", "0.1.10.dev3", releases, tmp_path)
+
+
+def test_a_workspace_no_published_sdk_accepts_cannot_be_verified(release, readiness, tmp_path):
+    releases = world(
+        tmp_path,
+        tools_release("0.1.0"),
+        workspace_release("0.1.0"),
+        sdk_release(workspace="~=9.9.0"),
+    )
+    with pytest.raises(SystemExit, match="compiled from an SDK package"):
+        plan_for(release, readiness, "workspace", "0.1.0", releases, tmp_path)
+
+
+def test_a_tools_release_is_verified_by_an_image_revision(release, readiness, tmp_path):
+    releases = world(tmp_path, tools_release("0.1.0"))
+    with pytest.raises(SystemExit, match="revision"):
+        plan_for(release, readiness, "tools", "0.1.0", releases, tmp_path)
