@@ -714,13 +714,14 @@ jobs:
   # was commissioned from.
   #
   # It walks the environment THIS commit produces, not a published one:
-  # the packages come from build-packages as local sources, and the chain
-  # SDK -> workspace -> tools is resolved out of their meta files exactly
-  # as a user's build resolves it out of a registry index. Where the plan
+  # the packages come from build-packages as local sources. Where the plan
   # names a published version for a stage, that stage's package is fetched
   # from its GitHub release instead and turned into a source directory of
-  # its own. Either way the build sees one candidate per stage and pins
-  # what it resolved.
+  # its own. Either way the device is pinned to exactly the three packages
+  # this leg provides — version and archive hash per stage — because a
+  # device that pins nothing resolves under the workbench's own default
+  # SDK constraint and reaches for the package registry as soon as a local
+  # directory holds a version outside it.
   #
   # The subprocess profile, not the container one: an image is an assembly
   # of two *published* packages, and these two are not published — nor
@@ -846,9 +847,10 @@ jobs:
           lscpu | grep -Ei 'model name|^cpu\(s\)|thread|core|socket|mhz|bogomips' || lscpu
           free -h
 
-      # One directory per stage, and each holds exactly one version: the
-      # chain then resolves to the combination this leg is about without
-      # anything being pinned in a device file.
+      # One directory per stage, and each holds exactly one version —
+      # which is what lets the device be pinned to the combination this
+      # leg is about further down, package by package, out of the indexes
+      # these directories carry.
       - name: Take the SDK package of this commit
         if: matrix.combination.sdk.source == 'checkout'
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -942,6 +944,24 @@ jobs:
           install -m 600 ../mcuhome-sdk/.github/workflows/firmware-signing-key.pem \
             "$RUNNER_TEMP/signing/mcuboot.pem"
 
+      # Which packages this leg builds with, stated in the device: the
+      # source directories above say where packages may come from, not
+      # which ones are wanted. The pins are exactly what their indexes
+      # hold — one version per stage, the archive's hash beside it, the
+      # tools package of this architecture by name — so this job can only
+      # build the combination it is about, or fail saying so. The example
+      # device pins nothing, and a device that does is refused rather
+      # than extended.
+      - name: Pin the device to the packages this leg provides
+        run: |
+          set -euo pipefail
+          python mcuhome-sdk/scripts/device_pins.py write \
+            --device project/devices/00-bmp180-two-endpoints.yaml \
+            --platform "$PLATFORM" \
+            "$GITHUB_WORKSPACE/sources/sdk" \
+            "$GITHUB_WORKSPACE/sources/workspace" \
+            "$GITHUB_WORKSPACE/sources/tools"
+
       # The documented invocation, and the whole point of this job. How
       # much of the machine the build may use is left to the workbench's
       # own detection, as it is for a user who configured nothing.
@@ -978,6 +998,20 @@ jobs:
         continue-on-error: true
         run: python3 mcuhome-sdk/scripts/check_build_artifacts.py project/build/bmp180-node
 
+      # And a green build of the wrong packages is worse than both: the
+      # combination this leg is named after would not be the one it
+      # built. The build context states what the build resolved, and it
+      # has to be what the device pinned.
+      - name: The build resolved the packages the device pins
+        id: pins
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python mcuhome-sdk/scripts/device_pins.py check \
+            --device project/devices/00-bmp180-two-endpoints.yaml \
+            --build-dir project/build/bmp180-node
+
       # What this leg produced, as a fact the assessment jobs can read:
       # one file per combination and architecture, so a missing one means
       # "not built" rather than "unknown".
@@ -987,11 +1021,13 @@ jobs:
           LABEL: ${{ matrix.combination.label }}
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           ARTIFACT_OUTCOME: ${{ steps.artifacts.outcome }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
         run: |
           set -euo pipefail
           mkdir -p outcome produced
           export OUTCOME=failure
-          if [ "$BUILD_OUTCOME" = success ] && [ "$ARTIFACT_OUTCOME" = success ]; then
+          if [ "$BUILD_OUTCOME" = success ] && [ "$ARTIFACT_OUTCOME" = success ] \
+             && [ "$PINS_OUTCOME" = success ]; then
             OUTCOME=success
             # The bootloader travels with the firmware: both legs sign
             # with the same committed key, so a difference in it is a real
@@ -1075,7 +1111,8 @@ jobs:
       - name: Say that a combination nobody claims did not build
         if: |
           !matrix.combination.required
-          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success')
+          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success'
+              || steps.pins.outcome != 'success')
         run: |
           echo "::notice::${{ matrix.combination.label }} did not build on ${ARCH} — ${{ matrix.combination.reason }}"
 

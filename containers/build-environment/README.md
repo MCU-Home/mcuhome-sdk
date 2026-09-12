@@ -137,9 +137,10 @@ orchestrator could act on.
 
 **And then it is verified.** `verify-release` builds the reference Matter
 device in this image, addressed by the digest that was just pushed, on both
-architectures, with the release's packages as local sources. The workbench
-holds the image's `packages.` labels against the package set the context
-resolved and refuses to build in an image that does not declare exactly it
+architectures, with the release's packages as local sources and the device
+pinned to exactly them. The workbench holds the image's `packages.` labels
+against the package set the context resolved and refuses to build in an
+image that does not declare exactly it
 — which is what makes that a verification of the image and not just another
 build.
 

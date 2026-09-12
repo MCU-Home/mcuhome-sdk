@@ -154,6 +154,17 @@ the gate named and on both architectures, built the way a user builds one:
 `mcuhome device build`, subprocess profile, the packages as local sources.
 A red leg publishes nothing.
 
+The device is **pinned to exactly those packages** before it is built —
+`scripts/device_pins.py write` puts a `sources:` block into the copy,
+naming each stage's version and the hash of its archive out of the source
+directories' own `index.json`. Local sources say where packages may come
+from, not which ones are wanted: a device that pins nothing is resolved
+under the workbench's default SDK constraint, and a directory holding a
+version outside it is passed over in favour of the package registry — a
+gate that would then compile a published chain and say nothing about the
+packages it exists to gate. After the build, `device_pins.py check` holds
+the resolved versions and hashes in the build context against those pins.
+
 **`publish-release`** — the GitHub release, carrying exactly three files
 per package: the archive, its `.sha256` and its `.meta.json`. The asset
 list is named rather than globbed, because a stand-in package for another
@@ -307,6 +318,12 @@ turned into a package source directory. Not the artefacts the run uploaded
 them from — those are the same bytes, but "the release works" is the
 statement worth making. A rehearsal has no release of its own and uses its
 artefact for that one line.
+
+The device is pinned to exactly those three packages and the resolution is
+checked afterwards, the same two steps `build-firmware` takes. Here they
+are also what makes the image check mean anything: a context that resolved
+another chain would be held against labels nobody published this release
+for.
 
 **Verifying again, without re-tagging:**
 

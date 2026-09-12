@@ -722,9 +722,10 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
 
-      # One directory per stage, and each holds exactly one version: the
-      # chain then resolves to this combination without anything being
-      # pinned in a device file.
+      # One directory per stage, and each holds exactly one version —
+      # which is what lets the device be pinned to this combination
+      # further down, package by package, out of the indexes these
+      # directories carry.
       - name: Take the SDK package this run built
         if: matrix.combination.sdk.source != 'published'
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -814,6 +815,29 @@ jobs:
           install -m 600 ../mcuhome-sdk/.github/workflows/firmware-signing-key.pem \
             "$RUNNER_TEMP/signing/mcuboot.pem"
 
+      # WHICH packages this builds with, stated where it is decided: the
+      # device. The source directories above say where packages may come
+      # from and nothing more — a device that pins none is built with the
+      # workbench's own default SDK constraint, and a local directory
+      # holding a version outside it is passed over in favour of the
+      # package registry. This leg would then compile a published chain
+      # and say nothing at all about the packages it is gating.
+      #
+      # The pins are exactly what the three indexes hold: the version and
+      # the archive's hash per stage, the tools package of this
+      # architecture by name. The example device pins nothing, and the
+      # tool refuses a device that does rather than writing a second
+      # answer beside its own.
+      - name: Pin the device to the packages this leg provides
+        run: |
+          set -euo pipefail
+          python mcuhome-sdk/scripts/device_pins.py write \
+            --device project/devices/00-bmp180-two-endpoints.yaml \
+            --platform "$PLATFORM" \
+            "$GITHUB_WORKSPACE/sources/sdk" \
+            "$GITHUB_WORKSPACE/sources/workspace" \
+            "$GITHUB_WORKSPACE/sources/tools"
+
       # The documented invocation, and the whole point of this job. A
       # combination the gate marked as not required is one whose chain does
       # not hold together — built to see what a broken chain does, never a
@@ -839,6 +863,20 @@ jobs:
         continue-on-error: ${{ !matrix.combination.required }}
         run: python3 mcuhome-sdk/scripts/check_build_artifacts.py project/build/bmp180-node
 
+      # And a green build of the wrong packages is worse than both: it
+      # produces a firmware that proves a chain nobody was gating. The
+      # build context this build wrote states what it resolved, and it has
+      # to be what the device named.
+      - name: The build resolved the packages the device pins
+        id: pins
+        if: steps.build.outcome == 'success'
+        continue-on-error: ${{ !matrix.combination.required }}
+        run: |
+          set -euo pipefail
+          python mcuhome-sdk/scripts/device_pins.py check \
+            --device project/devices/00-bmp180-two-endpoints.yaml \
+            --build-dir project/build/bmp180-node
+
       - name: What it produced
         if: steps.build.outcome == 'success'
         run: |
@@ -849,7 +887,8 @@ jobs:
       - name: A combination that claims to work has to work
         if: >-
           matrix.combination.required
-          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success')
+          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success'
+              || steps.pins.outcome != 'success')
         env:
           LABEL: ${{ matrix.combination.label }}
           ARCH: ${{ matrix.target.arch }}
@@ -860,7 +899,8 @@ jobs:
       - name: A combination that claims nothing is reported, not failed
         if: >-
           !matrix.combination.required
-          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success')
+          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success'
+              || steps.pins.outcome != 'success')
         env:
           LABEL: ${{ matrix.combination.label }}
           ARCH: ${{ matrix.target.arch }}
@@ -1685,6 +1725,26 @@ jobs:
           install -m 600 ../mcuhome-sdk/.github/workflows/firmware-signing-key.pem \
             "$RUNNER_TEMP/signing/mcuboot.pem"
 
+      # The packages this verification is about, named in the device — the
+      # same statement the gate's builds make, and here it is what makes
+      # the image check mean anything: the workbench holds the image's
+      # labels against the package set the context pinned, so a context
+      # that resolved another chain would compare the image against
+      # packages nobody published this release for. A device that pins
+      # nothing resolves under the workbench's default SDK constraint and
+      # falls through to the package registry when a local directory holds
+      # a version outside it.
+      - name: Pin the device to the packages this verification uses
+        if: steps.image.outputs.verify == 'true'
+        run: |
+          set -euo pipefail
+          python mcuhome-sdk/scripts/device_pins.py write \
+            --device project/devices/00-bmp180-two-endpoints.yaml \
+            --platform "$PLATFORM" \
+            "$GITHUB_WORKSPACE/sources/sdk" \
+            "$GITHUB_WORKSPACE/sources/workspace" \
+            "$GITHUB_WORKSPACE/sources/tools"
+
       # The container profile, against exactly this image. The workbench
       # holds the image's `packages.` labels against the package set the
       # context resolved and refuses to build in one that does not declare
@@ -1709,6 +1769,15 @@ jobs:
       - name: Check the artifact set
         if: steps.image.outputs.verify == 'true'
         run: python3 mcuhome-sdk/scripts/check_build_artifacts.py project/build/bmp180-node
+
+      # What it verified, held against what it was asked to verify.
+      - name: The build resolved the packages the device pins
+        if: steps.image.outputs.verify == 'true'
+        run: |
+          set -euo pipefail
+          python mcuhome-sdk/scripts/device_pins.py check \
+            --device project/devices/00-bmp180-two-endpoints.yaml \
+            --build-dir project/build/bmp180-node
 
       - name: What it produced
         if: steps.image.outputs.verify == 'true'
