@@ -67,9 +67,11 @@ LATEST_ZEPHYR_LINE = SUPPORTED_ZEPHYR_LINES[-1]
 #: same grammar, with no special case anywhere downstream.
 #:
 #: It is evaluated where ``packaging`` is available — this package has no
-#: dependencies by construction — so what lives here is the
-#: string and what reads it is
-#: :mod:`mcuhome.workbench.resolve_pins`.
+#: dependencies by construction — so what lives here is the string, and
+#: what checks it against the Zephyr version a build environment declares
+#: is the workbench's build path (:mod:`mcuhome.workbench.containerbuild`
+#: and :mod:`mcuhome.workbench.subprocessbuild`, handed the constraint by
+#: :mod:`mcuhome.workbench.buildmethods`).
 ZEPHYR_CONSTRAINT = "~=4.4.0"
 
 
