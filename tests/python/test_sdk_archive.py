@@ -408,8 +408,14 @@ def test_the_meta_file_requires_a_range_of_workspace_packages(package) -> None:
 
     meta = json.loads(_member_bytes(package.path, "meta.json"))
     assert set(meta["requires"]) == {WORKSPACE_PACKAGE}
-    specifier = SpecifierSet(meta["requires"][WORKSPACE_PACKAGE])
-    assert list(specifier.filter(["0.1.0", "0.1.7", "0.2.0"])) == ["0.1.0", "0.1.7"]
+    specifier_text = meta["requires"][WORKSPACE_PACKAGE]
+    specifier = SpecifierSet(specifier_text)
+    # Two versions inside the declared family, one from the next minor —
+    # built from the specifier itself so a version bump cannot go stale.
+    major, minor = specifier_text.removeprefix("~=").split(".")[:2]
+    inside = (f"{major}.{minor}.0", f"{major}.{minor}.7")
+    outside = f"{major}.{int(minor) + 1}.0"
+    assert list(specifier.filter([*inside, outside])) == list(inside)
 
 
 def test_the_meta_file_names_no_tools_package(package) -> None:

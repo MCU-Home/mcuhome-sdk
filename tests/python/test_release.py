@@ -91,6 +91,30 @@ def declared(readiness):
     return {stage: release_lines.version_of(document, stage) for stage in release_lines.STAGES}
 
 
+@pytest.fixture(scope="module")
+def requires(readiness):
+    """What the sdk and workspace lines require of the one below them, at HEAD."""
+    import release_lines
+
+    document = release_lines.environment(REPO_ROOT, "HEAD")
+    return {
+        "sdk": release_lines.requires_of(document, "sdk")["mcuhome-build-workspace"],
+        "workspace": release_lines.requires_of(document, "workspace")["mcuhome-build-tools"],
+    }
+
+
+def bumped(version: str, by: int) -> str:
+    """*version* with its patch shifted by *by* — a distinct version, same family."""
+    major, minor, patch = version.split(".")
+    return f"{major}.{minor}.{int(patch) + by}"
+
+
+def outside(specifier: str) -> str:
+    """A version certainly outside the family a ``~=X.Y.Z`` specifier admits."""
+    major, minor = specifier.removeprefix("~=").split(".")[:2]
+    return f"{major}.{int(minor) + 1}.0"
+
+
 def meta_document(*, name, version, architecture=None, requires=None, inputs="0" * 64):
     document = {
         "schema": 1,
@@ -291,7 +315,7 @@ def test_with_nothing_published_the_plan_is_one_combination(readiness, declared)
     assert "nothing for" in plan["verdicts"]["tools"]["up"]
 
 
-def test_the_workspace_is_held_against_the_tools_it_requires(readiness, declared):
+def test_the_workspace_is_held_against_the_tools_it_requires(readiness, declared, requires):
     """The blocker this file exists for: the workspace has a "down" half too.
 
     It is what says which of the three lines has to be released first —
@@ -307,15 +331,19 @@ def test_the_workspace_is_held_against_the_tools_it_requires(readiness, declared
     ]
     assert plan["verdicts"]["workspace"]["down"] == (
         "mcuhome-build-workspace release blocked until a mcuhome-build-tools satisfying "
-        "'~=0.1.0' is published."
+        f"'{requires['workspace']}' is published."
     )
     # The tools line has no stage below it and therefore no such verdict.
     assert "down" not in plan["catalogue"]["tools"]
 
 
-def test_a_published_workspace_is_what_an_sdk_release_promises(readiness, declared, tmp_path):
+def test_a_published_workspace_is_what_an_sdk_release_promises(
+    readiness, declared, requires, tmp_path
+):
     """The ends of the declared range, and the tools each of them requires."""
-    for version in ("0.1.0", "0.1.4", "0.1.7"):
+    low = declared["workspace"]
+    mid, high = bumped(low, 4), bumped(low, 7)
+    for version in (low, mid, high):
         write_meta(
             tmp_path,
             f"workspace-v{version}",
@@ -323,12 +351,12 @@ def test_a_published_workspace_is_what_an_sdk_release_promises(readiness, declar
             meta_document(
                 name="mcuhome-build-workspace",
                 version=version,
-                requires={"mcuhome-build-tools": "~=0.1.0"},
+                requires={"mcuhome-build-tools": requires["workspace"]},
             ),
         )
     releases = [
         release_entry(f"workspace-v{version}", "w.tar.zst", "w.tar.zst.meta.json")
-        for version in ("0.1.0", "0.1.4", "0.1.7")
+        for version in (low, mid, high)
     ]
     plan = readiness.build_plan(
         revision="HEAD",
@@ -338,16 +366,18 @@ def test_a_published_workspace_is_what_an_sdk_release_promises(readiness, declar
     ).document()
     rows = plan["catalogue"]["sdk"]["down"]
     subjects = [row["subject"] for row in rows]
-    assert "mcuhome-build-workspace 0.1.0" in subjects
-    assert "mcuhome-build-workspace 0.1.7" in subjects
-    assert "0.1.4" not in " ".join(subjects), "only the ends of the range are promised"
+    assert f"mcuhome-build-workspace {low}" in subjects
+    assert f"mcuhome-build-workspace {high}" in subjects
+    assert mid not in " ".join(subjects), "only the ends of the range are promised"
     # The declared workspace version is published here, so it is not tried
     # a second time as "this commit's".
     assert len({row["combination"] for row in rows}) == 2
     assert "satisfy" in plan["verdicts"]["sdk"]["down"]
 
 
-def test_a_published_sdk_that_accepts_the_workspace_means_a_patch(readiness, declared, tmp_path):
+def test_a_published_sdk_that_accepts_the_workspace_means_a_patch(
+    readiness, declared, requires, tmp_path
+):
     """The workspace line looking up: what would reach a user without a re-cut."""
     tag = "v0.1.9"
     write_meta(
@@ -357,7 +387,7 @@ def test_a_published_sdk_that_accepts_the_workspace_means_a_patch(readiness, dec
         meta_document(
             name="mcuhome-sdk",
             version="0.1.9",
-            requires={"mcuhome-build-workspace": "~=0.1.0"},
+            requires={"mcuhome-build-workspace": requires["sdk"]},
         ),
     )
     plan = readiness.build_plan(
@@ -399,21 +429,22 @@ def test_a_published_sdk_that_refuses_the_workspace_means_a_minor(readiness, tmp
     assert plan["verdicts"]["workspace"]["up"].startswith("Minor needed above")
 
 
-def full_inventory(root: Path, declared: dict) -> list[dict]:
+def full_inventory(root: Path, declared: dict, requires: dict) -> tuple[list[dict], dict]:
     """Four workspaces, two tools packages and two SDKs, all with meta files.
 
     The shape the catalogue is actually about: ranges with an inside and
     two ends, one stage that only some of the versions above accept, and a
     published version of every line — so each of the six halves has
-    something to say.
+    something to say. The versions are built from what this commit
+    currently declares, so the inventory keeps its shape across a bump.
     """
+    workspace_low = declared["workspace"]
+    workspace_mid = bumped(workspace_low, 3)
+    workspace_high = bumped(workspace_low, 9)
+    workspace_outside = outside(requires["sdk"])
+
     releases = []
-    for version, requires in (
-        ("0.1.0", "~=0.1.0"),
-        ("0.1.3", "~=0.1.0"),
-        ("0.1.9", "~=0.1.0"),
-        ("0.2.0", "~=0.2.0"),
-    ):
+    for version in (workspace_low, workspace_mid, workspace_high):
         tag = f"workspace-v{version}"
         write_meta(
             root,
@@ -422,11 +453,27 @@ def full_inventory(root: Path, declared: dict) -> list[dict]:
             meta_document(
                 name="mcuhome-build-workspace",
                 version=version,
-                requires={"mcuhome-build-tools": requires},
+                requires={"mcuhome-build-tools": requires["workspace"]},
             ),
         )
         releases.append(release_entry(tag, "w.tar.zst", "w.tar.zst.meta.json"))
-    for version in ("0.1.0", "0.1.5"):
+    write_meta(
+        root,
+        f"workspace-v{workspace_outside}",
+        "w.tar.zst.meta.json",
+        meta_document(
+            name="mcuhome-build-workspace",
+            version=workspace_outside,
+            requires={"mcuhome-build-tools": f"~={workspace_outside}"},
+        ),
+    )
+    releases.append(
+        release_entry(f"workspace-v{workspace_outside}", "w.tar.zst", "w.tar.zst.meta.json")
+    )
+
+    tools_low = declared["tools"]
+    tools_high = bumped(tools_low, 5)
+    for version in (tools_low, tools_high):
         tag = f"tools-v{version}"
         for platform in ("linux-amd64", "linux-arm64"):
             write_meta(
@@ -436,7 +483,12 @@ def full_inventory(root: Path, declared: dict) -> list[dict]:
                 meta_document(name="mcuhome-build-tools", version=version, architecture=platform),
             )
         releases.append(release_entry(tag, "t.tar.zst", "t.tar.zst.meta.json"))
-    for version, requires in (("0.1.9", "~=0.1.0"), ("0.2.0", "~=0.2.0")):
+
+    sdk_accepting = "0.1.9"
+    for version, workspace_requires in (
+        (sdk_accepting, requires["sdk"]),
+        ("0.2.0", "~=9.9.0"),
+    ):
         tag = f"v{version}"
         write_meta(
             root,
@@ -445,16 +497,22 @@ def full_inventory(root: Path, declared: dict) -> list[dict]:
             meta_document(
                 name="mcuhome-sdk",
                 version=version,
-                requires={"mcuhome-build-workspace": requires},
+                requires={"mcuhome-build-workspace": workspace_requires},
             ),
         )
         releases.append(release_entry(tag, "sdk.tar.zst", "sdk.tar.zst.meta.json"))
-    return releases
+    return releases, {
+        "workspace_low": workspace_low,
+        "workspace_high": workspace_high,
+        "tools_low": tools_low,
+        "tools_high": tools_high,
+        "sdk_accepting": sdk_accepting,
+    }
 
 
-def test_the_whole_catalogue_over_a_populated_registry(readiness, declared, tmp_path):
+def test_the_whole_catalogue_over_a_populated_registry(readiness, declared, requires, tmp_path):
     """Six halves, each with a published version at both ends of its range."""
-    releases = full_inventory(tmp_path, declared)
+    releases, versions = full_inventory(tmp_path, declared, requires)
     plan = readiness.build_plan(
         revision="HEAD",
         releases=releases,
@@ -462,31 +520,33 @@ def test_the_whole_catalogue_over_a_populated_registry(readiness, declared, tmp_
         repository=REPO_ROOT,
     ).document()
     catalogue = plan["catalogue"]
-    # The SDK declares ~=0.1.0, so 0.2.0 is outside it and 0.1.0/0.1.9 are
-    # the ends; the declared workspace 0.1.0 is published, so no extra row.
+    # The SDK declares requires["sdk"], so the out-of-family workspace is
+    # outside it and the low/high in-family ones are the ends; the declared
+    # workspace is published, so no extra row.
     assert [row["subject"] for row in catalogue["sdk"]["down"]] == [
-        "mcuhome-build-workspace 0.1.0",
-        "mcuhome-build-workspace 0.1.9",
+        f"mcuhome-build-workspace {versions['workspace_low']}",
+        f"mcuhome-build-workspace {versions['workspace_high']}",
     ]
-    # The workspace declares ~=0.1.0 of the tools: both published ones are
-    # inside it, and the declared 0.1.0 is published, so again two rows.
+    # The workspace declares requires["workspace"] of the tools: both
+    # published ones are inside it, and the declared one is published, so
+    # again two rows.
     assert [row["subject"] for row in catalogue["workspace"]["down"]] == [
-        "mcuhome-build-tools 0.1.0",
-        "mcuhome-build-tools 0.1.5",
+        f"mcuhome-build-tools {versions['tools_low']}",
+        f"mcuhome-build-tools {versions['tools_high']}",
     ]
     assert (
         "2 published mcuhome-build-tools release(s) satisfy"
         in (plan["verdicts"]["workspace"]["down"])
     )
-    # Looking up: only the SDK at ~=0.1.0 accepts workspace 0.1.0.
+    # Looking up: only the SDK whose own requires accepts the declared workspace.
     assert [row["subject"] for row in catalogue["workspace"]["up"]] == [
-        "mcuhome-sdk 0.1.9",
+        f"mcuhome-sdk {versions['sdk_accepting']}",
         f"mcuhome-sdk {declared['sdk']} (this commit)",
     ]
-    # And only the three workspaces at ~=0.1.0 accept tools 0.1.0.
+    # And only the workspaces whose own requires accepts the declared tools.
     assert [row["subject"] for row in catalogue["tools"]["up"]] == [
-        "mcuhome-build-workspace 0.1.0",
-        "mcuhome-build-workspace 0.1.9",
+        f"mcuhome-build-workspace {versions['workspace_low']}",
+        f"mcuhome-build-workspace {versions['workspace_high']}",
         f"mcuhome-build-workspace {declared['workspace']} (this commit)",
     ]
     # Every triple the catalogue names holds together, so every row counts.
@@ -495,9 +555,9 @@ def test_the_whole_catalogue_over_a_populated_registry(readiness, declared, tmp_
     ]
 
 
-def test_the_tag_time_rule_drops_this_commit_s_neighbours(readiness, declared, tmp_path):
+def test_the_tag_time_rule_drops_this_commit_s_neighbours(readiness, declared, requires, tmp_path):
     """`--published-only`: at a tag only what is published may decide."""
-    releases = full_inventory(tmp_path, declared)
+    releases, _ = full_inventory(tmp_path, declared, requires)
     plan = readiness.build_plan(
         revision="HEAD",
         releases=releases,
@@ -536,12 +596,14 @@ def test_at_tag_time_an_unsatisfiable_stage_is_a_row_without_a_build(readiness, 
             assert all(row["required"] is False for row in rows)
 
 
-def test_a_chain_that_cannot_resolve_is_reported_and_not_required(readiness, declared, tmp_path):
+def test_a_chain_that_cannot_resolve_is_reported_and_not_required(
+    readiness, declared, requires, tmp_path
+):
     """A combination nothing claims must not fail a job or a firmware leg.
 
-    The published SDK here takes only 0.2.x workspaces, so pairing it with
-    this commit's is a triple whose chain does not hold — worth building to
-    see what a refusal looks like, never worth a red mark.
+    The published SDK here takes only the declared workspace's family, so
+    pairing it with this commit's is a triple whose chain does not hold —
+    worth building to see what a refusal looks like, never worth a red mark.
     """
     tag = "v0.3.0"
     write_meta(
@@ -551,7 +613,7 @@ def test_a_chain_that_cannot_resolve_is_reported_and_not_required(readiness, dec
         meta_document(
             name="mcuhome-sdk",
             version="0.3.0",
-            requires={"mcuhome-build-workspace": "~=0.2.0"},
+            requires={"mcuhome-build-workspace": requires["sdk"]},
         ),
     )
     # The workspace's "up" half adds the published SDK only when it accepts
@@ -574,7 +636,7 @@ def test_a_chain_that_cannot_resolve_is_reported_and_not_required(readiness, dec
         meta_document(
             name="mcuhome-build-workspace",
             version="0.9.0",
-            requires={"mcuhome-build-tools": "~=0.1.0"},
+            requires={"mcuhome-build-tools": requires["workspace"]},
         ),
     )
     plan = readiness.build_plan(
@@ -615,7 +677,9 @@ def compare_subjects(plan: dict) -> list[dict]:
     return [one for one in plan["combinations"] if one["compare"]]
 
 
-def test_a_plan_that_has_combinations_marks_exactly_one_to_compare(readiness, declared, tmp_path):
+def test_a_plan_that_has_combinations_marks_exactly_one_to_compare(
+    readiness, declared, requires, tmp_path
+):
     """The invariant the comparison job relies on, in both worlds.
 
     With nothing published there is one combination and it is the subject;
@@ -626,9 +690,10 @@ def test_a_plan_that_has_combinations_marks_exactly_one_to_compare(readiness, de
     ).document()
     assert [one["id"] for one in compare_subjects(empty)] == ["checkout"]
 
+    releases, _ = full_inventory(tmp_path, declared, requires)
     populated = readiness.build_plan(
         revision="HEAD",
-        releases=full_inventory(tmp_path, declared),
+        releases=releases,
         metas=readiness.directory_metas(tmp_path),
         repository=REPO_ROOT,
     ).document()
@@ -638,7 +703,9 @@ def test_a_plan_that_has_combinations_marks_exactly_one_to_compare(readiness, de
     assert subjects[0]["required"] is True
 
 
-def test_the_subject_is_the_triple_this_commit_contributes_most_of(readiness, declared, tmp_path):
+def test_the_subject_is_the_triple_this_commit_contributes_most_of(
+    readiness, declared, requires, tmp_path
+):
     """Of the triples the catalogue asks for, the most local one is compared.
 
     A difference between two hosts is only worth a report where the
@@ -646,9 +713,10 @@ def test_the_subject_is_the_triple_this_commit_contributes_most_of(readiness, de
     triple with the most ``checkout`` stages — and never an inconsistent
     one, which is allowed to fail to build at all.
     """
+    releases, _ = full_inventory(tmp_path, declared, requires)
     plan = readiness.build_plan(
         revision="HEAD",
-        releases=full_inventory(tmp_path, declared),
+        releases=releases,
         metas=readiness.directory_metas(tmp_path),
         repository=REPO_ROOT,
     ).document()
@@ -885,9 +953,10 @@ def test_check_tag_refuses_a_version_the_commit_does_not_declare(release, declar
 
 
 def test_check_tag_tells_the_lines_apart(release, declared):
-    """`v<workspace version>` is an SDK tag, and almost certainly a mistake."""
+    """`v<version>` is an SDK tag; a version this commit's SDK does not declare is refused."""
+    other = bumped(declared["sdk"], 1)
     with pytest.raises(SystemExit, match="sdk.version"):
-        release.check_tag(tag=f"v{declared['workspace']}", revision="HEAD", repository=REPO_ROOT)
+        release.check_tag(tag=f"v{other}", revision="HEAD", repository=REPO_ROOT)
 
 
 def write_package(directory: Path, name: str, *, meta: bool = True, checksum: bool = True) -> None:
@@ -1149,21 +1218,27 @@ def test_a_line_start_is_tried_under_this_commit(readiness, tmp_path, declared):
 
 def test_a_workspace_release_takes_the_tools_it_requires(readiness, tmp_path, declared):
     """Published below, this commit's above — the chain a line start has."""
-    releases = world(tmp_path, tools_release())
+    releases = world(tmp_path, tools_release(declared["tools"]))
     answer = gate(readiness, "workspace", releases, tmp_path)
     (combination,) = answer["combinations"]
     assert combination["workspace"] == {"source": "release", "version": declared["workspace"]}
     assert combination["tools"] == {
         "source": "published",
-        "version": "0.1.0",
-        "tag": "tools-v0.1.0",
+        "version": declared["tools"],
+        "tag": f"tools-v{declared['tools']}",
     }
     assert combination["sdk"]["source"] == "checkout"
     assert answer["verify"]["mode"] == "pushed-image"
 
 
-def test_an_sdk_release_is_tried_against_the_published_range(readiness, tmp_path, declared):
-    releases = world(tmp_path, tools_release(), workspace_release())
+def test_an_sdk_release_is_tried_against_the_published_range(
+    readiness, tmp_path, declared, requires
+):
+    releases = world(
+        tmp_path,
+        tools_release(declared["tools"]),
+        workspace_release(declared["workspace"], requires["workspace"]),
+    )
     answer = gate(readiness, "sdk", releases, tmp_path)
     (combination,) = answer["combinations"]
     assert combination["sdk"] == {"source": "release", "version": declared["sdk"]}
@@ -1174,36 +1249,46 @@ def test_an_sdk_release_is_tried_against_the_published_range(readiness, tmp_path
     assert answer["verify"] == {
         "mode": "published-image",
         "combination": combination["id"],
-        "workspace_version": "0.1.0",
+        "workspace_version": declared["workspace"],
     }
 
 
-def test_a_published_workspace_with_unpublished_tools_blocks_an_sdk_release(readiness, tmp_path):
+def test_a_published_workspace_with_unpublished_tools_blocks_an_sdk_release(
+    readiness, tmp_path, declared, requires
+):
     """The chain has to hold end to end, not only at the first link."""
-    releases = world(tmp_path, workspace_release())
+    releases = world(tmp_path, workspace_release(declared["workspace"], requires["workspace"]))
     answer = gate(readiness, "sdk", releases, tmp_path)
     assert "resolves to" in answer["blocked"]
     assert "mcuhome-build-tools" in answer["blocked"]
 
 
-def test_the_gate_carries_only_the_line_being_released(readiness, tmp_path):
-    releases = world(tmp_path, tools_release(), workspace_release())
+def test_the_gate_carries_only_the_line_being_released(readiness, tmp_path, declared, requires):
+    releases = world(
+        tmp_path,
+        tools_release(declared["tools"]),
+        workspace_release(declared["workspace"], requires["workspace"]),
+    )
     answer = gate(readiness, "sdk", releases, tmp_path)
     # The SDK has no stage above it, so one direction and one only.
     assert set(answer["catalogue"]) == {"down"}
     assert set(answer["verdicts"]) == {"down"}
 
 
-def test_both_ends_of_a_published_range_are_tried(readiness, tmp_path):
+def test_both_ends_of_a_published_range_are_tried(readiness, tmp_path, declared, requires):
+    low, high = declared["workspace"], bumped(declared["workspace"], 9)
     releases = world(
-        tmp_path, tools_release(), workspace_release("0.1.0"), workspace_release("0.1.9")
+        tmp_path,
+        tools_release(declared["tools"]),
+        workspace_release(low, requires["workspace"]),
+        workspace_release(high, requires["workspace"]),
     )
     answer = gate(readiness, "sdk", releases, tmp_path)
     tried = sorted(one["workspace"]["version"] for one in answer["combinations"])
-    assert tried == ["0.1.0", "0.1.9"]
+    assert tried == sorted([low, high])
     # A release promises the whole range, so the image worth verifying is
     # the one a user actually resolves to: the newest.
-    assert answer["verify"]["workspace_version"] == "0.1.9"
+    assert answer["verify"]["workspace_version"] == high
 
 
 def test_a_tools_release_is_verified_by_an_image_revision_and_says_so(readiness, tmp_path):
