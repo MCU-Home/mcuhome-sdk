@@ -40,27 +40,52 @@
 #
 # The west workspace top directory — the T2 workspace: `.west/`,
 # `zephyr/`, `modules/`, `bootloader/` beside this repository checked out
-# as `mcuhome-sdk/` — is passed as this wrapper's first argument or in the
-# MCUHOME_SDK_WEST_WORKSPACE environment variable, mirroring the
-# buildserver's test.d/e2e (MCUHOME_E2E_SDK_DIR) precedent. The suites are
-# compiled against the *workspace* the manifest of this checkout
-# describes, never against one somebody baked earlier: a change to
-# west.yml has to be tested against what it pins. Extra arguments are
-# passed through to `west twister`, so `-j` stays overridable (twister
-# keeps the last occurrence of a repeated option).
+# as `mcuhome-sdk/` — defaults to the directory this repository
+# *physically* lies in. That is the development layout and it is the only
+# one west supports: `west init -l` resolves a symlinked manifest
+# repository and anchors the workspace at its physical parent, so the
+# checkout has to live in the workspace directory, and a convenience
+# symlink somewhere else points into it. A checkout that sits where it
+# belongs therefore needs nothing set. Another workspace is named as this
+# wrapper's first argument or in the MCUHOME_SDK_WEST_WORKSPACE
+# environment variable — mirroring the buildserver's test.d/e2e
+# (MCUHOME_E2E_SDK_DIR) precedent — which is what CI does, where the
+# workspace is an unpacked package. The suites are compiled against the
+# *workspace* the manifest of this checkout describes, never against one
+# somebody baked earlier: a change to west.yml has to be tested against
+# what it pins. Extra arguments are passed through to `west twister`, so
+# `-j` stays overridable (twister keeps the last occurrence of a repeated
+# option).
+#
+# Twister's output — build trees, logs, the report — goes into a fresh
+# temporary directory and is removed when the run ends, in both modes. It
+# is build output: it belongs to the run and not to the workspace, to
+# this repository or to whatever directory the wrapper was called from,
+# and none of those is a place to leave a `twister-out/` in. To read it
+# after a failure, set MCUHOME_SDK_TWISTER_KEEP=1 — then the directory
+# survives the run and its path is printed.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 workspace="${1:-${MCUHOME_SDK_WEST_WORKSPACE:-}}"
-if [ -z "$workspace" ]; then
-  echo "test.d/twister: no west workspace directory given. Pass it as the first argument or set MCUHOME_SDK_WEST_WORKSPACE (the T2 workspace top directory holding .west/, zephyr/, modules/, bootloader/ and this repository checked out as mcuhome-sdk/ — ci-build.yml's test-twister job prepares one by unpacking the build workspace package)." >&2
-  exit 1
+if [ $# -gt 0 ]; then
+  shift
 fi
-[ $# -gt 0 ] && shift
+
+# No workspace stated: the one this checkout physically lies in. `pwd -P`
+# rather than `pwd`, because the path the wrapper was reached through may
+# run over a symlink and west anchors on the physical one. What a missing
+# .west/ means differs between the two, so the refusal does too.
+if [ -z "$workspace" ]; then
+  workspace="$(dirname "$(cd "$root" && pwd -P)")"
+  no_workspace="That is the directory this checkout physically lies in, which is where the development workspace belongs: run west init -l mcuhome-sdk && west update there. A different one is named as the first argument or in MCUHOME_SDK_WEST_WORKSPACE."
+else
+  no_workspace="Name the top directory of one instead: west init -l mcuhome-sdk && west update makes one, and an unpacked mcuhome-build-workspace package carries one in its 'workspace' directory."
+fi
 
 if [ ! -d "$workspace/.west" ]; then
-  echo "test.d/twister: '$workspace' has no .west/ — it is not a west workspace. Unpack a mcuhome-build-workspace package (its 'workspace' directory is one), or run west init -l mcuhome-sdk && west update in it first." >&2
+  echo "test.d/twister: '$workspace' has no .west/ — it is not a west workspace. $no_workspace" >&2
   exit 1
 fi
 
@@ -72,6 +97,33 @@ fi
 # The command every mode ends in. `-T` is relative to the workspace, which
 # is the working directory in both.
 suite="mcuhome-sdk/tests/twister"
+
+# Twister's output directory. It is made once a mode's own prerequisites
+# hold — a refusal leaves nothing behind — and removed by the exit trap,
+# which also catches the interrupted run.
+#
+# Twister is given a path *inside* it that does not exist yet, because an
+# --outdir that already exists is read as a previous run and moved aside
+# (twister_main.clean_previous_results). In the container that move hits
+# the bind mount of this very directory and fails with EPERM; outside it
+# would just leave a second directory behind. A fresh subdirectory has
+# neither problem.
+outdir=""
+
+cleanup() {
+  [ -n "$outdir" ] || return 0
+  if [ "${MCUHOME_SDK_TWISTER_KEEP:-}" = "1" ]; then
+    echo "test.d/twister: output kept in $outdir" >&2
+    return 0
+  fi
+  rm -rf "$outdir"
+}
+trap cleanup EXIT
+
+make_outdir() {
+  outdir="$(mktemp -d "${TMPDIR:-/tmp}/mcuhome-twister-XXXXXXXX")"
+  results="$outdir/twister-out"
+}
 
 # --------------------------------------------------------------------------
 # Package mode: this host, the tools out of an unpacked package
@@ -102,8 +154,12 @@ if [ -n "$tools" ]; then
     fi
   done
 
+  make_outdir
   cd "$workspace"
-  exec west twister -T "$suite" --integration --inline-logs -v -j 2 "$@"
+  status=0
+  west twister -T "$suite" --integration --inline-logs -v -j 2 \
+    -O "$results" "$@" || status=$?
+  exit "$status"
 fi
 
 # --------------------------------------------------------------------------
@@ -166,12 +222,20 @@ fi
 
 echo "test.d/twister: using $image" >&2
 
+make_outdir
+
+# The output directory is mounted at its own path so that what twister
+# writes lands on the host, outside the workspace and outside this
+# repository, and goes away with the run.
+status=0
 docker run --rm --user "$(id -u):$(id -g)" \
-  --volume "$workspace:$workspace" --workdir "$workspace" \
+  --volume "$workspace:$workspace" --volume "$outdir:$outdir" \
+  --workdir "$workspace" \
   "$image" \
   sh -euc '
     suite="$1"
-    shift
+    results="$2"
+    shift 2
     tools="${MCUHOME_BUILD_ENV_TOOLS:?the image states no build tools directory}"
     PATH="$tools/venv/bin:$tools/cmake/bin:$tools/ninja:$tools/gn:$PATH"
     export PATH
@@ -185,5 +249,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
         export ZEPHYR_SDK_INSTALL_DIR
       fi
     done
-    exec west twister -T "$suite" --integration --inline-logs -v -j 2 "$@"
-  ' twister "$suite" "$@"
+    exec west twister -T "$suite" --integration --inline-logs -v -j 2 \
+      -O "$results" "$@"
+  ' twister "$suite" "$results" "$@" || status=$?
+exit "$status"

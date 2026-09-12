@@ -1,11 +1,21 @@
 # tests/
 
-Twister test suites (`testcase.yaml` per suite). Run from the workspace
-top directory with:
+Twister test suites (`testcase.yaml` per suite). The usual way to run them
+is `scripts/test twister` from anywhere in this checkout: it takes the west
+workspace this checkout lies in — `mcuhome-sdk/` inside the workspace
+directory, which is the layout the repository README describes — supplies
+the build environment and puts twister's output in a temporary directory it
+removes again. By hand, from the workspace top directory, with tools on
+`PATH`:
 
 ```sh
-west twister -T mcuhome-sdk/tests/twister --integration --inline-logs -v
+west twister -T mcuhome-sdk/tests/twister --integration --inline-logs -v \
+  -O "$(mktemp -d)"
 ```
+
+`-O` is not decoration: without it twister writes a `twister-out/` into the
+working directory, and the workspace top is not a place to leave build
+output in.
 
 Host-run unit tests target `native_sim` — plain `native_sim` needs a 32-bit
 host glibc that not every dev machine has, so suites here target the 64-bit
