@@ -21,7 +21,11 @@ by name, version and the hash of its archive — and `check` holds the
 build context the build actually wrote against that block afterwards.
 Two halves of one statement: the first makes the build ask for these
 packages, the second makes a build that resolved something else a red
-run rather than a surprise at the next step.
+run rather than a surprise at the next step. For the build workspace and
+build tools that comparison is a restatement — a fully pinned reference
+is copied by the resolver, not resolved, so the manifest can only report
+back the pin, and the bytes are already enforced by the hash check at
+fetch time. The SDK stage is the independent one, below.
 
 ``write``
     The block, out of ``<source>/index.json`` for each source directory
