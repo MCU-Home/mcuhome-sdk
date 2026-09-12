@@ -22,6 +22,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -214,9 +215,10 @@ def test_changed_inputs_under_a_published_version_are_a_blocker(
     assert "packaging/build-environment/environment.json" in captured.err
     # And it says WHICH input moved — out of the tagged commit's own
     # listing where this checkout has that tag, and by saying it cannot
-    # compare where it does not. Either answer is right and which one comes
-    # out is a property of the clone, not of the check: a full clone has
-    # the tag, a shallow CI checkout may not.
+    # compare where it does not. Which of the two comes out here is a
+    # property of the clone (a full one has the tag, a shallow CI checkout
+    # may not), so both are pinned by their own tests below, against a
+    # repository this file builds.
     assert "What changed since" in captured.err or "cannot be compared here" in captured.err
 
 
@@ -1370,17 +1372,252 @@ def test_a_run_that_did_its_job_passes(release, capsys):
     assert "Every job this run exists for ran" in capsys.readouterr().out
 
 
-def test_the_workflow_declares_every_job_the_check_knows(release):
-    """The table and the workflow cannot drift: one names the other's jobs."""
-    import re
+def workflow_jobs() -> set[str]:
+    """The job ids `release.yml` declares, out of its `jobs:` mapping alone.
 
+    Read by indentation rather than by a pattern over the whole file: two
+    spaces and a colon also describes `push:` under `on:`, and a table that
+    silently accepted a job it had never heard of would be a table nobody
+    can rely on.
+    """
     workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    declared = set(re.findall(r"^  ([a-z][a-z-]*):$", workflow, re.MULTILINE))
-    assert set(release.RELEASE_JOBS) <= declared
-    # And the check itself is a job of that workflow, needing all of them.
-    assert "check-release" in declared
+    found: set[str] = set()
+    inside = False
+    for line in workflow.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[:1].isspace():
+            inside = line.startswith("jobs:")
+            continue
+        if inside and line.startswith("  ") and not line.startswith("   "):
+            name, separator, _ = line.strip().partition(":")
+            assert separator, line
+            found.add(name)
+    return found
+
+
+def test_the_workflow_declares_exactly_the_jobs_the_check_knows(release):
+    """The table and the workflow cannot drift, in either direction.
+
+    A job added to the workflow and not to the table would never be held to
+    anything — which is the defect this whole check exists for, one level
+    up.
+    """
+    assert workflow_jobs() == set(release.RELEASE_JOBS) | {"check-release"}
 
 
 def test_an_unknown_kind_of_run_is_refused(release):
     with pytest.raises(SystemExit, match="not a kind of release run"):
         release.expected_jobs(mode="whatever", stage="sdk", verify_mode="skip")
+
+
+# --------------------------------------------------------------------------
+# Which input moved, and what is said when it cannot be told
+# --------------------------------------------------------------------------
+#
+# Against a repository these tests build, because the two answers depend on
+# whether a clone has the tag — which is exactly the thing a test must not
+# depend on.
+
+#: The tools stage's inputs, which is the shortest list of the three.
+LISTING_INPUTS = {
+    "packaging/build-environment/build-environment-entry": "#!/bin/sh\nexec true\n",
+    "packaging/build-environment/requirements.txt": "west==1.5.0\n",
+    "scripts/build_env_package.py": '"""The packager."""\n',
+    "scripts/release_lines.py": '"""The lines."""\n',
+    "scripts/packager_image.py": 'DIGEST = "sha256:' + "ab" * 32 + '"\n',
+}
+
+
+def a_repository(root: Path) -> Path:
+    """A git repository carrying the tools stage's inputs, tagged once.
+
+    Two commits and a tag between them: the tag is a state somebody
+    published, and HEAD has one input changed — which is the situation the
+    bump discipline exists for and the one its message has to describe.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    for name, content in LISTING_INPUTS.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.test",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.test",
+        "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
+        "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+    }
+    run = lambda *arguments: subprocess.run(  # noqa: E731 - four lines of git, once
+        ["git", "-C", str(root), *arguments], check=True, env=environment, capture_output=True
+    )
+    subprocess.run(["git", "init", "-q", str(root)], check=True, env=environment)
+    run("add", "-A")
+    run("commit", "-q", "-m", "published")
+    run("tag", "tools-v0.1.0")
+    (root / "scripts" / "build_env_package.py").write_text(
+        '"""The packager, changed."""\n', encoding="utf-8"
+    )
+    run("add", "-A")
+    run("commit", "-q", "-m", "changed")
+    return root
+
+
+def test_the_refusal_names_the_input_that_moved(readiness, tmp_path):
+    """The whole value of the check: which file, and from what to what."""
+    root = a_repository(tmp_path / "repo")
+    told = readiness._listing_difference(  # noqa: SLF001 - the message is what is tested
+        stage="tools",
+        tag="tools-v0.1.0",
+        revision="HEAD",
+        repository=root,
+        architecture="linux-amd64",
+    )
+    assert told[0] == "What changed since tools-v0.1.0:"
+    changed = [line for line in told[1:] if line.lstrip().startswith("~")]
+    assert len(changed) == 1, told
+    assert "scripts/build_env_package.py" in changed[0]
+    # From one object to another, both named: "it changed" is not an answer
+    # somebody can act on.
+    assert "->" in changed[0]
+    # And nothing that did not move is listed.
+    assert not [line for line in told[1:] if "requirements.txt" in line]
+
+
+def test_a_tag_this_clone_does_not_have_is_said_rather_than_guessed(readiness, tmp_path):
+    """A shallow clone can still say both hashes; it cannot say which input."""
+    root = a_repository(tmp_path / "repo")
+    told = readiness._listing_difference(  # noqa: SLF001 - the message is what is tested
+        stage="tools",
+        tag="tools-v9.9.9",
+        revision="HEAD",
+        repository=root,
+        architecture="linux-amd64",
+    )
+    assert len(told) == 1
+    assert "is not in this checkout" in told[0]
+    assert "cannot be compared here" in told[0]
+    # With the command that fixes it, because the reader is at a terminal.
+    assert "git fetch origin tag tools-v9.9.9" in told[0]
+
+
+def test_a_tag_from_before_an_input_existed_is_told_apart(readiness, tmp_path):
+    """ "The tag is not here" and "the tag predates this input" differ."""
+    root = a_repository(tmp_path / "repo")
+    (root / "packaging" / "build-environment" / "requirements.txt").unlink()
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "-q", "-a", "-m", "without"],
+        check=True,
+        capture_output=True,
+        env={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@example.test",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.test",
+            "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
+            "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+        },
+    )
+    told = readiness._listing_difference(  # noqa: SLF001 - the message is what is tested
+        stage="tools",
+        tag="tools-v0.1.0",
+        revision="HEAD",
+        repository=root,
+        architecture="linux-amd64",
+    )
+    assert "does not carry every path" in told[0]
+
+
+# --------------------------------------------------------------------------
+# The two architectures an index is composed over
+# --------------------------------------------------------------------------
+
+
+def image_labels(*, workspace="0.1.0@sha256:" + "aa" * 32, tools="0.1.0", **overrides):
+    """The labels one per-architecture image carries, per architecture."""
+    prefix = "org.mcuhome.build-environment."
+    shared = {
+        f"{prefix}spec-generation": "3",
+        f"{prefix}zephyr.version": "4.4.0",
+        f"{prefix}build-context.generator-constraint": "mcuhome-workbench:",
+        f"{prefix}packages.mcuhome-build-workspace": workspace,
+    }
+    answer = {}
+    for arch, digest in (("amd64", "bb"), ("arm64", "cc")):
+        answer[arch] = {
+            **shared,
+            f"{prefix}packages.mcuhome-build-tools_linux-{arch}": f"{tools}@sha256:{digest * 32}",
+            # An image's own OCI labels are none of this check's business.
+            "org.opencontainers.image.source": "https://example.test",
+        }
+    for arch, extra in overrides.items():
+        answer[arch] = {**answer[arch], **extra}
+    return answer
+
+
+def test_two_architectures_of_one_set_agree(release):
+    """The normal answer, and what the published pair really looks like."""
+    assert release.one_environment(image_labels()) == []
+
+
+def test_two_architectures_delivering_two_workspaces_are_refused(release):
+    """The same version, two archives — two environments wearing one name."""
+    labels = image_labels()
+    labels["arm64"] = {
+        **labels["arm64"],
+        "org.mcuhome.build-environment.packages.mcuhome-build-workspace": "0.1.0@sha256:"
+        + "dd" * 32,
+    }
+    (fault,) = release.one_environment(labels)
+    assert "different packages" in fault
+
+
+def test_two_architectures_out_of_two_tools_releases_are_refused(release):
+    labels = image_labels()
+    labels["arm64"] = {
+        key: value
+        for key, value in labels["arm64"].items()
+        if not key.endswith("mcuhome-build-tools_linux-arm64")
+    }
+    labels["arm64"]["org.mcuhome.build-environment.packages.mcuhome-build-tools_linux-arm64"] = (
+        "0.1.4@sha256:" + "cc" * 32
+    )
+    (fault,) = release.one_environment(labels)
+    assert "two build tools releases" in fault
+    assert "0.1.0" in fault and "0.1.4" in fault
+
+
+def test_two_architectures_describing_two_environments_are_refused(release):
+    labels = image_labels()
+    labels["arm64"] = {
+        **labels["arm64"],
+        "org.mcuhome.build-environment.zephyr.version": "4.5.0",
+    }
+    (fault,) = release.one_environment(labels)
+    assert "different environments" in fault
+
+
+def test_an_image_carrying_the_wrong_platforms_tools_is_refused(release):
+    """Each image declares the build tools of its own architecture."""
+    labels = image_labels()
+    labels["arm64"] = {
+        key: value
+        for key, value in labels["arm64"].items()
+        if not key.endswith("mcuhome-build-tools_linux-arm64")
+    }
+    labels["arm64"]["org.mcuhome.build-environment.packages.mcuhome-build-tools_linux-amd64"] = (
+        "0.1.0@sha256:" + "bb" * 32
+    )
+    faults = release.one_environment(labels)
+    assert any("has to declare mcuhome-build-tools_linux-arm64" in one for one in faults)
+
+
+def test_an_image_that_declares_no_environment_is_refused(release):
+    """An image without those labels is one no orchestrator can match."""
+    labels = image_labels()
+    labels["arm64"] = {"org.opencontainers.image.source": "https://example.test"}
+    (fault,) = release.one_environment(labels)
+    assert "declares no build environment at all" in fault

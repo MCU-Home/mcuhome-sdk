@@ -256,14 +256,27 @@ not), and re-pushing would put *different* bytes under a name that already
 names some. So the leg skips its assembly with a notice and the index is
 composed from what is there.
 
-**That is the recovery rule**: a dispatch whose per-architecture images
-went up but whose index did not — one leg failed, or the index job did not
-run — is **repeated with the same revision**. Both legs find their tags,
-assemble nothing, and the index is composed over the bytes that were
-already published. Use the next revision number only when the packages
-themselves change. The run is red unless every job it exists for actually
-ran: `check-release` holds each run against the job set its kind needs, so
-a half-finished dispatch cannot report green.
+**That is the recovery rule, and it is the only thing the same revision is
+for**: a dispatch whose per-architecture images went up but whose index did
+not — one leg failed, or the index job did not run — is **repeated with the
+same revision** to finish it. Both legs find their tags, assemble nothing,
+and the index is composed over the bytes that were already published.
+
+**Anything that would change the assembly takes the next number.** A
+refreshed base image, a change to `containers/build-environment/Dockerfile`,
+a different tools package — repeating the old revision after one of those
+would find the old per-architecture tags, assemble nothing, publish an index
+over the *old* bytes and verify it green. The run would be honest about
+every step and the result would be a lie: `-r<n>` names one assembly, and a
+different assembly is a different number.
+
+The run is red unless every job it exists for actually ran: `check-release`
+holds each run against the job set its kind needs, so a half-finished
+dispatch cannot report green. And the index is composed only over two
+images that agree — same specification generation, same Zephyr version,
+same workspace package and hash, and the build tools of each architecture
+at one version — because an index over two different package sets is a
+statement no orchestrator could act on.
 
 ## 6. `verify-release`
 

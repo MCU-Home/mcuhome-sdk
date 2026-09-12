@@ -83,6 +83,7 @@ import release_lines  # noqa: E402 - repo-relative import, needs the path above
 import release_readiness  # noqa: E402 - same
 
 __all__ = [
+    "LABEL_PREFIX",
     "PLATFORMS",
     "RELEASE_JOBS",
     "artifact_name",
@@ -93,6 +94,7 @@ __all__ = [
     "gate_packages",
     "image_packages",
     "line_of",
+    "one_environment",
     "release_assets",
     "verify_plan",
     "verify_sources",
@@ -104,6 +106,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: The platforms the tools line publishes a package for. Everything that
 #: builds firmware is built on both of them, so every release needs both.
 PLATFORMS = ("linux-amd64", "linux-arm64")
+
+#: The one character that splits a package name into family and platform,
+#: as the model defines it.
+ARCH_SEPARATOR = "_"
 
 #: The runner label a platform's package is built on. It is workflow
 #: knowledge and it is stated here because a *computed* package matrix has
@@ -513,6 +519,78 @@ def image_packages(
 
 
 # --------------------------------------------------------------------------
+# one-environment: the two architectures an index is composed over
+# --------------------------------------------------------------------------
+
+
+#: Specification 5.2's label prefix, and the package members under it.
+LABEL_PREFIX = "org.mcuhome.build-environment."
+LABEL_PACKAGES = f"{LABEL_PREFIX}packages."
+
+
+def one_environment(labels: dict[str, dict[str, str]]) -> list[str]:
+    """What stops these per-architecture images from being one environment.
+
+    An index says "these two are one environment", and the two halves are
+    built on two machines — or, when a dispatch is repeated, not built at
+    all but taken as they were published. So the claim is checked before it
+    is made, because an orchestrator matches an image by its ``packages.``
+    labels and would otherwise get whichever architecture it happened to
+    pull.
+
+    Identical in both: everything that is not per-platform — the
+    specification generation, the Zephyr version, the generator constraint,
+    any ``x-`` member — and the build workspace package **with its hash**,
+    since that archive is the same file on every platform.
+
+    Different in exactly one way: each image carries the build tools package
+    of its own architecture, and their hashes differ on purpose. Their
+    *version* may not: two architectures out of two tools releases are two
+    environments wearing one name.
+
+    Returns the faults, empty when there are none.
+    """
+    faults: list[str] = []
+    shared: dict[str, dict[str, str]] = {}
+    others: dict[str, dict[str, str]] = {}
+    tools: dict[str, dict[str, str]] = {}
+    for arch, stated in labels.items():
+        mine = {key: value for key, value in stated.items() if key.startswith(LABEL_PREFIX)}
+        if not mine:
+            faults.append(
+                f"the {arch} image declares no build environment at all — an image without "
+                "those labels is one no orchestrator can match"
+            )
+            continue
+        packages = {
+            key[len(LABEL_PACKAGES) :]: value
+            for key, value in mine.items()
+            if key.startswith(LABEL_PACKAGES)
+        }
+        shared[arch] = {k: v for k, v in mine.items() if not k.startswith(LABEL_PACKAGES)}
+        others[arch] = {k: v for k, v in packages.items() if ARCH_SEPARATOR not in k}
+        tools[arch] = {k: v for k, v in packages.items() if ARCH_SEPARATOR in k}
+    if faults:
+        return faults
+    if len({json.dumps(one, sort_keys=True) for one in shared.values()}) != 1:
+        faults.append(f"they describe different environments: {shared}")
+    if len({json.dumps(one, sort_keys=True) for one in others.values()}) != 1:
+        faults.append(f"they deliver different packages: {others}")
+    for arch, mine in tools.items():
+        wanted = f"{release_readiness.FAMILY['tools']}{ARCH_SEPARATOR}linux-{arch}"
+        if list(mine) != [wanted]:
+            faults.append(
+                f"the {arch} image declares {', '.join(mine) or 'no'} build tools, and it "
+                f"has to declare {wanted}"
+            )
+    if not faults:
+        versions = {value.split("@", 1)[0] for mine in tools.values() for value in mine.values()}
+        if len(versions) != 1:
+            faults.append(f"they carry two build tools releases: {', '.join(sorted(versions))}")
+    return faults
+
+
+# --------------------------------------------------------------------------
 # check-run: the release did what this kind of run is for
 # --------------------------------------------------------------------------
 #
@@ -632,6 +710,14 @@ def main(argv: list[str]) -> int:
     verify = sub.add_parser("verify-plan", help="the published chain around a released tag")
     verify.add_argument("tag")
 
+    same = sub.add_parser("one-environment", help="the per-architecture images are one environment")
+    same.add_argument(
+        "--labels",
+        type=Path,
+        required=True,
+        help="a JSON object mapping architecture to that image's labels",
+    )
+
     ran = sub.add_parser("check-run", help="the release did what this kind of run is for")
     ran.add_argument("--mode", required=True)
     ran.add_argument("--stage", default="")
@@ -667,6 +753,22 @@ def main(argv: list[str]) -> int:
 
     if arguments.question == "verify-plan":
         return _verify_plan(arguments)
+
+    if arguments.question == "one-environment":
+        labels = json.loads(arguments.labels.read_text(encoding="utf-8"))
+        faults = one_environment(labels)
+        if faults:
+            raise SystemExit(
+                "the architectures are not one environment — "
+                + "; ".join(faults)
+                + ".\nAn index over them would say something no reader could act on."
+            )
+        for arch, stated in sorted(labels.items()):
+            print(f"--- {arch}")
+            for key, value in sorted(stated.items()):
+                if key.startswith(LABEL_PREFIX):
+                    print(f"  {key}={value}")
+        return 0
 
     if arguments.question == "check-run":
         return check_run(

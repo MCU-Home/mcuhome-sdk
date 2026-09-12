@@ -1021,8 +1021,12 @@ jobs:
   build-environment-image:
     name: Build (build-environment image, ${{ matrix.arch }})
     needs: [gate-release, publish-release]
+    # `!cancelled()` and not `always()`: a cancelled run must not go on
+    # to push an image. What this has to survive is a *skipped*
+    # dependency — an image revision publishes no release — which is a
+    # different thing.
     if: >-
-      always()
+      !cancelled()
       && needs.gate-release.result == 'success'
       && (needs.gate-release.outputs.mode == 'image'
           || (needs.gate-release.outputs.stage == 'workspace'
@@ -1272,7 +1276,7 @@ jobs:
     # and an image revision skips `publish-release`. That is how a run once
     # pushed two per-architecture images, composed no index over them, and
     # reported green.
-    if: always() && needs.build-environment-image.result == 'success'
+    if: "!cancelled() && needs.build-environment-image.result == 'success'"
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1289,6 +1293,56 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # An index says "these two are one environment", and nothing had ever
+      # checked that they are. The two legs run on two machines, and a leg
+      # that found its tag already published assembled nothing at all — so
+      # the tags could hold two different package sets, or two builds of one
+      # workspace package, and the index over them would be a statement no
+      # reader could act on: an orchestrator matches an image by its
+      # `packages.` labels and would get whichever architecture it happened
+      # to pull.
+      #
+      # Read over the registry API rather than by pulling: the answer is
+      # two small documents and the images are gigabytes. What is compared
+      # is `scripts/release.py`'s to decide — the workflow fetches, the
+      # script judges, and the judgement is tested.
+      - name: The two architectures are one environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REFERENCE: ${{ needs.build-environment-image.outputs.reference }}
+        run: |
+          set -euo pipefail
+          repository="${REFERENCE%%:*}"
+          repository="${repository#ghcr.io/}"
+          tag="${REFERENCE##*:}"
+          token="$(curl -fsS -u "x:${GH_TOKEN}" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+          for arch in amd64 arm64; do
+            # The manifest names its config blob, and the config blob is
+            # where an image's labels and its architecture are.
+            digest="$(curl -fsSL -H "Authorization: Bearer $token" \
+              -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+              -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/${repository}/manifests/${tag}-${arch}" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["config"]["digest"])')"
+            curl -fsSL -H "Authorization: Bearer $token" \
+              "https://ghcr.io/v2/${repository}/blobs/${digest}" > "config-${arch}.json"
+          done
+          python3 - <<'CONFIGS' > labels.json
+          import json
+
+          answer = {}
+          for arch in ("amd64", "arm64"):
+              document = json.load(open(f"config-{arch}.json"))
+              stated = document.get("architecture")
+              if stated != arch:
+                  raise SystemExit(f"the {arch} tag holds a {stated} image")
+              answer[arch] = (document.get("config") or {}).get("Labels") or {}
+          print(json.dumps(answer))
+          CONFIGS
+          python scripts/release.py one-environment --labels labels.json
 
       # `docker manifest rm` first, ignoring its failure: the local manifest
       # list is state on the runner and `create` refuses to overwrite one.
@@ -1390,7 +1444,7 @@ jobs:
     # neither. Everything that pushed an image waits for the index; a
     # published image is there already.
     if: >-
-      always()
+      !cancelled()
       && needs.gate-release.result == 'success'
       && (needs.gate-release.outputs.mode != 'tag'
           || needs.publish-release.result == 'success')
@@ -1677,7 +1731,10 @@ jobs:
       - build-environment-image
       - publish-environment-image-index
       - verify-release
-    if: always()
+    # Not `always()`: a cancelled run did not fail to do its job, it was
+    # stopped, and calling that a broken release would be a lie told
+    # every time somebody presses cancel.
+    if: "!cancelled()"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

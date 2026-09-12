@@ -123,7 +123,17 @@ overwriting it. A **per-architecture** tag that already exists is left as it
 is and the run carries on: those bytes are published, an assembly is not
 bit-reproducible, and the index below is composed from them. A dispatch
 whose per-architecture images went up but whose index did not is therefore
-repeated with the same revision.
+repeated with the same revision — and **only** for that. Anything that
+changes the assembly (a refreshed base, a changed `Dockerfile`, other
+tools) takes the next number, because repeating the old one would find the
+old tags and publish an index over the old bytes.
+
+Before the index is pushed, the two images are read back and held against
+each other: the specification generation, the Zephyr version, the generator
+constraint and the workspace package with its hash have to be identical,
+and each image has to carry the build tools of its own architecture at one
+version. An index over two different package sets would be a statement no
+orchestrator could act on.
 
 **And then it is verified.** `verify-release` builds the reference Matter
 device in this image, addressed by the digest that was just pushed, on both
