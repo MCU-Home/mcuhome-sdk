@@ -122,7 +122,10 @@ anchors on the physical location.
 `scripts/test twister` needs a build environment and a west workspace. The
 workspace is the one this checkout lies in, so a checkout laid out as above
 needs nothing set; a different workspace is passed as the wrapper's first
-argument or in `MCUHOME_SDK_WEST_WORKSPACE`. The build environment comes in
+argument — one that does not start with `-`, otherwise it is left for
+`west twister` instead — or in `MCUHOME_SDK_WEST_WORKSPACE`. Extra
+arguments, a leading option included, pass through to `west twister`. The
+build environment comes in
 either of the two ways it is delivered. On a developer machine: a container
 runtime and a build-environment image already pulled — the wrapper never
 fetches one. In CI: the workspace and tools packages the commit under test

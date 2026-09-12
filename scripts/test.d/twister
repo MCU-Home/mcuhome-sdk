@@ -47,15 +47,17 @@
 # checkout has to live in the workspace directory, and a convenience
 # symlink somewhere else points into it. A checkout that sits where it
 # belongs therefore needs nothing set. Another workspace is named as this
-# wrapper's first argument or in the MCUHOME_SDK_WEST_WORKSPACE
-# environment variable — mirroring the buildserver's test.d/e2e
-# (MCUHOME_E2E_SDK_DIR) precedent — which is what CI does, where the
-# workspace is an unpacked package. The suites are compiled against the
-# *workspace* the manifest of this checkout describes, never against one
-# somebody baked earlier: a change to west.yml has to be tested against
-# what it pins. Extra arguments are passed through to `west twister`, so
+# wrapper's first argument — one that does not start with `-`, so an
+# option meant for `west twister` is never read as a path — or in the
+# MCUHOME_SDK_WEST_WORKSPACE environment variable — mirroring the
+# buildserver's test.d/e2e (MCUHOME_E2E_SDK_DIR) precedent — which is what
+# CI does, where the workspace is an unpacked package. The suites are
+# compiled against the *workspace* the manifest of this checkout
+# describes, never against one somebody baked earlier: a change to
+# west.yml has to be tested against what it pins. Extra arguments,
+# including a leading option, are passed through to `west twister`, so
 # `-j` stays overridable (twister keeps the last occurrence of a repeated
-# option).
+# option) whether or not a workspace is also named.
 #
 # Twister's output — build trees, logs, the report — goes into a fresh
 # temporary directory and is removed when the run ends, in both modes. It
@@ -68,9 +70,14 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-workspace="${1:-${MCUHOME_SDK_WEST_WORKSPACE:-}}"
-if [ $# -gt 0 ]; then
+# $1 is the workspace only when it does not start with `-`; a leading
+# option (e.g. `-j 4`) is left for west twister below, and the workspace
+# then comes only from MCUHOME_SDK_WEST_WORKSPACE.
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+  workspace="$1"
   shift
+else
+  workspace="${MCUHOME_SDK_WEST_WORKSPACE:-}"
 fi
 
 # No workspace stated: the one this checkout physically lies in. `pwd -P`
