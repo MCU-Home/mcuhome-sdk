@@ -1176,18 +1176,38 @@ jobs:
       # inspect` rather than a pull — the answer is a name, and pulling
       # gigabytes to learn that a name is taken is gigabytes spent on
       # nothing.
-      - name: This tag must not exist yet
+      # Two tags, two rules, and the difference between them is what makes a
+      # half-finished dispatch recoverable.
+      #
+      # The INDEX tag `<version>-r<n>` is the content identity every client
+      # resolves, so an existing one is a refusal: the counter exists for a
+      # second assembly of one package set.
+      #
+      # A PER-ARCHITECTURE tag that already exists is **left alone** — not
+      # reassembled, not pushed, and not a reason to stop. An assembly is
+      # not bit-reproducible (the base image's package installs are not),
+      # so re-pushing would put *different bytes* under a name that already
+      # names some; and the case is real: one leg fails, or the index job
+      # does not run, and the dispatch is repeated. The index below is then
+      # composed from the bytes that are already published, which is
+      # exactly what it is for.
+      - name: Is this architecture already published?
+        id: publish
         env:
           REFERENCE: ${{ steps.reference.outputs.reference }}
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          for candidate in "$REFERENCE" "${REFERENCE}-${ARCH}"; do
-            if docker manifest inspect "$candidate" >/dev/null 2>&1; then
-              echo "::error::$candidate is already published. A tag names one set of bytes and is never moved — dispatch the next revision instead (workspace_version + revision)." >&2
-              exit 1
-            fi
-          done
+          if docker manifest inspect "$REFERENCE" >/dev/null 2>&1; then
+            echo "::error::$REFERENCE is already published. A tag names one set of bytes and is never moved — dispatch the next revision instead (workspace_version + revision)." >&2
+            exit 1
+          fi
+          if docker manifest inspect "${REFERENCE}-${ARCH}" >/dev/null 2>&1; then
+            echo "::notice::${REFERENCE}-${ARCH} is already published — it is left as it is, and the index is composed from it."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
 
       # Through the assembler, never a bare `docker build`: the
       # specification asks the image to repeat every member of its packages'
@@ -1197,6 +1217,7 @@ jobs:
       # declaration names, and reads the built image back to check that it
       # mirrors it.
       - name: Assemble the image
+        if: steps.publish.outputs.needed == 'true'
         env:
           REFERENCE: ${{ steps.reference.outputs.reference }}
           REVISION: ${{ steps.reference.outputs.revision }}
@@ -1213,6 +1234,7 @@ jobs:
           df -h /
 
       - name: The image is the architecture its tag claims
+        if: steps.publish.outputs.needed == 'true'
         env:
           REFERENCE: ${{ steps.reference.outputs.reference }}
           ARCH: ${{ matrix.arch }}
@@ -1229,6 +1251,7 @@ jobs:
       # under it here would publish one architecture under the name every
       # client resolves.
       - name: Publish this architecture
+        if: steps.publish.outputs.needed == 'true'
         env:
           REFERENCE: ${{ steps.reference.outputs.reference }}
           ARCH: ${{ matrix.arch }}
@@ -1244,6 +1267,12 @@ jobs:
   publish-environment-image-index:
     name: Publish (build-environment image index)
     needs: build-environment-image
+    # Spelled out, because the default would not run it: a job whose
+    # *transitive* dependencies include a skipped one is skipped with them,
+    # and an image revision skips `publish-release`. That is how a run once
+    # pushed two per-architecture images, composed no index over them, and
+    # reported green.
+    if: always() && needs.build-environment-image.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1622,3 +1651,69 @@ jobs:
           set -euo pipefail
           cd project/build/bmp180-node
           sha256sum -- firmware.bin firmware.hex bootloader.hex build-report.json
+
+  # ------------------------------------------------------------------
+  # Did this run do what it exists for?
+  #
+  # A workflow is green when nothing failed, and a skipped job has not
+  # failed. For a graph that branches on purpose — a tools tag builds no
+  # image, an SDK tag publishes none — that default is right, and for the
+  # one question a release run has to answer it is exactly wrong: a
+  # revision dispatch once pushed two per-architecture images, composed no
+  # index over them, and reported success, because the job that would have
+  # done it inherited a skip from a dependency it shares with a tag.
+  #
+  # So the shape of the graph is stated where it can be tested — four kinds
+  # of run, one expected job set each, in `scripts/release.py` — and this
+  # job holds the run against it. A job that was supposed to run and did
+  # not is a red run.
+  check-release:
+    name: Check (the run did what it is for)
+    needs:
+      - gate-release
+      - build-packages
+      - build-firmware
+      - publish-release
+      - build-environment-image
+      - publish-environment-image-index
+      - verify-release
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install what it reads versions with
+        run: python -m pip install --disable-pip-version-check packaging
+
+      - name: Every job this run exists for ran
+        env:
+          MODE: ${{ needs.gate-release.outputs.mode }}
+          STAGE: ${{ needs.gate-release.outputs.stage }}
+          VERIFY_MODE: ${{ needs.gate-release.outputs.verify_mode }}
+          RESULTS: >-
+            {"gate-release": "${{ needs.gate-release.result }}",
+             "build-packages": "${{ needs.build-packages.result }}",
+             "build-firmware": "${{ needs.build-firmware.result }}",
+             "publish-release": "${{ needs.publish-release.result }}",
+             "build-environment-image": "${{ needs.build-environment-image.result }}",
+             "publish-environment-image-index":
+               "${{ needs.publish-environment-image-index.result }}",
+             "verify-release": "${{ needs.verify-release.result }}"}
+        run: |
+          set -o pipefail
+          # The gate decides what the run is; without it there is nothing
+          # to hold anything against, and its own failure is the answer.
+          if [ -z "$MODE" ]; then
+            echo "::error::the gate did not say what this run is — it failed before deciding" >&2
+            exit 1
+          fi
+          printf '%s' "$RESULTS" > results.json
+          python scripts/release.py check-run \
+            --mode "$MODE" --stage "$STAGE" --verify-mode "$VERIFY_MODE" \
+            --results results.json | tee -a "$GITHUB_STEP_SUMMARY"

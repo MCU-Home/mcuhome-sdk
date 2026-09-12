@@ -116,11 +116,14 @@ it states a PEP 440 constraint, and the run takes the newest published
 version satisfying it. It is the same document, and the same answer, a
 workbench provisioning that workspace package gets.
 
-**An existing tag is a refusal.** The tag is the content identity and
-`-r<n>` is the counter that exists for a second assembly of one package
-set, so a run that finds its tag taken stops rather than overwriting or
-skipping. A half-published set — one architecture up, one failed — is
-repeated under the next revision, never patched in place.
+**An existing index tag is a refusal.** `<version>-r<n>` is the content
+identity and `-r<n>` is the counter that exists for a second assembly of one
+package set, so a run that finds that tag taken stops rather than
+overwriting it. A **per-architecture** tag that already exists is left as it
+is and the run carries on: those bytes are published, an assembly is not
+bit-reproducible, and the index below is composed from them. A dispatch
+whose per-architecture images went up but whose index did not is therefore
+repeated with the same revision.
 
 **And then it is verified.** `verify-release` builds the reference Matter
 device in this image, addressed by the digest that was just pushed, on both

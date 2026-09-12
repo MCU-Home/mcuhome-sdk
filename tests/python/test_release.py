@@ -1274,3 +1274,113 @@ def test_a_tools_release_is_verified_by_an_image_revision(release, readiness, tm
     releases = world(tmp_path, tools_release("0.1.0"))
     with pytest.raises(SystemExit, match="revision"):
         plan_for(release, readiness, "tools", "0.1.0", releases, tmp_path)
+
+
+# --------------------------------------------------------------------------
+# The shape of the release graph, per kind of run
+# --------------------------------------------------------------------------
+#
+# A skipped job has not failed, so a run that silently did half its work
+# reports green. These say which jobs each kind of run exists for, so that
+# the answer is a fact somebody wrote down rather than whatever the
+# conditions happen to add up to.
+
+
+def test_a_tag_of_each_line_runs_the_jobs_that_line_needs(release):
+    workspace = release.expected_jobs(mode="tag", stage="workspace", verify_mode="pushed-image")
+    assert workspace == {
+        "gate-release": "success",
+        "build-packages": "success",
+        "build-firmware": "success",
+        "publish-release": "success",
+        # A build workspace release is the one that assembles an image.
+        "build-environment-image": "success",
+        "publish-environment-image-index": "success",
+        "verify-release": "success",
+    }
+    sdk = release.expected_jobs(mode="tag", stage="sdk", verify_mode="published-image")
+    assert sdk["build-environment-image"] == "skipped"
+    assert sdk["publish-environment-image-index"] == "skipped"
+    assert sdk["verify-release"] == "success"
+    tools = release.expected_jobs(mode="tag", stage="tools", verify_mode="skip")
+    assert tools["publish-release"] == "success"
+    assert tools["verify-release"] == "skipped"
+
+
+def test_an_image_revision_publishes_an_index_and_verifies_it(release):
+    """The defect this exists for: two per-architecture images and no index."""
+    assert release.expected_jobs(mode="image", stage="", verify_mode="pushed-image") == {
+        "gate-release": "success",
+        "build-packages": "skipped",
+        "build-firmware": "skipped",
+        "publish-release": "skipped",
+        "build-environment-image": "success",
+        "publish-environment-image-index": "success",
+        "verify-release": "success",
+    }
+
+
+def test_a_rehearsal_builds_everything_and_publishes_nothing(release):
+    expected = release.expected_jobs(mode="rehearse", stage="sdk", verify_mode="published-image")
+    assert expected["build-packages"] == "success"
+    assert expected["build-firmware"] == "success"
+    assert expected["verify-release"] == "success"
+    for job in ("publish-release", "build-environment-image", "publish-environment-image-index"):
+        assert expected[job] == "skipped"
+
+
+def test_a_verification_runs_the_verification_and_nothing_else(release):
+    expected = release.expected_jobs(mode="verify", stage="sdk", verify_mode="published-image")
+    assert expected["gate-release"] == "success"
+    assert expected["verify-release"] == "success"
+    for job in release.RELEASE_JOBS:
+        if job not in ("gate-release", "verify-release"):
+            assert expected[job] == "skipped", job
+
+
+def test_a_job_this_run_needed_and_skipped_is_a_failure(release, capsys):
+    """Exactly the run that reported green while doing half its work."""
+    results = {
+        "gate-release": "success",
+        "build-packages": "skipped",
+        "build-firmware": "skipped",
+        "publish-release": "skipped",
+        "build-environment-image": "success",
+        "publish-environment-image-index": "skipped",
+        "verify-release": "skipped",
+    }
+    status = release.check_run(mode="image", stage="", verify_mode="pushed-image", results=results)
+    assert status == 1
+    printed = capsys.readouterr()
+    assert "publish-environment-image-index was skipped" in printed.out
+    assert "verify-release was skipped" in printed.out
+    assert "::error::" in printed.err
+
+
+def test_a_run_that_did_its_job_passes(release, capsys):
+    results = dict.fromkeys(release.RELEASE_JOBS, "skipped")
+    results["gate-release"] = "success"
+    results["verify-release"] = "success"
+    assert (
+        release.check_run(
+            mode="verify", stage="sdk", verify_mode="published-image", results=results
+        )
+        == 0
+    )
+    assert "Every job this run exists for ran" in capsys.readouterr().out
+
+
+def test_the_workflow_declares_every_job_the_check_knows(release):
+    """The table and the workflow cannot drift: one names the other's jobs."""
+    import re
+
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    declared = set(re.findall(r"^  ([a-z][a-z-]*):$", workflow, re.MULTILINE))
+    assert set(release.RELEASE_JOBS) <= declared
+    # And the check itself is a job of that workflow, needing all of them.
+    assert "check-release" in declared
+
+
+def test_an_unknown_kind_of_run_is_refused(release):
+    with pytest.raises(SystemExit, match="not a kind of release run"):
+        release.expected_jobs(mode="whatever", stage="sdk", verify_mode="skip")

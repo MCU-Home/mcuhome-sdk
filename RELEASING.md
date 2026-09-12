@@ -245,10 +245,25 @@ Debian base, a change to `containers/build-environment/Dockerfile`, or a
 build tools release the workspace package accepts and that should reach
 users without a new workspace release.
 
-**An existing tag is a refusal.** The tag is the content identity, and
-`-r<n>` is the counter that exists for a second assembly; a run that found
-its tag taken says so and stops. A half-published set (one architecture up,
-one failed) is repeated under the next revision, never patched in place.
+**An existing index tag is a refusal.** `<version>-r<n>` is the content
+identity every client resolves, and `-r<n>` is the counter that exists for
+a second assembly; a run that finds that tag taken says so and stops.
+
+**A per-architecture tag that already exists is left alone**, and the run
+carries on. `<version>-r<n>-<arch>` names bytes that are already published,
+an assembly is not bit-reproducible (the base image's package installs are
+not), and re-pushing would put *different* bytes under a name that already
+names some. So the leg skips its assembly with a notice and the index is
+composed from what is there.
+
+**That is the recovery rule**: a dispatch whose per-architecture images
+went up but whose index did not — one leg failed, or the index job did not
+run — is **repeated with the same revision**. Both legs find their tags,
+assemble nothing, and the index is composed over the bytes that were
+already published. Use the next revision number only when the packages
+themselves change. The run is red unless every job it exists for actually
+ran: `check-release` holds each run against the job set its kind needs, so
+a half-finished dispatch cannot report green.
 
 ## 6. `verify-release`
 

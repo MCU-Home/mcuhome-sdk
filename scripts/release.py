@@ -84,8 +84,11 @@ import release_readiness  # noqa: E402 - same
 
 __all__ = [
     "PLATFORMS",
+    "RELEASE_JOBS",
     "artifact_name",
+    "check_run",
     "check_tag",
+    "expected_jobs",
     "digest_of",
     "gate_packages",
     "image_packages",
@@ -510,6 +513,90 @@ def image_packages(
 
 
 # --------------------------------------------------------------------------
+# check-run: the release did what this kind of run is for
+# --------------------------------------------------------------------------
+#
+# A workflow reports green when nothing failed, and "skipped" is not
+# failing. That is the right default for a graph whose branches are
+# deliberate — a tools tag builds no image, an SDK tag publishes none — and
+# it is exactly wrong for the one question a release run has to answer: did
+# the jobs this run exists for actually run?
+#
+# The graph has four shapes, one per kind of run, and each states which jobs
+# it needs. A job that was supposed to run and was skipped is a failure
+# here, which is what makes a half-finished dispatch red instead of green.
+
+#: Every job the release workflow can run, in the order it runs them.
+RELEASE_JOBS = (
+    "gate-release",
+    "build-packages",
+    "build-firmware",
+    "publish-release",
+    "build-environment-image",
+    "publish-environment-image-index",
+    "verify-release",
+)
+
+
+def expected_jobs(*, mode: str, stage: str, verify_mode: str) -> dict[str, str]:
+    """Which jobs this run needs, and which it is right to have skipped.
+
+    ``mode`` is what the run is — a tag, a rehearsal, an image revision, a
+    verification of something already released — and the two other
+    arguments are what the gate resolved. The answer is a verdict per job:
+    ``success`` for one this run exists for, ``skipped`` for one that has
+    nothing to do in it.
+    """
+    if mode not in ("tag", "rehearse", "image", "verify"):
+        raise SystemExit(f"{mode!r} is not a kind of release run")
+    builds = mode in ("tag", "rehearse")
+    # An image is assembled by a build workspace release and by a revision
+    # dispatch, and by nothing else: it delivers a workspace package.
+    image = mode == "image" or (mode == "tag" and stage == "workspace")
+    verified = verify_mode not in ("", "skip")
+    wanted = {
+        "gate-release": True,
+        "build-packages": builds,
+        "build-firmware": builds,
+        "publish-release": mode == "tag",
+        "build-environment-image": image,
+        "publish-environment-image-index": image,
+        "verify-release": verified,
+    }
+    return {job: ("success" if needed else "skipped") for job, needed in wanted.items()}
+
+
+def check_run(*, mode: str, stage: str, verify_mode: str, results: dict[str, str], out=None) -> int:
+    """Hold what the run did against what this kind of run is for."""
+    out = sys.stdout if out is None else out
+    expected = expected_jobs(mode=mode, stage=stage, verify_mode=verify_mode)
+    lines = [
+        f"## What this {mode} run had to do",
+        "",
+        "| job | expected | result |",
+        "|---|---|---|",
+    ]
+    wrong: list[str] = []
+    for job in RELEASE_JOBS:
+        was = results.get(job, "missing")
+        # A job that was right to skip may also have been cancelled with
+        # the run; only a job that had work to do is held to its result.
+        if expected[job] == "success" and was != "success":
+            wrong.append(f"{job} was {was} and this run needs it")
+        lines.append(f"| `{job}` | {expected[job]} | {was} |")
+    lines.append("")
+    lines.append(
+        "**Failed:** " + "; ".join(wrong)
+        if wrong
+        else "Every job this run exists for ran and succeeded."
+    )
+    print("\n".join(lines), file=out)
+    for one in wrong:
+        print(f"::error::{one}", file=sys.stderr)
+    return 1 if wrong else 0
+
+
+# --------------------------------------------------------------------------
 # The command line
 # --------------------------------------------------------------------------
 
@@ -545,6 +632,12 @@ def main(argv: list[str]) -> int:
     verify = sub.add_parser("verify-plan", help="the published chain around a released tag")
     verify.add_argument("tag")
 
+    ran = sub.add_parser("check-run", help="the release did what this kind of run is for")
+    ran.add_argument("--mode", required=True)
+    ran.add_argument("--stage", default="")
+    ran.add_argument("--verify-mode", default="")
+    ran.add_argument("--results", type=Path, required=True, help="job name to result, as JSON")
+
     assets = sub.add_parser("assets", help="exactly the files this release publishes")
     assets.add_argument("stage", choices=release_lines.STAGES)
     assets.add_argument("--version", required=True)
@@ -574,6 +667,14 @@ def main(argv: list[str]) -> int:
 
     if arguments.question == "verify-plan":
         return _verify_plan(arguments)
+
+    if arguments.question == "check-run":
+        return check_run(
+            mode=arguments.mode,
+            stage=arguments.stage,
+            verify_mode=arguments.verify_mode,
+            results=json.loads(arguments.results.read_text(encoding="utf-8")),
+        )
 
     return _gate(arguments)
 
