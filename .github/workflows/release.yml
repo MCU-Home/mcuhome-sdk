@@ -621,13 +621,21 @@ jobs:
 
   # ------------------------------------------------------------------
   # The gate's firmware builds: the reference Matter device, once per
-  # combination and architecture, built the way a user builds one.
-  #
-  # This is the same walk `ci-build.yml`'s build-firmware does per commit —
+  # combination and architecture, built the way a user builds one —
   # `mcuhome device build`, the subprocess profile, the packages as local
-  # sources — with one difference that is the point of a tag: the packages
-  # are the ones that will be published, and the versions around them are
-  # published releases rather than this commit's.
+  # sources — with two differences.
+  #
+  # The first is the point of a tag: the packages are the ones that will
+  # be published, and the versions around them are published releases
+  # rather than this commit's. This is otherwise the same walk
+  # `ci-build.yml`'s build-firmware does per commit.
+  #
+  # The second holds regardless of the tag: a user's device pins nothing
+  # and resolves under the workbench's own default SDK constraint,
+  # reaching for the package registry as soon as a local directory holds
+  # a version outside it. This device is pinned to exactly the packages
+  # this leg provides before it is built (below), so the build can only
+  # compile the combination it is named after.
   #
   # A red leg here publishes nothing. That is not a policy this job
   # enforces; it is what `needs:` means.
@@ -829,6 +837,8 @@ jobs:
       # tool refuses a device that does rather than writing a second
       # answer beside its own.
       - name: Pin the device to the packages this leg provides
+        id: pin
+        continue-on-error: ${{ !matrix.combination.required }}
         run: |
           set -euo pipefail
           python mcuhome-sdk/scripts/device_pins.py write \
@@ -838,10 +848,14 @@ jobs:
             "$GITHUB_WORKSPACE/sources/workspace" \
             "$GITHUB_WORKSPACE/sources/tools"
 
-      # The documented invocation, and the whole point of this job. A
-      # combination the gate marked as not required is one whose chain does
-      # not hold together — built to see what a broken chain does, never a
-      # reason to stop a release — so only a required leg reddens the run.
+      # The documented invocation, and the whole point of this job. Every
+      # combination is built from exactly the local packages it is pinned
+      # to, required or not — whether its chain holds together is what
+      # `scripts/release_readiness.py` computed beforehand, as `required`
+      # and `consistent`, not something this build exercises. A
+      # combination the gate marked as not required is built anyway and
+      # reported, never a reason to stop a release — so only a required
+      # leg reddens the run.
       - name: Build the reference Matter device
         id: build
         continue-on-error: ${{ !matrix.combination.required }}
@@ -866,10 +880,17 @@ jobs:
       # And a green build of the wrong packages is worse than both: it
       # produces a firmware that proves a chain nobody was gating. The
       # build context this build wrote states what it resolved, and it has
-      # to be what the device named.
+      # to be what the device named — though for the workspace and tools
+      # stages that is a restatement, not an independent check: a fully
+      # pinned reference decides those two outright, and their bytes are
+      # already enforced by the hash check at fetch time. The SDK stage is
+      # the one that compares something new: `sources.sdk` is read for its
+      # constraint alone, so the hash the manifest reports is what the
+      # constraint actually picked, held here against what the pin said it
+      # should be.
       - name: The build resolved the packages the device pins
         id: pins
-        if: steps.build.outcome == 'success'
+        if: steps.build.outcome == 'success' && steps.pin.outcome == 'success'
         continue-on-error: ${{ !matrix.combination.required }}
         run: |
           set -euo pipefail
@@ -887,8 +908,8 @@ jobs:
       - name: A combination that claims to work has to work
         if: >-
           matrix.combination.required
-          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success'
-              || steps.pins.outcome != 'success')
+          && (steps.pin.outcome != 'success' || steps.build.outcome != 'success'
+              || steps.artifacts.outcome != 'success' || steps.pins.outcome != 'success')
         env:
           LABEL: ${{ matrix.combination.label }}
           ARCH: ${{ matrix.target.arch }}
@@ -899,8 +920,8 @@ jobs:
       - name: A combination that claims nothing is reported, not failed
         if: >-
           !matrix.combination.required
-          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success'
-              || steps.pins.outcome != 'success')
+          && (steps.pin.outcome != 'success' || steps.build.outcome != 'success'
+              || steps.artifacts.outcome != 'success' || steps.pins.outcome != 'success')
         env:
           LABEL: ${{ matrix.combination.label }}
           ARCH: ${{ matrix.target.arch }}

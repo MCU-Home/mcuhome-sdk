@@ -323,10 +323,13 @@ def manifest_path(*, build_dir: Path | None, context: Path | None) -> Path:
     """The build context manifest of a finished local build.
 
     The workbench writes its context under the build directory and locks
-    it there, so the manifest is the resolution as it was actually
-    delivered. Its location inside the build directory is the workbench's
-    own business, which is why a missing one is searched for rather than
-    declared absent — and why finding two is a refusal, not a choice.
+    it there — this holds only without ``--context``, which points this
+    function at a manifest of the caller's choosing and skips the search
+    below entirely. Without it, the manifest is the resolution as it was
+    actually delivered, and its location inside the build directory is
+    the workbench's own business, which is why a missing one is searched
+    for rather than declared absent — and why finding two is a refusal,
+    not a choice.
     """
     if context is not None:
         return Path(context) / MANIFEST_FILE
@@ -352,6 +355,16 @@ def manifest_path(*, build_dir: Path | None, context: Path | None) -> Path:
 
 def check_pins(pins: dict[str, Pin], manifest: Path, *, out=None) -> int:
     """Hold the resolution in *manifest* against the pins the device named.
+
+    For the build workspace and build tools this is a restatement, not an
+    independent check: a fully pinned reference decides those two stages
+    outright, so the manifest can only report back the same name, version
+    and hash the pin already stated, and their bytes were already
+    enforced by the hash check at fetch time. The SDK stage is the one
+    comparison that is not a restatement — ``sources.sdk`` is read for
+    its constraint alone, so the version and bytes the manifest reports
+    are what the constraint actually picked, held here against what the
+    pin said they should be.
 
     Three packages, three facts each: the name the pin resolved to, the
     version, and the bytes. A mismatch is reported per stage and for every

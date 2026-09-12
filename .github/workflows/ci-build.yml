@@ -953,6 +953,8 @@ jobs:
       # device pins nothing, and a device that does is refused rather
       # than extended.
       - name: Pin the device to the packages this leg provides
+        id: pin
+        continue-on-error: true
         run: |
           set -euo pipefail
           python mcuhome-sdk/scripts/device_pins.py write \
@@ -1001,7 +1003,14 @@ jobs:
       # And a green build of the wrong packages is worse than both: the
       # combination this leg is named after would not be the one it
       # built. The build context states what the build resolved, and it
-      # has to be what the device pinned.
+      # has to be what the device pinned — though for the workspace and
+      # tools stages that is a restatement, not an independent check: a
+      # fully pinned reference decides those two outright, and their
+      # bytes are already enforced by the hash check at fetch time. The
+      # SDK stage is the one that compares something new: `sources.sdk`
+      # is read for its constraint alone, so the hash the manifest
+      # reports is what the constraint actually picked, held here against
+      # what the pin said it should be.
       - name: The build resolved the packages the device pins
         id: pins
         if: steps.build.outcome == 'success'
@@ -1019,6 +1028,7 @@ jobs:
         if: always()
         env:
           LABEL: ${{ matrix.combination.label }}
+          PIN_OUTCOME: ${{ steps.pin.outcome }}
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           ARTIFACT_OUTCOME: ${{ steps.artifacts.outcome }}
           PINS_OUTCOME: ${{ steps.pins.outcome }}
@@ -1026,8 +1036,8 @@ jobs:
           set -euo pipefail
           mkdir -p outcome produced
           export OUTCOME=failure
-          if [ "$BUILD_OUTCOME" = success ] && [ "$ARTIFACT_OUTCOME" = success ] \
-             && [ "$PINS_OUTCOME" = success ]; then
+          if [ "$PIN_OUTCOME" = success ] && [ "$BUILD_OUTCOME" = success ] \
+             && [ "$ARTIFACT_OUTCOME" = success ] && [ "$PINS_OUTCOME" = success ]; then
             OUTCOME=success
             # The bootloader travels with the firmware: both legs sign
             # with the same committed key, so a difference in it is a real
@@ -1097,13 +1107,15 @@ jobs:
       # Only a combination that CLAIMS to work is a failure. A triple whose
       # chain does not hold together — a published stage paired with one
       # outside its constraint, because that is the only pairing the
-      # catalogue could form — is built to see what it does and reported;
-      # the plan says which is which in `required`, and the assessment
-      # tables carry the reason.
+      # catalogue could form — is built anyway, from exactly the local
+      # packages it is pinned to, and reported; whether the chain holds
+      # is what the plan computed beforehand in `required`, not something
+      # this build exercises, and the assessment tables carry the reason.
       - name: The build has to have succeeded
         if: |
           matrix.combination.required
-          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success')
+          && (steps.build.outcome != 'success' || steps.artifacts.outcome != 'success'
+              || steps.pins.outcome != 'success')
         run: |
           echo "::error::${{ matrix.combination.label }} did not build on ${ARCH}" >&2
           exit 1

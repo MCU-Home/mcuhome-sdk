@@ -134,9 +134,11 @@ What the catalogue demands, per line:
   SDK whose `requires` already accepts this version (a patch of the line),
   or — where none does, which is what a line start looks like — with the
   SDK of this commit, and the verdict says that no released SDK uses it
-  yet. The build tools it requires have to be published — an image and a
-  build both resolve through them — and the same refusal fires one stage
-  down when they are not.
+  yet. The build tools it requires have to be published: an image resolves
+  through them, and whether a build's chain would too is what
+  `scripts/release_readiness.py` computes statically — `required` and
+  `consistent` — not something the pinned build itself exercises. The
+  same refusal fires one stage down when they are not.
 - **tools tag** — the same one stage down, against published build
   workspaces.
 
@@ -151,7 +153,9 @@ there is no second build of the same inputs anywhere in the run.
 
 **`build-firmware`** — the reference Matter device, once per combination
 the gate named and on both architectures, built the way a user builds one:
-`mcuhome device build`, subprocess profile, the packages as local sources.
+`mcuhome device build`, subprocess profile, the packages as local sources —
+with one difference: a user's device pins nothing, and this one is pinned
+to exactly the packages this leg provides before it is built (below).
 A red leg publishes nothing.
 
 The device is **pinned to exactly those packages** before it is built —

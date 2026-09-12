@@ -47,6 +47,7 @@ second — they are the fast half of the strategy in
 | `test_builder_workspace.py` | the west workspace record a build environment writes: layer names, resolved commit and patch digest |
 | `test_check_build_artifacts.py` | the CI artifact gate: a complete build passes, a broken one is named |
 | `test_compare_firmware.py` | the firmware-comparison report: telling "one stamp" apart from "everywhere" |
+| `test_device_pins.py` | the CI device-pinning gate: the block names exactly what the sources hold, and a build that resolved something else is a finding |
 | `test_sdk_archive.py` | the SDK package: the same bytes twice, the allowlist, and a real unpack through the orchestrator |
 | `test_release.py` | the release act and release readiness: what a commit can already say, and what a release refuses |
 
