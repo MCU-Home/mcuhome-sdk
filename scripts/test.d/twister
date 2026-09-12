@@ -19,9 +19,10 @@
 #   IMAGE MODE, when it does not. The suites are compiled inside a build
 #   environment image — an assembly of those same two packages, tagged
 #   `<workspace package version>-r<n>` — taken from what is already on this
-#   machine, the highest assembly revision present and this checkout's own
-#   version first. This wrapper never fetches anything, so "the newest one
-#   you have" is the only question it can answer offline.
+#   machine, the highest assembly revision present and the workspace
+#   version this checkout declares first. This wrapper never fetches
+#   anything, so "the newest one you have" is the only question it can
+#   answer offline.
 #
 # What neither mode does is prepare its input. Unpacking the packages,
 # creating the build's virtual environment from the wheel set they ship,
@@ -194,16 +195,16 @@ print(ENVIRONMENT_IMAGE_REPOSITORY)
   exit 1
 fi
 
-version="$("$venv/bin/python" -c "
-import sys
-sys.path.insert(0, '$root')
-from mcuhome.model import __version__
-print(__version__)
-" 2>/dev/null)" || version=""
+# The image tags are `<workspace package version>-r<n>`, so the version the
+# preference below wants is the *workspace* line's, out of the one file that
+# declares the three release lines. The SDK's own version names no image and
+# matched no tag when it was asked here instead.
+version="$("$venv/bin/python" "$root/scripts/release_lines.py" \
+  version workspace 2>/dev/null)" || version=""
 
-# The highest assembly revision on this machine, this checkout's version
-# preferred. `docker images` is asked rather than a registry: this wrapper
-# does not fetch, so what is here is the whole answer.
+# The highest assembly revision on this machine, the workspace version this
+# checkout declares preferred. `docker images` is asked rather than a
+# registry: this wrapper does not fetch, so what is here is the whole answer.
 image="$(
   docker images --format '{{.Repository}}:{{.Tag}}' "$repository" 2>/dev/null |
   awk -F: -v wanted="$version" '
