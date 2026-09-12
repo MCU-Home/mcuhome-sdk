@@ -155,7 +155,7 @@ bump of the generated-tables contract.
 
 Product-owner direction, 2026-08-07. Not v0.x scope — recorded here so
 nothing built before the automation phase closes a door on it. The
-formal decision is an ADR at the start of that phase, backed by a
+formal decision is taken at the start of that phase, backed by a
 measured prototype.
 
 **Principle.** Firmware stays individually generated and compiled per
@@ -195,8 +195,8 @@ picks the cheapest tier that covers the configuration:
    For genuinely complex processing (an AMG8833 8×8 thermal grid,
    say) the engine's footprint is a fair price — though known-complex
    sensors can also land as C components (§2), shrinking how often
-   tier 3 is needed at all. Two candidate tracks, decided by the
-   automation-phase ADR:
+   tier 3 is needed at all. Two candidate tracks, decided when that
+   phase starts:
    - **Adopt: Berry** (MIT, MCU-native, Tasmota precedent); second
      choice Lua. Evaluated and behind: Toit (LGPL VM, ESP-IDF-bound),
      Wren (dormant since 0.4.0, double-precision-only numbers on

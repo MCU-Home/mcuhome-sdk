@@ -393,8 +393,8 @@ def test_the_format_version_is_four() -> None:
 def test_which_container_serves_a_line(version: str, line: str, expected: bool) -> None:
     """The match both backends make, in ``mcuhome-model`` so they make one.
 
-    The local build method asks it of the image on a developer's host and
-    the build server asks it of every image in its inventory; two
+    A local build asks it of the image on this host and the build server
+    asks it of every image in its inventory; two
     spellings of "this container serves 4.4" is how the two start
     disagreeing about one container.
     """

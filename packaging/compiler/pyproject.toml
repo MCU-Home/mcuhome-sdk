@@ -8,11 +8,12 @@
 #
 # The base dependency is `mcuhome-model` and nothing above it: the
 # compiler ships inside the SDK package and runs in the build
-# container, where the workbench neither exists nor belongs. The
-# optionality runs the other way — the workbench's `local` extra pulls
-# this distribution in for the local
-# build methods; nothing here imports the workbench (the compiler's own
-# context reading is `mcuhome.compiler.contextread`).
+# environment, where the workbench neither exists nor belongs. The
+# optionality runs the other way — the workbench's `generate` extra
+# pulls this distribution in for the one case where the workbench's own
+# machine generates the application; nothing here imports the workbench
+# (the compiler's own context reading is
+# `mcuhome.compiler.contextread`).
 
 [build-system]
 requires = ["setuptools>=77"]

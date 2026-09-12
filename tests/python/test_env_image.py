@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The thin build-environment image: what it may contain, and what it claims.
+"""The build-environment image: what it may contain, and what it claims.
 
 ``containers/build-environment/Dockerfile`` and
 ``scripts/build_env_image.py`` deliver MCUHome's environment as a container
@@ -19,7 +19,7 @@ properties that do not:
   hashed, and the tools family replaced by the one platform's package the
   image actually contains.
 * **The pins agree.** The base image decides which interpreter the packaged
-  wheel set fits, so the thin image, the baked image and the package build
+  wheel set fits, so this image, the packager image and the package build
   have to name the same one.
 
 **No docker here.** Everything asserted below is a property of this

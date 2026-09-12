@@ -69,7 +69,7 @@ LATEST_ZEPHYR_LINE = SUPPORTED_ZEPHYR_LINES[-1]
 #: It is evaluated where ``packaging`` is available — this package has no
 #: dependencies by construction — so what lives here is the
 #: string and what reads it is
-#: :mod:`mcuhome.workbench.resolve_env`.
+#: :mod:`mcuhome.workbench.resolve_pins`.
 ZEPHYR_CONSTRAINT = "~=4.4.0"
 
 
@@ -112,11 +112,10 @@ def satisfies_line(version: str, *, line: str) -> bool:
 
     The one implementation of the release-line match every backend must
     perform, in ``mcuhome-model`` because **both** backends perform it —
-    the local build method against the image on this host, the build
-    server against
-    the images in its inventory — and two spellings of "this container
-    serves 4.4" is how one of them starts accepting a container the other
-    refuses.
+    a local build against the image on this host, the build server
+    against the images in its inventory — and two spellings of "this
+    container serves 4.4" is how one of them starts accepting a
+    container the other refuses.
 
     A line is a prefix of a release, component by component: ``4.4``
     is satisfied by ``4.4``, ``4.4.0`` and ``4.4.12``, and by nothing
@@ -193,10 +192,9 @@ def normalize_release(version: str) -> str:
     Exactly one leading ``v`` is dropped and nothing else about the value
     is touched: a second ``v`` is not west's doing and stays, and a value
     that never had one comes back unchanged. This is the one place that
-    normalization happens, so that a build server reading a program's
-    ``describe`` answer and this module's own release grammar agree on
-    what a release looks like without a second implementation of the
-    strip.
+    normalization happens, so that a build server reading an image's
+    version label and this module's own release grammar agree on what a
+    release looks like without a second implementation of the strip.
     """
     return version[1:] if version.startswith("v") else version
 

@@ -42,7 +42,7 @@ second — they are the fast half of the strategy in
 | `test_abi.py` | the build environment's request/result ABI and the SDK entry point's own call into it, mostly through refusals |
 | `test_buildenvironment.py` | parsing `build-environment.json` and `meta.json`, and what each refusal names |
 | `test_container_closure.py` | the SDK entry point's import closure stays stdlib plus `mcuhome` |
-| `test_env_image.py` | the thin build-environment image: what it may contain, and what its labels claim |
+| `test_env_image.py` | the build-environment image: what it may contain, and what its labels claim |
 | `test_env_package.py` | the build-environment packages: determinism, the declared member set, and the pins that must agree |
 | `test_builder_workspace.py` | the west workspace record a build environment writes: layer names, resolved commit and patch digest |
 | `test_check_build_artifacts.py` | the CI artifact gate: a complete build passes, a broken one is named |

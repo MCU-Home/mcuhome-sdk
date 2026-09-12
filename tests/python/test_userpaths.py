@@ -183,9 +183,8 @@ def test_no_module_reads_process_state() -> None:
     this package's largest host-facing module and the one that would feel
     a stray ``os.environ`` first. The two modules that actually held such
     a read are elsewhere now — ``signing.py`` always was the workbench's,
-    and ``container.py`` became ``buildenv.py`` there when the
-    orchestrator moved, where the workbench's own copy of this test
-    covers it.
+    and the container path moved there too, where the workbench's own
+    copy of this test covers it.
     """
     modules = package_modules()
     names = {path.name for path in modules}
