@@ -83,11 +83,11 @@ image is matched by the package set its labels declare, and a mismatch
 is refused rather than built. A build that runs in a container honours
 it; a build that starts none cannot — a development build against a
 workspace of your own is refused over it, like every other `sources.*`
-entry, and a build that runs as a child process against an unpacked
-environment says in its log that the pin has no effect there. An
-orchestrator may let a single build override it (`mcuhome device build
---container-image`); what a device carries is the pin for every build of
-it.
+entry that differs from its default, and a build that runs as a child
+process against an unpacked environment says in its log that the pin has
+no effect there. An orchestrator may let a single build override it
+(`mcuhome device build --container-image`); what a device carries is the
+pin for every build of it.
 
 ## 3. `device:` — identity and platform
 
