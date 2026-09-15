@@ -3,10 +3,10 @@
     "requires": {
       "mcuhome-build-workspace": "~=0.2.0"
     },
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "tools": {
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "workspace": {
     "requires": {
