@@ -22,7 +22,10 @@
 #   machine, the highest assembly revision present and the workspace
 #   version this checkout declares first. This wrapper never fetches
 #   anything, so "the newest one you have" is the only question it can
-#   answer offline.
+#   answer offline. An image that states no MCUHOME_BUILDER_TOOLS is one
+#   published before that name existed: this mode then skips with the
+#   reason rather than failing, because the image delivers a released
+#   environment and no change in this checkout can fix it.
 #
 # What neither mode does is prepare its input. Unpacking the packages,
 # creating the build's virtual environment from the wheel set they ship,
@@ -226,6 +229,22 @@ image="$(
 if [ -z "$image" ]; then
   echo "test.d/twister: no build environment image of $repository is present locally, and MCUHOME_SDK_BUILD_TOOLS names no unpacked tools package either. Pull a published assembly of this release's environment first (this wrapper never pulls it), or point MCUHOME_SDK_BUILD_TOOLS at an unpacked mcuhome-build-tools package as ci-build.yml's test-twister job does." >&2
   exit 1
+fi
+
+# An image published before the child-side variables were renamed states
+# the tools root under the earlier name, and nothing inside it can be run
+# without knowing where that root is. That is not a failure of this
+# checkout: the image is a delivery of a *released* environment, and the
+# one that answers to the current names is built from the sdk and tools
+# lines at 0.2.1 or later. So this mode steps aside and says why, the way
+# the suite steps aside when a prerequisite it cannot create is absent.
+# The binding job, ci-build.yml's test-twister, runs package mode and
+# compiles in the environment the commit under test produces, so nothing
+# is left unchecked by this.
+if ! docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" 2>/dev/null |
+     grep -q '^MCUHOME_BUILDER_TOOLS='; then
+  echo "test.d/twister: SKIPPED — $image states no MCUHOME_BUILDER_TOOLS. This image predates the child-side variable rename; the mode resumes with an environment image built from sdk/tools >= 0.2.1. To run the suites now, set MCUHOME_SDK_BUILD_TOOLS to an unpacked mcuhome-build-tools package and compile on this host." >&2
+  exit 0
 fi
 
 echo "test.d/twister: using $image" >&2

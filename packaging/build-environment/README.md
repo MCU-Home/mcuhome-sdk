@@ -268,8 +268,13 @@ package or an `mcuhome-compiler` distribution built before the change reads
 only that one. The entry point ships in the tools package and the workspace
 variable is read by `mcuhome.compiler.abi`, which arrives with the SDK, so
 an orchestrator setting the two names above needs a tools package and an
-SDK from the first release of each line that carries them — and those two
-lines are versioned independently in `environment.json` above.
+SDK from the first release of each line that carries them — `sdk` and
+`tools` 0.2.1, the versions `environment.json` above declares for the
+next release of each. A published build-environment **image** is the same
+kind of delivery: one assembled before that release states the earlier
+name, and `scripts/test.d/twister` skips its image mode with that reason
+rather than failing, because no change in a checkout can give a released
+image another environment.
 
 Both are checked against the package's own `build-tools.json` /
 `build-workspace.json`, so a wrong value fails immediately and says what was
