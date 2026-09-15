@@ -853,7 +853,7 @@ def test_entry_point_takes_no_arguments_and_reads_the_fixed_paths(builder):
 def test_the_tools_root_fallback_follows_either_kind_of_link(builder, tmp_path, absolute):
     """§4 puts the entry point at a fixed path, and a profile may link it there.
 
-    The fallback that derives ``MCUHOME_BUILD_ENV_TOOLS`` from the entry
+    The fallback that derives ``MCUHOME_BUILDER_TOOLS`` from the entry
     point's own location has to resolve that link, and a link target is
     absolute as often as it is relative — a profile that linked absolutely
     would otherwise get the directory the *link* sits in, which exists, looks

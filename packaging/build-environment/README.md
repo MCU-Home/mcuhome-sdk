@@ -259,8 +259,17 @@ variables, each falling back to what it can work out on its own:
 
 | Variable | Meaning |
 |---|---|
-| `MCUHOME_BUILD_ENV_TOOLS` | The unpacked `mcuhome-build-tools_<os>-<arch>` package. Defaults to the parent of the directory the entry point was run from |
-| `MCUHOME_BUILD_ENV_WORKSPACE` | The unpacked `mcuhome-build-workspace` package |
+| `MCUHOME_BUILDER_TOOLS` | The unpacked `mcuhome-build-tools_<os>-<arch>` package. Defaults to the parent of the directory the entry point was run from |
+| `MCUHOME_BUILDER_WORKSPACE` | The unpacked `mcuhome-build-workspace` package |
+
+Both names are newer than the packages that read them: an earlier spelling
+put them in the orchestrator's own configuration namespace, and a tools
+package or an `mcuhome-compiler` distribution built before the change reads
+only that one. The entry point ships in the tools package and the workspace
+variable is read by `mcuhome.compiler.abi`, which arrives with the SDK, so
+an orchestrator setting the two names above needs a tools package and an
+SDK from the first release of each line that carries them — and those two
+lines are versioned independently in `environment.json` above.
 
 Both are checked against the package's own `build-tools.json` /
 `build-workspace.json`, so a wrong value fails immediately and says what was

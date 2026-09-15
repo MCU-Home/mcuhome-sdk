@@ -227,8 +227,8 @@ RUN mkdir -p /tmp/mcuhome-home && chmod 1777 /tmp/mcuhome-home
 # Deliberately not here: `PATH`, `VIRTUAL_ENV`, `ZEPHYR_SDK_INSTALL_DIR` and
 # `ZEPHYR_TOOLCHAIN_VARIANT`. The entry point sets all four, so that both
 # profiles get the same environment out of the same file.
-ENV MCUHOME_BUILD_ENV_TOOLS=/opt/mcuhome/build-environment/tools \
-    MCUHOME_BUILD_ENV_WORKSPACE=/opt/mcuhome/build-environment/workspace \
+ENV MCUHOME_BUILDER_TOOLS=/opt/mcuhome/build-environment/tools \
+    MCUHOME_BUILDER_WORKSPACE=/opt/mcuhome/build-environment/workspace \
     HOME=/tmp/mcuhome-home
 
 # A default command, and no entry point. §6 has the orchestrator run the

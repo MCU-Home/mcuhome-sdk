@@ -148,7 +148,7 @@ def test_the_image_states_where_it_put_its_own_packages(dockerfile, assembler):
     only *check* the workspace root — and the builder needs it to find the
     source world and the pre-generated Matter code.
     """
-    for variable in ("MCUHOME_BUILD_ENV_TOOLS", "MCUHOME_BUILD_ENV_WORKSPACE"):
+    for variable in ("MCUHOME_BUILDER_TOOLS", "MCUHOME_BUILDER_WORKSPACE"):
         match = re.search(rf"\b{variable}=(\S+)", dockerfile)
         assert match, f"the image does not set {variable}"
         root = match.group(1)

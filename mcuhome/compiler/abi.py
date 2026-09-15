@@ -1459,7 +1459,7 @@ BASE_DIR_VAR = "MCUHOME_BUILDER_BASE_DIR"
 #: deliberately its own affair — but MCUHome's own environment has to find
 #: it, and neither profile puts it at a path that could be a constant here
 #: (``packaging/build-environment/README.md``).
-WORKSPACE_PACKAGE_VAR = "MCUHOME_BUILD_ENV_WORKSPACE"
+WORKSPACE_PACKAGE_VAR = "MCUHOME_BUILDER_WORKSPACE"
 
 #: What that package says about itself: where its workspace is, where its
 #: record is, and what a build hands CHIP as the pre-generated data model.

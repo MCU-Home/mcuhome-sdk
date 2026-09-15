@@ -244,7 +244,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
     suite="$1"
     results="$2"
     shift 2
-    tools="${MCUHOME_BUILD_ENV_TOOLS:?the image states no build tools directory}"
+    tools="${MCUHOME_BUILDER_TOOLS:?this image states no MCUHOME_BUILDER_TOOLS; an assembly from before that name was introduced does not answer to it, so use a newer one or set MCUHOME_SDK_BUILD_TOOLS and compile on the host}"
     PATH="$tools/venv/bin:$tools/cmake/bin:$tools/ninja:$tools/gn:$PATH"
     export PATH
     VIRTUAL_ENV="$tools/venv"

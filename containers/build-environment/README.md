@@ -165,7 +165,7 @@ The release runbook, and where this step sits in it, is
 
 Everything under `/opt` is the environment's own content, which §4 leaves
 entirely to the environment; the two paths are stated to the builder in
-`MCUHOME_BUILD_ENV_TOOLS` and `MCUHOME_BUILD_ENV_WORKSPACE`, because the
+`MCUHOME_BUILDER_TOOLS` and `MCUHOME_BUILDER_WORKSPACE`, because the
 entry point can check those but not derive them.
 
 `PATH`, `VIRTUAL_ENV`, `ZEPHYR_SDK_INSTALL_DIR` and

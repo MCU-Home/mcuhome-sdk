@@ -46,7 +46,7 @@ set -eu
 # of what it is; they are what makes the fallback a check rather than a
 # guess.
 
-if [ -z "${MCUHOME_BUILD_ENV_TOOLS:-}" ]; then
+if [ -z "${MCUHOME_BUILDER_TOOLS:-}" ]; then
     self="$0"
     # Follow the file if the profile linked rather than copied it, so the
     # fallback still finds the package the link points into. A relative
@@ -61,7 +61,7 @@ if [ -z "${MCUHOME_BUILD_ENV_TOOLS:-}" ]; then
         hops=$((hops + 1))
         if [ "$hops" -gt 40 ]; then
             echo "build-environment-entry: $0 leads through more than 40 symbolic links." >&2
-            echo "Set MCUHOME_BUILD_ENV_TOOLS to the unpacked mcuhome-build-tools package." >&2
+            echo "Set MCUHOME_BUILDER_TOOLS to the unpacked mcuhome-build-tools package." >&2
             exit 70
         fi
         target="$(readlink "$self")"
@@ -70,23 +70,23 @@ if [ -z "${MCUHOME_BUILD_ENV_TOOLS:-}" ]; then
             *) self="$(cd "$(dirname "$self")" && pwd)/$target" ;;
         esac
     done
-    MCUHOME_BUILD_ENV_TOOLS="$(cd "$(dirname "$self")/.." && pwd)"
+    MCUHOME_BUILDER_TOOLS="$(cd "$(dirname "$self")/.." && pwd)"
 fi
 
-if [ ! -f "$MCUHOME_BUILD_ENV_TOOLS/build-tools.json" ]; then
-    echo "build-environment-entry: no MCUHome build tools at $MCUHOME_BUILD_ENV_TOOLS." >&2
-    echo "Set MCUHOME_BUILD_ENV_TOOLS to the unpacked mcuhome-build-tools package." >&2
+if [ ! -f "$MCUHOME_BUILDER_TOOLS/build-tools.json" ]; then
+    echo "build-environment-entry: no MCUHome build tools at $MCUHOME_BUILDER_TOOLS." >&2
+    echo "Set MCUHOME_BUILDER_TOOLS to the unpacked mcuhome-build-tools package." >&2
     exit 70
 fi
 
-if [ -n "${MCUHOME_BUILD_ENV_WORKSPACE:-}" ] &&
-   [ ! -f "$MCUHOME_BUILD_ENV_WORKSPACE/build-workspace.json" ]; then
-    echo "build-environment-entry: no MCUHome build workspace at $MCUHOME_BUILD_ENV_WORKSPACE." >&2
-    echo "Set MCUHOME_BUILD_ENV_WORKSPACE to the unpacked mcuhome-build-workspace package." >&2
+if [ -n "${MCUHOME_BUILDER_WORKSPACE:-}" ] &&
+   [ ! -f "$MCUHOME_BUILDER_WORKSPACE/build-workspace.json" ]; then
+    echo "build-environment-entry: no MCUHome build workspace at $MCUHOME_BUILDER_WORKSPACE." >&2
+    echo "Set MCUHOME_BUILDER_WORKSPACE to the unpacked mcuhome-build-workspace package." >&2
     exit 70
 fi
 
-export MCUHOME_BUILD_ENV_TOOLS
+export MCUHOME_BUILDER_TOOLS
 
 # --------------------------------------------------------------------------
 # The tools, on PATH and in the variables Zephyr reads them from
@@ -97,21 +97,21 @@ export MCUHOME_BUILD_ENV_TOOLS
 # first: `python3` inside a build has to mean one thing, and that thing is
 # the interpreter the wheel set was installed into.
 
-VENV="$MCUHOME_BUILD_ENV_TOOLS/venv"
+VENV="$MCUHOME_BUILDER_TOOLS/venv"
 if [ ! -x "$VENV/bin/python3" ]; then
     echo "build-environment-entry: no build environment at $VENV." >&2
-    echo "Provisioning creates it from $MCUHOME_BUILD_ENV_TOOLS/wheels before the first step." >&2
+    echo "Provisioning creates it from $MCUHOME_BUILDER_TOOLS/wheels before the first step." >&2
     exit 70
 fi
 
-PATH="$VENV/bin:$MCUHOME_BUILD_ENV_TOOLS/cmake/bin:$MCUHOME_BUILD_ENV_TOOLS/ninja:$MCUHOME_BUILD_ENV_TOOLS/gn:$PATH"
+PATH="$VENV/bin:$MCUHOME_BUILDER_TOOLS/cmake/bin:$MCUHOME_BUILDER_TOOLS/ninja:$MCUHOME_BUILDER_TOOLS/gn:$PATH"
 export PATH
 VIRTUAL_ENV="$VENV"
 export VIRTUAL_ENV
 
 ZEPHYR_TOOLCHAIN_VARIANT=zephyr
 export ZEPHYR_TOOLCHAIN_VARIANT
-for candidate in "$MCUHOME_BUILD_ENV_TOOLS"/zephyr-sdk-*; do
+for candidate in "$MCUHOME_BUILDER_TOOLS"/zephyr-sdk-*; do
     if [ -d "$candidate" ]; then
         ZEPHYR_SDK_INSTALL_DIR="$candidate"
         export ZEPHYR_SDK_INSTALL_DIR
