@@ -750,11 +750,12 @@ jobs:
     permissions:
       contents: read
     env:
-      # Pins the host-side ccache directory into the workspace so the
-      # cache action has a path it can name. Without it the workbench's
-      # ccache lookup falls back to $XDG_CACHE_HOME/$HOME, which is the
-      # runner's business and not stable across runner images.
-      MCUHOME_CCACHE_DIR: ${{ github.workspace }}/.ccache
+      # Pins the host-side cache root into the workspace so the cache
+      # action has a path it can name: the compiler cache lands in
+      # cache-local underneath it. Without it the cache root falls back
+      # to $XDG_CACHE_HOME/$HOME, which is the runner's business and not
+      # stable across runner images.
+      MCUHOME_BUILD_CACHE_ROOT: ${{ github.workspace }}/.ccache
       COMBINATION: ${{ matrix.combination.id }}
       PLATFORM: ${{ matrix.target.platform }}
       ARCH: ${{ matrix.target.arch }}
@@ -917,13 +918,17 @@ jobs:
       # Restore always, save only from main: an entry may approach the
       # 5 GB the environment allows, and a pull request saving one per run
       # would spend the repository's cache budget.
+      #
+      # The number in the key is the generation of what lies under the
+      # cached directory; it is bumped when that changes, so a restore
+      # never mixes two layouts.
       - name: Restore the compiler cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ccache
-          key: ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-${{ github.run_id }}
+          key: ccache-matter-3-${{ runner.os }}-${{ matrix.target.arch }}-${{ github.run_id }}
           restore-keys: |
-            ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-
+            ccache-matter-3-${{ runner.os }}-${{ matrix.target.arch }}-
 
       # A project of its own, with the device copied into it: a build
       # writes a signing key next to the device it signs, and the checkout
@@ -1104,7 +1109,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ccache
-          key: ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-${{ github.run_id }}
+          key: ccache-matter-3-${{ runner.os }}-${{ matrix.target.arch }}-${{ github.run_id }}
 
       # The outcome is recorded and uploaded before this fires, which is
       # the only reason the build step is allowed to continue on error.

@@ -662,9 +662,10 @@ jobs:
     permissions:
       contents: read
     env:
-      # Pins the host-side ccache directory into the workspace so the cache
-      # action has a path it can name.
-      MCUHOME_CCACHE_DIR: ${{ github.workspace }}/.ccache
+      # Pins the host-side cache root into the workspace so the cache
+      # action has a path it can name; the compiler cache lands in
+      # cache-local underneath it.
+      MCUHOME_BUILD_CACHE_ROOT: ${{ github.workspace }}/.ccache
       PLATFORM: ${{ matrix.target.platform }}
     steps:
       - name: Checkout
@@ -797,9 +798,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ccache
-          key: ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-${{ github.run_id }}
+          key: ccache-matter-3-${{ runner.os }}-${{ matrix.target.arch }}-${{ github.run_id }}
           restore-keys: |
-            ccache-matter-2-${{ runner.os }}-${{ matrix.target.arch }}-
+            ccache-matter-3-${{ runner.os }}-${{ matrix.target.arch }}-
 
       # A project of its own, with the device copied into it: a build writes
       # a signing key next to the device it signs, and the checkout is not a
