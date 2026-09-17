@@ -6,14 +6,16 @@
 CI builds the reference device out of the packages the run itself
 produced: one directory per stage, each with the `index.json` that makes
 it a package source, all three handed to `mcuhome device build` as
-`--sdk-sources`. That says where packages may come *from*; it does not
-say which ones the build wants. A device that names none is built with
-the workbench's own default SDK constraint, and a local directory holding
-a version outside that constraint is passed over in favour of the package
-registry — the build then compiles a published chain while the packages
-under test sit unused in the workspace. That is silent, it survives every
-gate, and the firmware it produces says nothing about the release it was
-supposed to prove.
+`--build-sdk-sources`, `--build-workspace-sources` and
+`--build-tools-sources` — one flag per kind, and no kind falls back to
+another's directory. That says where packages may come *from*; it does
+not say which ones the build wants. A device that names none is built
+with the workbench's own default SDK constraint, and a local directory
+holding a version outside that constraint is passed over in favour of
+the package registry — the build then compiles a published chain while
+the packages under test sit unused in the workspace. That is silent, it
+survives every gate, and the firmware it produces says nothing about the
+release it was supposed to prove.
 
 So the device states the packages. `write` reads the three indexes and
 writes a `sources:` block naming exactly what is in them — each package

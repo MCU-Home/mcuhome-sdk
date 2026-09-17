@@ -13,7 +13,7 @@ Usage::
 
     check_build_artifacts.py <build-dir>
 
-where ``<build-dir>`` is what ``mcuhome build --build-dir`` was given.
+where ``<build-dir>`` is what ``mcuhome device build --out-dir`` was given.
 
 **One build shape.** ``mcuhome device build`` compiles in a build
 container and delivers ``build-report.json`` (the build report,
@@ -217,8 +217,9 @@ def main(argv: list[str]) -> int:
         print(f"  {finding}")
     print(
         "\nA build that exits 0 without a complete artifact set is a failure "
-        "nothing downstream would notice: mcuhome sign, the OTA wrapper and "
-        "every flashing path expect the files a finished build names to be there."
+        "nothing downstream would notice: mcuhome device sign-firmware, the OTA "
+        "wrapper and every flashing path expect the files a finished build names "
+        "to be there."
     )
     return 1
 
