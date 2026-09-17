@@ -51,6 +51,7 @@ import hashlib
 import secrets
 import struct
 from dataclasses import dataclass
+from typing import Any
 
 from mcuhome.model import p256
 
@@ -347,6 +348,38 @@ class Pairing:
     @property
     def qr_payload(self) -> str:
         return qr_payload(discriminator=self.discriminator, passcode=self.passcode)
+
+    def to_dict(self) -> dict[str, Any]:
+        """The credentials as a client shows them: the four values and the two codes.
+
+        The codes are in the document because they are the only part of
+        this tuple a person ever reads — they go into a controller by
+        hand — and recomputing them from the four values is this
+        module's arithmetic, not a client's. A client that derived them
+        itself would be assembling the document out of fields it read
+        off this object, and two clients would then disagree about a
+        device's codes.
+
+        The verifier is not in it: it is what the *device* stores, a
+        build-time value nobody types anywhere, and it is derived from
+        the passcode that is already here.
+
+        :class:`~mcuhome.model.model.PairingModel` carries the same four
+        values inside the canonical device model and states them without
+        the codes. That is deliberate: the model is a stored, versioned
+        format a build reads, and a derived value written into it is a
+        second copy that can disagree with its inputs. This document is
+        the opposite case — it is rendered once, for a person.
+        """
+        return {
+            "discriminator": self.discriminator,
+            "passcode": self.passcode,
+            "salt": self.salt,
+            "iterations": self.iterations,
+            "test_credentials": self.test_credentials,
+            "manual_code": self.manual_code,
+            "qr_payload": self.qr_payload,
+        }
 
 
 #: The published test credentials as a tuple, for ``use_test_pairing``.

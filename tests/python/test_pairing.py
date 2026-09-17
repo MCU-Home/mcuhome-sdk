@@ -22,6 +22,7 @@ that was commissioned into a production Home Assistant on 2026-08-04.
 from __future__ import annotations
 
 import base64
+import json
 from dataclasses import replace
 
 import pytest
@@ -194,6 +195,77 @@ def test_the_manual_code_carries_a_verhoeff_check_digit() -> None:
     assert pairing.verhoeff_check_digit(code[:-1]) == code[-1]
     # A single wrong digit is what the check digit is for.
     assert pairing.verhoeff_check_digit("3497011234") != code[-1]
+
+
+# --------------------------------------------------------------------------
+# The document a client shows
+# --------------------------------------------------------------------------
+
+#: The credentials document, in the order :meth:`pairing.Pairing.to_dict`
+#: answers it. Written out here rather than derived from the method, so
+#: that a key that appears, disappears or moves has to be agreed to twice.
+DOCUMENT_KEYS = [
+    "discriminator",
+    "passcode",
+    "salt",
+    "iterations",
+    "test_credentials",
+    "manual_code",
+    "qr_payload",
+]
+
+
+def test_the_credentials_document_carries_every_key_in_its_order() -> None:
+    """Both directions, order included.
+
+    A client reads a key without asking whether this version has it, and
+    a key nobody agreed on is a surface the first client to find it
+    makes one. The order is part of it because the document is printed
+    for a person to read.
+    """
+    document = pairing.TEST_PAIRING.to_dict()
+    assert list(document) == DOCUMENT_KEYS
+
+
+def test_the_credentials_document_is_json_ready() -> None:
+    """No object survives into it — it is data or it is not a document."""
+    document = pairing.TEST_PAIRING.to_dict()
+    assert json.loads(json.dumps(document)) == document
+    for value in document.values():
+        assert isinstance(value, int | str | bool)
+
+
+def test_the_document_carries_the_codes_and_not_the_verifier() -> None:
+    """The two a person types are in it; the one the device stores is not.
+
+    Deriving the codes is this module's arithmetic, so a client that
+    recomputed them would be writing a second implementation of the
+    Verhoeff digit and the base38 packing. The verifier is the opposite
+    case: nobody types it, and it belongs to the firmware.
+    """
+    document = pairing.TEST_PAIRING.to_dict()
+    assert document["manual_code"] == pairing.TEST_PAIRING.manual_code == "34970112332"
+    assert document["qr_payload"] == pairing.TEST_PAIRING.qr_payload == "MT:Y.K90AFN00KA0648G00"
+    assert "verifier" not in document
+    assert pairing.TEST_PAIRING.verifier not in json.dumps(document)
+
+
+def test_drawn_credentials_answer_the_same_document() -> None:
+    """The keys do not depend on where the credentials came from.
+
+    ``test_credentials`` is the one key that differs, and it says which
+    case this is instead of a key being absent in one of them.
+    """
+    drawn = pairing.random_pairing()
+    document = drawn.to_dict()
+    assert list(document) == DOCUMENT_KEYS
+    assert document["test_credentials"] is False
+    assert document["discriminator"] == drawn.discriminator
+    assert document["passcode"] == drawn.passcode
+    assert document["salt"] == drawn.salt
+    assert document["iterations"] == drawn.iterations
+    assert document["manual_code"] == drawn.manual_code
+    assert document["qr_payload"] == drawn.qr_payload
 
 
 # --------------------------------------------------------------------------
