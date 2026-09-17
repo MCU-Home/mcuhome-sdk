@@ -856,6 +856,10 @@ jobs:
       # combination the gate marked as not required is built anyway and
       # reported, never a reason to stop a release — so only a required
       # leg reddens the run.
+      #
+      # One flag per package kind, and the three never fall back to one
+      # another: a directory holding SDK packages is not where workspace
+      # packages are looked for.
       - name: Build the reference Matter device
         id: build
         continue-on-error: ${{ !matrix.combination.required }}
@@ -863,12 +867,12 @@ jobs:
         run: |
           set -euo pipefail
           mcuhome device build devices/00-bmp180-two-endpoints.yaml \
-            --build-dir build/bmp180-node \
+            --out-dir build/bmp180-node \
             --signing-key "$RUNNER_TEMP/signing/mcuboot.pem" \
             --build-target local --build-mode subprocess \
-            --sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
-            --sdk-sources "$GITHUB_WORKSPACE/sources/workspace" \
-            --sdk-sources "$GITHUB_WORKSPACE/sources/tools"
+            --build-sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
+            --build-workspace-sources "$GITHUB_WORKSPACE/sources/workspace" \
+            --build-tools-sources "$GITHUB_WORKSPACE/sources/tools"
 
       # A green build that produced nothing is worse than a red one.
       - name: Check the artifact set
@@ -1771,6 +1775,11 @@ jobs:
       # context resolved and refuses to build in one that does not declare
       # it — which is what makes this a verification of the image and not
       # just another build.
+      #
+      # The three package kinds are named one by one here too: what an
+      # image replaces is the unpacking of the two environment packages,
+      # not the pins that name them, so a container build resolves all
+      # three sources exactly as the subprocess one does.
       - name: Build the reference Matter device in the image
         if: steps.image.outputs.verify == 'true'
         working-directory: project
@@ -1779,13 +1788,13 @@ jobs:
         run: |
           set -euo pipefail
           mcuhome device build devices/00-bmp180-two-endpoints.yaml \
-            --build-dir build/bmp180-node \
+            --out-dir build/bmp180-node \
             --signing-key "$RUNNER_TEMP/signing/mcuboot.pem" \
             --build-target local --build-mode container \
             --container-image "$IMAGE" \
-            --sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
-            --sdk-sources "$GITHUB_WORKSPACE/sources/workspace" \
-            --sdk-sources "$GITHUB_WORKSPACE/sources/tools"
+            --build-sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
+            --build-workspace-sources "$GITHUB_WORKSPACE/sources/workspace" \
+            --build-tools-sources "$GITHUB_WORKSPACE/sources/tools"
 
       - name: Check the artifact set
         if: steps.image.outputs.verify == 'true'

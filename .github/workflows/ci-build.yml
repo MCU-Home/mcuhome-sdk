@@ -968,6 +968,11 @@ jobs:
       # much of the machine the build may use is left to the workbench's
       # own detection, as it is for a user who configured nothing.
       #
+      # One flag per package kind, and the three never fall back to one
+      # another: a directory holding SDK packages is not where workspace
+      # packages are looked for. This job keeps a directory per stage
+      # anyway, so each flag names its own.
+      #
       # THE SIGNING KEY IS THE ONE IN THIS REPOSITORY, and that is what
       # makes the cross-architecture comparison below mean anything:
       # MCUboot bakes the signing *public* key into bootloader.hex, so two
@@ -983,12 +988,12 @@ jobs:
         run: |
           set -euo pipefail
           mcuhome device build devices/00-bmp180-two-endpoints.yaml \
-            --build-dir build/bmp180-node \
+            --out-dir build/bmp180-node \
             --signing-key "$RUNNER_TEMP/signing/mcuboot.pem" \
             --build-target local --build-mode subprocess \
-            --sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
-            --sdk-sources "$GITHUB_WORKSPACE/sources/workspace" \
-            --sdk-sources "$GITHUB_WORKSPACE/sources/tools"
+            --build-sdk-sources "$GITHUB_WORKSPACE/sources/sdk" \
+            --build-workspace-sources "$GITHUB_WORKSPACE/sources/workspace" \
+            --build-tools-sources "$GITHUB_WORKSPACE/sources/tools"
 
       # A green build that produced nothing is worse than a red one. The
       # checker verifies that the report is a well-formed build report and
