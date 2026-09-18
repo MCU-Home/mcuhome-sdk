@@ -81,12 +81,19 @@ index names is one no orchestrator can match. A local build is for testing,
 and it stays local.
 
 **A build workspace release assembles its own `-r1`.** The `Release`
-workflow does it in the same run as the release, right after the archives
-are attached: one leg per architecture, each taking the workspace package
-this run just built and the build tools release that package's own
-`meta.json` accepts, and a last job composing the OCI index over the two
-and pushing it as `<version>-r<n>` — the reference a client resolves.
-`amd64` and `arm64` both, because a Home Assistant box is an arm64 machine.
+workflow does it in the same run as the release and **before** the release
+exists: one leg per architecture, each taking the workspace package this
+run just built and the build tools release that package's own `meta.json`
+accepts, and each pushing its own `<version>-r<n>-<arch>` tag. `amd64` and
+`arm64` both, because a Home Assistant box is an arm64 machine.
+
+Then the reference device is built in those two images, then the release is
+published, and only then does a last job compose the OCI index over them
+and push it as `<version>-r<n>` — the reference a client resolves. The
+order is the point: the name users resolve appears after the firmware has
+been built in exactly those bytes and after the packages they deliver are
+on a release page. Nothing about an image that failed to build firmware
+ever becomes resolvable.
 
 **Every other image is a revision dispatch:**
 
@@ -102,9 +109,12 @@ resolved the same way, and it is verified the same way.
 
 **Nothing here asks the package registry.** The registry is fed by hand by
 its operator after a release, so an image assembled from it would either
-wait days or pin bytes that are not served yet; what the image is assembled
-from is the GitHub release of this repository, which is where the archive
-and its checksum already are.
+wait days or pin bytes that are not served yet. What an image is assembled
+from is this repository's own bytes: for a workspace release the archive
+that run just built — its release page does not exist yet, by design — and
+for a revision dispatch the archive attached to `workspace-v<version>`. The
+build tools always come off their release, because a workspace package is
+only ever delivered with a tools package somebody published.
 
 **The tag names the workspace package, not the SDK release.** The three are
 release lines of their own — `v<version>` releases the SDK,
