@@ -178,6 +178,17 @@ gate that would then compile a published chain and say nothing about the
 packages it exists to gate. After the build, `device_pins.py check` holds
 the resolved versions and hashes in the build context against those pins.
 
+**`build-environment-image`** — only for a workspace tag and for the
+revision dispatch, and it runs here, before anything is published: the
+verification needs an image to build in. One leg per architecture, each
+pushing `<version>-r<n>-<arch>`; the index over the two comes at the end of
+the run. Section 5.
+
+**`verify-release`** — the same reference device in the **container**
+profile, on both architectures, in the image this run assembled or in the
+published image an SDK release resolves to. Everything that publishes waits
+for it. Section 6.
+
 **`publish-release`** — the GitHub release, carrying exactly three files
 per package: the archive, its `.sha256` and its `.meta.json`. The asset
 list is named rather than globbed, because a stand-in package for another
@@ -192,7 +203,10 @@ verification that was skipped is not one that passed. The archives it
 uploads are the ones the verification built with — the same files, not a
 second build of them.
 
-**`build-environment-image`** and **`verify-release`** — see below.
+**`publish-environment-image-index`** — the OCI index over the two
+architecture tags, under `<version>-r<n>`, which is the name a client
+resolves. Last of everything, for the same reason and one more: a run that
+failed anywhere before it can simply be repeated. Section 5.
 
 ### The meta file
 
