@@ -1365,42 +1365,40 @@ def test_the_build_workspace_never_carries_a_local_suffix(release):
 # Where a verification takes each stage's bytes from
 # --------------------------------------------------------------------------
 #
-# The case that broke a real release: an SDK tag verifies with its own
-# released package plus two published ones, and that combination of sources
-# is the one no rehearsal had ever produced.
+# The line under release comes from this run's own artefact, and the stages
+# around it from their releases. Not a shortcut: the verification is what
+# the publishing jobs wait for, so at the time it runs there is no release
+# of that line to take anything from — and that is the arrangement in which
+# a red verification can still stop a release.
 
 
-def test_an_sdk_release_verifies_with_its_release_and_two_published_ones(release):
+def test_the_line_under_release_is_verified_as_the_artefact_it_will_publish(release):
     sources = release.verify_sources(
         {
             "sdk": {"source": "release", "version": "0.1.10.dev3"},
             "workspace": {"source": "published", "version": "0.1.0", "tag": "workspace-v0.1.0"},
             "tools": {"source": "published", "version": "0.1.0", "tag": "tools-v0.1.0"},
-        },
-        released_tag="v0.1.10.dev3",
-        rehearsal=False,
+        }
     )
     assert sources == {
-        # Its own release, not the artefact it was uploaded from: what is
-        # verified is what was published.
-        "sdk": {"from": "release", "tag": "v0.1.10.dev3"},
+        # The archive this run built, which is the file the release
+        # publishes afterwards — the same bytes, verified before they are
+        # public rather than after.
+        "sdk": {"from": "artifact", "tag": ""},
         "workspace": {"from": "release", "tag": "workspace-v0.1.0"},
         "tools": {"from": "release", "tag": "tools-v0.1.0"},
     }
 
 
-def test_a_rehearsal_has_only_its_own_artefact_for_the_released_line(release):
-    sources = release.verify_sources(
-        {
-            "sdk": {"source": "release", "version": "0.1.10.dev3"},
-            "workspace": {"source": "published", "version": "0.1.0", "tag": "workspace-v0.1.0"},
-            "tools": {"source": "published", "version": "0.1.0", "tag": "tools-v0.1.0"},
-        },
-        released_tag="v0.1.10.dev3",
-        rehearsal=True,
-    )
-    assert sources["sdk"] == {"from": "artifact", "tag": ""}
-    assert sources["workspace"]["from"] == "release"
+def test_a_rehearsal_reaches_the_same_answer(release):
+    """It has no release of its own either, and now nothing else does."""
+    combination = {
+        "sdk": {"source": "release", "version": "0.1.10.dev3"},
+        "workspace": {"source": "published", "version": "0.1.0", "tag": "workspace-v0.1.0"},
+        "tools": {"source": "published", "version": "0.1.0", "tag": "tools-v0.1.0"},
+    }
+    assert release.verify_sources(combination)["sdk"] == {"from": "artifact", "tag": ""}
+    assert release.verify_sources(combination)["workspace"]["from"] == "release"
 
 
 def test_a_stand_in_is_never_taken_from_a_release(release):
@@ -1410,29 +1408,24 @@ def test_a_stand_in_is_never_taken_from_a_release(release):
             "sdk": {"source": "checkout", "version": "0.1.10.dev3"},
             "workspace": {"source": "release", "version": "0.1.0"},
             "tools": {"source": "published", "version": "0.1.0", "tag": "tools-v0.1.0"},
-        },
-        released_tag="workspace-v0.1.0",
-        rehearsal=False,
+        }
     )
     assert sources["sdk"] == {"from": "artifact", "tag": ""}
-    assert sources["workspace"] == {"from": "release", "tag": "workspace-v0.1.0"}
+    assert sources["workspace"] == {"from": "artifact", "tag": ""}
 
 
 def test_every_stage_of_a_verification_has_a_source(release):
     """Three directories, one per stage — the job refuses an empty one."""
-    for rehearsal in (False, True):
-        sources = release.verify_sources(
-            {
-                "sdk": {"source": "release", "version": "1"},
-                "workspace": {"source": "published", "version": "1", "tag": "workspace-v1"},
-                "tools": {"source": "published", "version": "1", "tag": "tools-v1"},
-            },
-            released_tag="v1",
-            rehearsal=rehearsal,
-        )
-        assert set(sources) == {"sdk", "workspace", "tools"}
-        assert all(one["from"] in ("release", "artifact") for one in sources.values())
-        assert all(one["tag"] or one["from"] == "artifact" for one in sources.values())
+    sources = release.verify_sources(
+        {
+            "sdk": {"source": "release", "version": "1"},
+            "workspace": {"source": "published", "version": "1", "tag": "workspace-v1"},
+            "tools": {"source": "published", "version": "1", "tag": "tools-v1"},
+        }
+    )
+    assert set(sources) == {"sdk", "workspace", "tools"}
+    assert all(one["from"] in ("release", "artifact") for one in sources.values())
+    assert all(one["tag"] or one["from"] == "artifact" for one in sources.values())
 
 
 # --------------------------------------------------------------------------
@@ -1652,6 +1645,51 @@ def test_the_workflow_declares_exactly_the_jobs_the_check_knows(release):
     up.
     """
     assert workflow_jobs() == set(release.RELEASE_JOBS) | {"check-release"}
+
+
+def release_workflow() -> dict:
+    """`release.yml`, parsed. The job graph is a statement worth asserting."""
+    from ruamel.yaml import YAML
+
+    text = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    return YAML(typ="safe").load(text)
+
+
+def needs_of(job: dict) -> list[str]:
+    """A job's dependencies, whether it names one or a list of them."""
+    needs = job.get("needs") or []
+    return [needs] if isinstance(needs, str) else list(needs)
+
+
+def test_nothing_is_published_before_the_candidate_is_verified():
+    """The defect this exists for: a release published with a red Verify.
+
+    `verify-release` used to run *after* `publish-release`, so its answer
+    could only be a report about something already public — and a published
+    version is immutable and eternal. The edge is asserted here rather than
+    left to a reading of two `needs:` lists, because a workflow proves
+    nothing until the next tag is cut.
+    """
+    jobs = release_workflow()["jobs"]
+    for publisher in ("publish-release", "publish-environment-image-index"):
+        assert "verify-release" in needs_of(jobs[publisher]), publisher
+        assert "needs.verify-release.result == 'success'" in jobs[publisher]["if"], publisher
+    # And not the other way round: a verification that waits for a release
+    # is the old graph, whatever else has been added to it.
+    for job in ("build-environment-image", "verify-release"):
+        assert "publish-release" not in needs_of(jobs[job]), job
+    # The subprocess-profile gate stays in front of both of them.
+    assert "build-firmware" in needs_of(jobs["verify-release"])
+
+
+def test_the_job_table_is_an_order_the_graph_allows(release):
+    """`RELEASE_JOBS` says "in the order it runs them", so it has to be one."""
+    jobs = release_workflow()["jobs"]
+    ran: list[str] = []
+    for job in release.RELEASE_JOBS:
+        missing = [one for one in needs_of(jobs[job]) if one not in ran]
+        assert not missing, f"{job} is listed before {', '.join(missing)}"
+        ran.append(job)
 
 
 def test_an_unknown_kind_of_run_is_refused(release):

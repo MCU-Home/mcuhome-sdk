@@ -414,7 +414,7 @@ def digest_of(path: Path) -> str:
 # --------------------------------------------------------------------------
 
 
-def verify_sources(combination: dict, *, released_tag: str, rehearsal: bool) -> dict[str, dict]:
+def verify_sources(combination: dict) -> dict[str, dict]:
     """Per stage: this run's artefact, or a GitHub release, and which one.
 
     One rule per source, and the reason each is what it is:
@@ -424,12 +424,13 @@ def verify_sources(combination: dict, *, released_tag: str, rehearsal: bool) -> 
         and turned into a package source directory, exactly as the gate's
         firmware builds do.
     ``release``
-        The line being released. Its release exists by the time anything is
-        verified — ``publish-release`` runs first — so the bytes come from
-        **the release**, which makes the verification a statement about what
-        was published rather than about what was uploaded. In a rehearsal
-        nothing is published, so there the run's own artefact is the only
-        copy there is.
+        The line being released, and it comes from **this run's artefact**
+        — because at the time it is verified there is no release to take it
+        from. That is the point: the verification is what
+        ``publish-release`` waits for, so a candidate the container profile
+        cannot build out of never becomes a release at all. The archive is
+        the same file either way; the run uploads what it verified rather
+        than fetching back what it uploaded.
     ``checkout``
         A stand-in for a line nothing has published. It carries a local
         version no package host will ever accept, so there is no release to
@@ -442,11 +443,8 @@ def verify_sources(combination: dict, *, released_tag: str, rehearsal: bool) -> 
     answer: dict[str, dict] = {}
     for stage in release_lines.STAGES:
         entry = combination.get(stage) or {}
-        source = entry.get("source")
-        if source == "published":
+        if entry.get("source") == "published":
             answer[stage] = {"from": "release", "tag": entry.get("tag", "")}
-        elif source == "release" and not rehearsal:
-            answer[stage] = {"from": "release", "tag": released_tag}
         else:
             answer[stage] = {"from": "artifact", "tag": ""}
     return answer
@@ -605,14 +603,19 @@ def one_environment(labels: dict[str, dict[str, str]]) -> list[str]:
 # here, which is what makes a half-finished dispatch red instead of green.
 
 #: Every job the release workflow can run, in the order it runs them.
+#:
+#: The two publishing jobs are last, and that is the order and not a
+#: preference: a release is published once the candidate has been built
+#: out of in both profiles, because a version is immutable and a red leg
+#: afterwards cannot take one back.
 RELEASE_JOBS = (
     "gate-release",
     "build-packages",
     "build-firmware",
-    "publish-release",
     "build-environment-image",
-    "publish-environment-image-index",
     "verify-release",
+    "publish-release",
+    "publish-environment-image-index",
 )
 
 
@@ -711,8 +714,8 @@ def main(argv: list[str]) -> int:
     gate.add_argument(
         "--rehearsal",
         action="store_true",
-        help="this run publishes nothing, so the released line exists only as this run's "
-        "own artefact and no image delivers it",
+        help="this run publishes nothing, so it assembles no image and no published one "
+        "delivers the package it would verify",
     )
 
     verify = sub.add_parser("verify-plan", help="the published chain around a released tag")
@@ -789,15 +792,14 @@ def main(argv: list[str]) -> int:
     return _gate(arguments)
 
 
-def _verify_inputs(document: dict, *, released_tag: str, rehearsal: bool) -> None:
+def _verify_inputs(document: dict, *, rehearsal: bool) -> None:
     """Fill the gate's verify block with where each stage's bytes come from.
 
-    A rehearsal publishes nothing, so two things change: the released line
-    exists only as this run's own artefact, and no image can deliver it —
-    a published image declares the *published* workspace package's hash,
-    and a rehearsal's is a different archive. Verifying an SDK rehearsal
-    against the published image is still exactly right, though: an image
-    declares the workspace and the tools, never the SDK.
+    A rehearsal assembles no image, and no published one can deliver its
+    workspace package either: a published image declares the *published*
+    archive's hash, and a rehearsal's is a different archive. Verifying an
+    SDK rehearsal against the published image is still exactly right,
+    though — an image declares the workspace and the tools, never the SDK.
     """
     verify = document.get("verify")
     if not verify:
@@ -817,7 +819,7 @@ def _verify_inputs(document: dict, *, released_tag: str, rehearsal: bool) -> Non
             "workspace package that was never published — its labels carry the hash of "
             "the archive a release attached. Cut the tag to see this verified."
         )
-    verify["sources"] = verify_sources(chosen, released_tag=released_tag, rehearsal=rehearsal)
+    verify["sources"] = verify_sources(chosen)
 
 
 def _published_world(arguments, work: Path):
@@ -933,7 +935,7 @@ def _gate(arguments) -> int:
         "family": release_readiness.FAMILY[stage],
     }
     document["packages"] = gate_packages(document["combinations"])
-    _verify_inputs(document, released_tag=arguments.tag, rehearsal=arguments.rehearsal)
+    _verify_inputs(document, rehearsal=arguments.rehearsal)
     arguments.output.write_text(
         json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

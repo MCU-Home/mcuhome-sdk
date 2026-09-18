@@ -106,7 +106,16 @@ tag.
 
 ## 3. What the tag does
 
-The `Release` workflow branches on the tag and walks five stages.
+The `Release` workflow branches on the tag and walks its jobs in this
+order — the two that publish are last, and that is the whole shape of it:
+a version is immutable and eternal, so a release is created only once the
+candidate has been built out of, in both profiles. A check that ran after
+the release could report on it, not stop it.
+
+```
+gate-release → build-packages → build-firmware → build-environment-image
+             → verify-release → publish-release → publish-environment-image-index
+```
 
 **`gate-release`** — which line, which version, and what has to pass. The
 tag is held against `environment.json`, and then the catalogue is built
@@ -177,6 +186,12 @@ to a *source*, and a source is signed by the package host. The release
 notes carry each package's `requires`, its `inputs_sha256` and the sha256
 of every attached byte.
 
+It waits for the packages, every firmware leg **and** the container-profile
+verification, and each of those four results is named in its condition: a
+verification that was skipped is not one that passed. The archives it
+uploads are the ones the verification built with — the same files, not a
+second build of them.
+
 **`build-environment-image`** and **`verify-release`** — see below.
 
 ### The meta file
@@ -241,12 +256,20 @@ published build tools that package's own `meta.json` accepts. Its tag is
 `<workspace package version>-r<n>`, where `-r<n>` counts assemblies of the
 same package set from 1.
 
-A **workspace release builds `-r1` itself**, in the same run, right after
-the release is published — from the archive it just built and the tools
+A **workspace release builds `-r1` itself**, in the same run and *before*
+it publishes anything — from the archive it just built and the tools
 release its meta accepts, one manifest per architecture and an OCI index
 over the two. It needs no published registry copy and asks none: the
-assembly is a delivery of package bytes, and those bytes are on the release
-page this run just wrote.
+assembly is a delivery of package bytes, and this run is holding them.
+
+The two halves go up at different times, and on purpose. The
+per-architecture tags `<version>-r<n>-<arch>` are pushed first, because the
+verification has to have an image to build in; the **index**
+`<version>-r<n>`, which is the name every client resolves, is composed over
+them at the very end — after the firmware has been built in exactly those
+images and after the release exists. A run that got as far as the
+architecture tags and then failed is simply repeated: they are found, left
+alone, and the index is composed over them.
 
 Every other image is a **revision dispatch**:
 
@@ -297,16 +320,21 @@ statement no orchestrator could act on.
 
 The gate built the reference device in the *subprocess* profile. This job
 builds it again in the **container** profile, against the image, on both
-architectures, with the release's packages as local sources. The workbench
-holds the image's `org.mcuhome.build-environment.packages.*` labels against
-the package set the context resolved and refuses to build in an image that
-does not declare exactly it — which is what makes this a verification of
-the image rather than another build.
+architectures, with the candidate's packages as local sources. The
+workbench holds the image's `org.mcuhome.build-environment.packages.*`
+labels against the package set the context resolved and refuses to build in
+an image that does not declare exactly it — which is what makes this a
+verification of the image rather than another build.
+
+**Everything that publishes waits for it**: the release, and the image
+index a client resolves. That is the job's reason for existing — an answer
+that arrives after the release can be read, but it cannot take one back.
 
 Which image, per line:
 
-- **workspace tag, revision dispatch** — the image this run just pushed,
-  addressed by its digest.
+- **workspace tag, revision dispatch** — the per-architecture image this
+  run just pushed, under its own tag. The index the run composes afterwards
+  is made of exactly these two manifests, and neither tag is ever moved.
 - **SDK tag** — the published image of the build workspace this release
   resolves to, highest revision first. Where no image exists for that
   workspace yet, the job says so and verifies nothing rather than failing a
@@ -316,12 +344,12 @@ Which image, per line:
   image can declare tools that did not exist when it was assembled. A
   revision dispatch takes the new tools into an image, and verifies there.
 
-**Where the packages come from.** A tag verifies **what it published**: its
-own release's assets, plus the releases of the two stages around it, each
-turned into a package source directory. Not the artefacts the run uploaded
-them from — those are the same bytes, but "the release works" is the
-statement worth making. A rehearsal has no release of its own and uses its
-artefact for that one line.
+**Where the packages come from.** The line under release comes from **this
+run's own artefact**, and the two stages around it from their releases,
+each turned into a package source directory. That is what verifying before
+publishing means: at this point there is no release of that line to fetch,
+and the archive in hand is the file `publish-release` uploads a job later —
+the same bytes, checked while the answer can still stop them.
 
 The device is pinned to exactly those three packages and the resolution is
 checked afterwards, the same two steps `build-firmware` takes. Here they

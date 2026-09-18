@@ -135,14 +135,16 @@ and each image has to carry the build tools of its own architecture at one
 version. An index over two different package sets would be a statement no
 orchestrator could act on.
 
-**And then it is verified.** `verify-release` builds the reference Matter
-device in this image, addressed by the digest that was just pushed, on both
-architectures, with the release's packages as local sources and the device
-pinned to exactly them. The workbench holds the image's `packages.` labels
-against the package set the context resolved and refuses to build in an
-image that does not declare exactly it
+**And it is verified before that, not after.** `verify-release` builds the
+reference Matter device in this image — under its own per-architecture tag,
+on a runner of that architecture — with the candidate's packages as local
+sources and the device pinned to exactly them. The workbench holds the
+image's `packages.` labels against the package set the context resolved and
+refuses to build in an image that does not declare exactly it
 — which is what makes that a verification of the image and not just another
-build.
+build. Only then does the workspace package's release page appear, and only
+then is the index composed over those same two tags: what a client resolves
+is a name that has had firmware built in it.
 
 The release runbook, and where this step sits in it, is
 [`RELEASING.md`](../../RELEASING.md).
