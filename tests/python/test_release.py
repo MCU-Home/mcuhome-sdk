@@ -1682,6 +1682,29 @@ def test_nothing_is_published_before_the_candidate_is_verified():
     assert "build-firmware" in needs_of(jobs["verify-release"])
 
 
+def test_one_run_per_release_identity():
+    """Two runs of one identity would each push what the other verified.
+
+    A per-architecture image tag is claimed by "is it published yet?", and
+    an assembly is not bit-reproducible: two runs of the same
+    `<version>-r<n>` would both find it free, both assemble it and both
+    push it, and the bytes one of them built firmware in would be the bytes
+    the other replaced. The workflow-level group is what stops the second
+    run from starting — and it waits rather than cancelling, because
+    stopping a release halfway through publishing it is worse than waiting.
+    """
+    workflow = release_workflow()
+    concurrency = workflow["concurrency"]
+    assert concurrency["cancel-in-progress"] is False
+    group = concurrency["group"]
+    # Every way a run says what it is about reaches the key. Read off the
+    # workflow's own dispatch inputs, so a fifth one cannot be added
+    # without deciding whether it names another identity.
+    assert "github.ref" in group
+    for name in workflow["on"]["workflow_dispatch"]["inputs"]:
+        assert f"inputs.{name}" in group, name
+
+
 def test_the_job_table_is_an_order_the_graph_allows(release):
     """`RELEASE_JOBS` says "in the order it runs them", so it has to be one."""
     jobs = release_workflow()["jobs"]

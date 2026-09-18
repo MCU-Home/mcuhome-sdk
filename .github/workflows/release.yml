@@ -132,6 +132,26 @@ on:
 permissions:
   contents: read
 
+# ONE RUN PER RELEASE IDENTITY, and the identity is what the run is about:
+# the tag it pushes, the tag it rehearses or verifies, or the image
+# revision it assembles. Two runs of the same one would each find the
+# per-architecture image tag unpublished, each assemble it — an assembly is
+# not bit-reproducible — and each push it; the bytes one of them verified
+# would then be the bytes the other one replaced. A second run waits
+# instead of cancelling the first: a release in flight is a release being
+# published, and stopping it halfway is the one thing worse than waiting.
+#
+# A tag run and a revision dispatch for the same image cannot collide by
+# another route: a dispatch assembles from the *published* workspace
+# release, which a tag run has not written yet, so it refuses before it
+# reaches the registry.
+concurrency:
+  group: >-
+    release-${{ (github.event_name == 'push' && github.ref)
+    || inputs.rehearse || inputs.verify
+    || format('image-{0}-r{1}', inputs.workspace_version, inputs.revision) }}
+  cancel-in-progress: false
+
 env:
   ZSTANDARD_VERSION: "0.25.0"
 
