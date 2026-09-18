@@ -143,15 +143,29 @@ git tag per line — v<version>, workspace-v<version>, tools-v<version>
   → the reference firmware, once per combination the gate named and per
     architecture, in the subprocess profile out of those packages. Red
     and nothing is published.
-  → GitHub release: exactly the tested archives and their two sidecars
   → for a workspace release, in the same run: the container image
-    `<workspace version>-r1`, assembled from that archive and the newest
-    published tools its meta accepts, per architecture plus the index
-  → verify: the same firmware in the container profile against that
-    image, by digest, with the release's packages as local sources
+    `<workspace version>-r1`, assembled from the archive this run built
+    and the newest published tools its meta accepts, one per architecture
+    and pushed under `<version>-r1-<arch>`
+  → verify: the same firmware in the container profile — in that
+    architecture's image for a workspace release, in the published image
+    an SDK release resolves to otherwise — with the line under release
+    taken from THIS RUN'S ARTEFACT and the stages around it from their
+    releases. Red and nothing is published either.
+  → GitHub release: exactly the verified archives and their two sidecars
+  → the OCI index `<version>-r1` over the two architecture tags — the
+    reference a client resolves, and the last thing a run publishes
   → packagetool publication — the operator's own deliberate act, outside
     this repository and hours or days later
 ```
+
+**Nothing is published before the candidate has been built out of.** Both
+profiles come first and the two publishing steps last, because a published
+version is immutable: a verification that ran afterwards could report on a
+release but not withdraw it. That is also why the line under release is
+verified as the artefact this run built rather than as a release asset —
+at that point it has no release, and the archive in hand is the file the
+release attaches a step later.
 
 **"Published" means a GitHub release of this repository, and nothing
 else.** No step of the chain consults the package registry: the registry
@@ -164,7 +178,8 @@ a local package source; the registry is the *users*' source.
 Image revisions `-r<n>` beyond the `-r1` a workspace release builds are a
 dispatch of their own — a refreshed base, a changed Dockerfile, or build
 tools published after the workspace release that accepts them. They are
-assembled from release assets and verified the same way.
+assembled from release assets, verified the same way, and their index is
+pushed only once that verification passed.
 
 The packager is the bootstrap of this chain and deliberately outside it:
 the packages cannot be produced on an arbitrary host — the workspace has
