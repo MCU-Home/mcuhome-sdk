@@ -269,12 +269,16 @@ only that one. The entry point ships in the tools package and the workspace
 variable is read by `mcuhome.compiler.abi`, which arrives with the SDK, so
 an orchestrator setting the two names above needs a tools package and an
 SDK from the first release of each line that carries them — `sdk` and
-`tools` 0.2.1, the versions `environment.json` above declares for the
-next release of each. A published build-environment **image** is the same
-kind of delivery: one assembled before that release states the earlier
-name, and `scripts/test.d/twister` skips its image mode with that reason
-rather than failing, because no change in a checkout can give a released
-image another environment.
+`tools` 0.3.0, the versions `environment.json` above declares for the
+next release of each. That the two spellings cannot be mixed is what
+makes this a minor step of all three lines rather than a patch of two:
+the `requires` ranges above admit `~=0.3.0` and nothing below it, so a
+chain resolved through them can no longer pair a package that reads the
+new names with one that writes the old. A published build-environment
+**image** is the same kind of delivery: one assembled before that release
+states the earlier name, and `scripts/test.d/twister` skips its image mode
+with that reason rather than failing, because no change in a checkout can
+give a released image another environment.
 
 Both are checked against the package's own `build-tools.json` /
 `build-workspace.json`, so a wrong value fails immediately and says what was

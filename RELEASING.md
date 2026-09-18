@@ -18,9 +18,9 @@ together with what each line requires of the one below it:
 
 ```json
 {
-  "sdk":       { "version": "0.2.0",       "requires": { "mcuhome-build-workspace": "~=0.2.0" } },
-  "workspace": { "version": "0.2.0",       "requires": { "mcuhome-build-tools": "~=0.2.0" } },
-  "tools":     { "version": "0.2.0" }
+  "sdk":       { "version": "0.3.0",       "requires": { "mcuhome-build-workspace": "~=0.3.0" } },
+  "workspace": { "version": "0.3.0",       "requires": { "mcuhome-build-tools": "~=0.3.0" } },
+  "tools":     { "version": "0.3.0" }
 }
 ```
 
