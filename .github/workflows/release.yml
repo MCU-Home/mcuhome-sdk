@@ -452,7 +452,7 @@ jobs:
       # that refused a release is exactly the one somebody comes back to.
       - name: Keep the gate
         if: always() && hashFiles('gate.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-gate
           path: gate.json
@@ -658,7 +658,7 @@ jobs:
       # downloaded artifact is then already a package source directory the
       # workbench can be pointed at, rather than four things to reassemble.
       - name: Upload the package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
           path: dist
