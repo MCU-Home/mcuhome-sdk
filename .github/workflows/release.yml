@@ -783,21 +783,21 @@ jobs:
       # directories carry.
       - name: Take the SDK package this run built
         if: matrix.combination.sdk.source != 'published'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: packages-sdk
           path: sources/sdk
 
       - name: Take the workspace package this run built
         if: matrix.combination.workspace.source != 'published'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: packages-workspace
           path: sources/workspace
 
       - name: Take the tools package this run built
         if: matrix.combination.tools.source != 'published'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: packages-tools-${{ matrix.target.platform }}
           path: sources/tools
@@ -1084,7 +1084,7 @@ jobs:
 
       - name: Take the workspace package this run built
         if: needs.gate-release.outputs.mode != 'image'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: packages-workspace
           path: packages/workspace
@@ -1471,21 +1471,21 @@ jobs:
       # match two tomorrow and the layout underneath would change with it.
       - name: Take the SDK package this run built
         if: steps.image.outputs.verify == 'true' && needs.gate-release.outputs.verify_sdk_from == 'artifact'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: packages-sdk
           path: sources/sdk
 
       - name: Take the workspace package this run built
         if: steps.image.outputs.verify == 'true' && needs.gate-release.outputs.verify_workspace_from == 'artifact'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: packages-workspace
           path: sources/workspace
 
       - name: Take the tools package this run built
         if: steps.image.outputs.verify == 'true' && needs.gate-release.outputs.verify_tools_from == 'artifact'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: packages-tools-${{ matrix.target.platform }}
           path: sources/tools
@@ -1664,7 +1664,7 @@ jobs:
       # Merged into one directory: the tools line has two artifacts, one per
       # platform, and they are two packages of one release.
       - name: Take the packages this run built for the tagged line
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: packages-${{ needs.gate-release.outputs.stage }}*
           path: dist
